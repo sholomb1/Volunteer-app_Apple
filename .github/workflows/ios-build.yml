@@ -57,15 +57,16 @@ jobs:
       - name: Copy web bundle into ios/App/App/public
         run: npx cap copy ios
 
-      - name: Strip @capacitor/push-notifications from iOS SPM
-        # Plugin 8.1.1 calls APIs (getArray, .reject, coerceDictionaryToJSObject)
-        # that neither capacitor-swift-pm 8.1.0 nor 8.4.2 stable exposes. Push
-        # is Android-only for the moment; drop it from the iOS SPM Package
+      - name: Strip mismatched plugins from iOS SPM
+        # push-notifications@8.1.1 and status-bar@8.0.2 reference Capacitor
+        # iOS APIs that don't exist in either 8.1.0 or 8.4.x stable. Both
+        # plugins keep working on Android; drop them from the iOS SPM graph
         # after cap update regenerates it so the archive step compiles.
         run: |
           set -euo pipefail
           F=ios/App/CapApp-SPM/Package.swift
           sed -i '' '/CapacitorPushNotifications/d' "$F"
+          sed -i '' '/CapacitorStatusBar/d' "$F"
           echo "=== stripped Package.swift ==="
           cat "$F"
 
