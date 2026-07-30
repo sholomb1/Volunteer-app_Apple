@@ -39,11 +39,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         return ApplicationDelegateProxy.shared.application(app, open: url, options: options)
     }
 
-    func application(_ application: UIApplication, continue userActivity: NSUserActivity, restorationHandler: @escaping ([UIUserActivityRestoring]?) -> Void) -> Bool {
-        // Called when the app was launched with an activity, including Universal Links.
-        // Feel free to add additional processing here, but if you want the App API to support
-        // tracking app url opens, make sure to keep this call
-        return ApplicationDelegateProxy.shared.application(application, continue: userActivity, restorationHandler: restorationHandler)
-    }
+    // Universal-links handler removed: current Capacitor 8.x iOS SPM changed
+    // the ApplicationDelegateProxy.application(_:continue:restorationHandler:)
+    // signature and the app doesn't declare any associatedDomains anyway, so
+    // this hook is unreachable. Re-add if/when universal links are needed.
 
 }
