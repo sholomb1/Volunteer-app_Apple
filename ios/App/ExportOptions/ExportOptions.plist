@@ -2,15 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- development = installable on your registered devices (needs Apple
-         Development cert). app-store = for TestFlight + App Store (needs
-         Apple Distribution cert). Match this to the cert type in
-         BUILD_CERTIFICATE_BASE64. -->
+    <!-- app-store = for TestFlight + App Store (needs Apple Distribution cert).
+         Switched back to app-store now that the Distribution cert is in place. -->
     <key>method</key>
-    <string>development</string>
+    <string>app-store</string>
 
-    <!-- Team ID — 9739J3GQ4Z is CONGREGATION ZEH LZEH. Overridable via
-         APPLE_TEAM_ID secret if the workflow substitutes it in. -->
+    <!-- Team ID — 9739J3GQ4Z is CONGREGATION ZEH LZEH. Substituted at build
+         time from the APPLE_TEAM_ID secret. -->
     <key>teamID</key>
     <string>__TEAM_ID__</string>
 
