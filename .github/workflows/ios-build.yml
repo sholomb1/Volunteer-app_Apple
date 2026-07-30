@@ -91,18 +91,29 @@ jobs:
           P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
-          # Write the .p12 to disk
-          echo "$BUILD_CERTIFICATE_BASE64" | base64 --decode > $RUNNER_TEMP/cert.p12
-          # Create a temporary keychain
-          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-          security set-keychain-settings -t 3600 -u build.keychain
-          # Import the cert; allow codesign to use it without a UI prompt
-          security import $RUNNER_TEMP/cert.p12 -k build.keychain \
-            -P "$P12_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: \
-            -k "$KEYCHAIN_PASSWORD" build.keychain
+          set -euo pipefail
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+
+          # Decode with printf (no trailing newline, no echo quirks)
+          printf '%s' "$BUILD_CERTIFICATE_BASE64" | base64 --decode --output "$CERT_PATH"
+          echo "cert file size: $(wc -c < "$CERT_PATH") bytes"
+
+          # Prove the .p12 password is right before touching the keychain
+          openssl pkcs12 -info -in "$CERT_PATH" -passin "pass:$P12_PASSWORD" -nokeys 2>&1 | head -5
+
+          # Fresh keychain in RUNNER_TEMP (auto-cleaned)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$P12_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Confirm the identity is visible to codesign
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
 
       - name: Install provisioning profile
         if: ${{ env.HAS_SIGNING == 'true' }}
