@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- app-store = for TestFlight + App Store; ad-hoc = for a fixed device list;
+         development = for your devices; enterprise = for internal orgs.
+         Leave as app-store for the normal TestFlight path. -->
+    <key>method</key>
+    <string>app-store</string>
+
+    <!-- Team ID gets swapped in from the APPLE_TEAM_ID secret at build time. -->
+    <key>teamID</key>
+    <string>__TEAM_ID__</string>
+
+    <!-- Let Xcode automatically pick the signing cert + profile from the
+         keychain the workflow set up. -->
+    <key>signingStyle</key>
+    <string>automatic</string>
+
+    <!-- Standard app-store options -->
+    <key>uploadBitcode</key>
+    <false/>
+    <key>uploadSymbols</key>
+    <true/>
+    <key>compileBitcode</key>
+    <false/>
+</dict>
+</plist>

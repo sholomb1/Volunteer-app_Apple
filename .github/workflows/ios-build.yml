@@ -1,0 +1,156 @@
+# Build the iOS app on GitHub's macOS runner.
+#
+# Two modes — decided per-run by whether the signing secrets exist:
+#
+#  1. UNSIGNED COMPILE CHECK  (always runs, no secrets required)
+#       Verifies the code actually compiles on macOS + Xcode. Produces
+#       a build log — no installable .ipa. Useful as a smoke test while
+#       you set up signing.
+#
+#  2. SIGNED IPA + TESTFLIGHT UPLOAD  (only when secrets are set)
+#       Archives, signs, exports an .ipa, uploads it as a workflow
+#       artifact you can download, and (optionally) pushes to TestFlight.
+#       See docs/IOS_BUILD_SIGNING.md for the exact GitHub Secrets to add.
+#
+# Manual trigger + on every push to main.
+
+name: iOS Build
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Build web bundle for Capacitor
+        run: npx vite build --config vite.cap.config.ts
+
+      - name: Sync iOS platform (copies web bundle + regenerates config)
+        run: npx cap sync ios
+
+      - name: Install CocoaPods
+        working-directory: ios/App
+        run: pod install --repo-update
+
+      # ---------- Path 1: UNSIGNED compile check ----------
+      # Runs when signing secrets are NOT set. Just proves the app builds.
+      - name: Compile check (iOS Simulator, unsigned)
+        if: ${{ env.HAS_SIGNING != 'true' }}
+        env:
+          HAS_SIGNING: ${{ secrets.BUILD_CERTIFICATE_BASE64 != '' && 'true' || 'false' }}
+        working-directory: ios/App
+        run: |
+          xcodebuild \
+            -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            clean build
+
+      # ---------- Path 2: SIGNED archive + IPA export ----------
+      # Runs only when all signing secrets are present.
+
+      - name: Import signing certificate
+        if: ${{ env.HAS_SIGNING == 'true' }}
+        env:
+          HAS_SIGNING: ${{ secrets.BUILD_CERTIFICATE_BASE64 != '' && 'true' || 'false' }}
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          # Write the .p12 to disk
+          echo "$BUILD_CERTIFICATE_BASE64" | base64 --decode > $RUNNER_TEMP/cert.p12
+          # Create a temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          # Import the cert; allow codesign to use it without a UI prompt
+          security import $RUNNER_TEMP/cert.p12 -k build.keychain \
+            -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" build.keychain
+
+      - name: Install provisioning profile
+        if: ${{ env.HAS_SIGNING == 'true' }}
+        env:
+          HAS_SIGNING: ${{ secrets.BUILD_CERTIFICATE_BASE64 != '' && 'true' || 'false' }}
+          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+        run: |
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          echo "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode \
+            > "$HOME/Library/MobileDevice/Provisioning Profiles/build.mobileprovision"
+
+      - name: Archive + export IPA
+        if: ${{ env.HAS_SIGNING == 'true' }}
+        env:
+          HAS_SIGNING: ${{ secrets.BUILD_CERTIFICATE_BASE64 != '' && 'true' || 'false' }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        working-directory: ios/App
+        run: |
+          # Substitute the Team ID into ExportOptions.plist
+          sed -i '' "s/__TEAM_ID__/$APPLE_TEAM_ID/g" ExportOptions/ExportOptions.plist
+
+          xcodebuild -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -destination 'generic/platform=iOS' \
+            clean archive \
+            DEVELOPMENT_TEAM=$APPLE_TEAM_ID
+
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -exportOptionsPlist ExportOptions/ExportOptions.plist \
+            -exportPath "$RUNNER_TEMP/export"
+
+      - name: Upload IPA as workflow artifact
+        if: ${{ env.HAS_SIGNING == 'true' }}
+        env:
+          HAS_SIGNING: ${{ secrets.BUILD_CERTIFICATE_BASE64 != '' && 'true' || 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zlz-rescue-ios
+          path: ${{ runner.temp }}/export/*.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      # ---------- Optional: TestFlight upload ----------
+      # Runs only if you've also provided an App Store Connect API key.
+
+      - name: Upload to TestFlight
+        if: ${{ env.HAS_TESTFLIGHT == 'true' }}
+        env:
+          HAS_TESTFLIGHT: ${{ secrets.APPSTORE_API_KEY_BASE64 != '' && 'true' || 'false' }}
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+          APPSTORE_API_KEY_BASE64: ${{ secrets.APPSTORE_API_KEY_BASE64 }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo "$APPSTORE_API_KEY_BASE64" | base64 --decode \
+            > ~/.appstoreconnect/private_keys/AuthKey_${APPSTORE_API_KEY_ID}.p8
+          xcrun altool --upload-app -f "$RUNNER_TEMP"/export/*.ipa -t ios \
+            --apiKey "$APPSTORE_API_KEY_ID" \
+            --apiIssuer "$APPSTORE_API_ISSUER_ID"
