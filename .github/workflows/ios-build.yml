@@ -57,6 +57,18 @@ jobs:
       - name: Copy web bundle into ios/App/App/public
         run: npx cap copy ios
 
+      - name: Strip @capacitor/push-notifications from iOS SPM
+        # Plugin 8.1.1 calls APIs (getArray, .reject, coerceDictionaryToJSObject)
+        # that neither capacitor-swift-pm 8.1.0 nor 8.4.2 stable exposes. Push
+        # is Android-only for the moment; drop it from the iOS SPM Package
+        # after cap update regenerates it so the archive step compiles.
+        run: |
+          set -euo pipefail
+          F=ios/App/CapApp-SPM/Package.swift
+          sed -i '' '/CapacitorPushNotifications/d' "$F"
+          echo "=== stripped Package.swift ==="
+          cat "$F"
+
       # This project uses Swift Package Manager (ios/App/CapApp-SPM), not
       # CocoaPods — xcodebuild resolves the SPM graph automatically. No
       # `pod install` step needed.
