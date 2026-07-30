@@ -70,7 +70,7 @@ jobs:
         working-directory: ios/App
         run: |
           xcodebuild \
-            -workspace App.xcworkspace \
+            -project App.xcodeproj \
             -scheme App \
             -configuration Release \
             -sdk iphonesimulator \
@@ -135,7 +135,7 @@ jobs:
           # Substitute the Team ID into ExportOptions.plist
           sed -i '' "s/__TEAM_ID__/$APPLE_TEAM_ID/g" ExportOptions/ExportOptions.plist
 
-          xcodebuild -workspace App.xcworkspace \
+          xcodebuild -project App.xcodeproj \
             -scheme App \
             -configuration Release \
             -sdk iphoneos \
