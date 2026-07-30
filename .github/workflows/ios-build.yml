@@ -37,7 +37,9 @@ jobs:
           cache: 'npm'
 
       - name: Install JS dependencies
-        run: npm ci
+        # --legacy-peer-deps: react-leaflet@4 declares react@^18 as a peer
+        # but the project uses react@19; the app actually works fine.
+        run: npm ci --legacy-peer-deps
 
       - name: Build web bundle for Capacitor
         run: npx vite build --config vite.cap.config.ts
