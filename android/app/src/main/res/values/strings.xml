@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Zeh L\'Zeh Rescue</string>
+    <string name="title_activity_main">Zeh L\'Zeh Rescue</string>
+    <string name="package_name">org.zehlzeh.volunteer</string>
+    <string name="custom_url_scheme">org.zehlzeh.volunteer</string>
+</resources>

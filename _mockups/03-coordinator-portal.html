@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zeh L'Zeh — Pickups Portal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700;9..144,900&family=Hanken+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --cream:#FAF5EC;--paper:#FFFFFF;--ink:#1C2A21;--muted:#6E7C70;
+    --forest:#2C5A3B;--forest-deep:#1E3F29;--sage:#E5EEE2;--sage-line:#CFE0CC;
+    --clay:#D27A4C;--clay-soft:#F7E4D6;--amber:#E5A93F;--amber-soft:#FBEBC8;
+    --sky:#3E6F8E;--sky-soft:#DCE9F0;--line:#EAE3D4;--line-2:#E0D8C6;
+    --shadow:30px 50px 100px -40px rgba(28,42,33,.5);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Hanken Grotesk',sans-serif;color:var(--ink);
+    background:radial-gradient(1200px 600px at 80% -5%,#EAF1E4 0%,transparent 55%),radial-gradient(900px 500px at 5% 110%,#F4E7D8 0%,transparent 50%),var(--cream);
+    -webkit-font-smoothing:antialiased;padding:46px 28px 70px;line-height:1.45}
+  .wrap{max-width:1220px;margin:0 auto}
+  .brandrow{display:flex;align-items:center;gap:14px;margin-bottom:16px}
+  .mark{width:44px;height:44px;border-radius:12px;background:var(--forest);display:grid;place-items:center;color:#fff;font-family:'Fraunces';font-weight:900;font-size:19px;box-shadow:0 8px 20px -8px rgba(44,90,59,.7)}
+  .brandtxt b{font-family:'Fraunces';font-weight:600;font-size:18px;display:block;line-height:1.1}
+  .brandtxt span{font-size:12.5px;color:var(--muted)}
+  .heb{font-family:'Fraunces';font-weight:500}
+  h1{font-family:'Fraunces';font-weight:600;font-size:clamp(26px,3.2vw,36px);letter-spacing:-.02em;margin-top:4px}
+  h1 em{font-style:italic;color:var(--forest)}
+  .sub{color:var(--muted);font-size:15px;max-width:66ch;margin-top:10px;margin-bottom:30px}
+
+  /* browser chrome */
+  .browser{border-radius:18px;overflow:hidden;box-shadow:var(--shadow);border:1px solid var(--line-2);opacity:0;transform:translateY(24px);animation:rise .8s cubic-bezier(.2,.7,.2,1) .1s forwards}
+  @keyframes rise{to{opacity:1;transform:translateY(0)}}
+  .bbar{height:42px;background:#EDE7DA;border-bottom:1px solid var(--line-2);display:flex;align-items:center;gap:8px;padding:0 16px}
+  .bbar .tl{display:flex;gap:7px}.bbar .tl i{width:11px;height:11px;border-radius:50%;display:block}
+  .bbar .tl i:nth-child(1){background:#E5736B}.bbar .tl i:nth-child(2){background:#E7B14C}.bbar .tl i:nth-child(3){background:#79C079}
+  .bbar .url{margin-left:14px;flex:1;max-width:360px;background:#fff;border:1px solid var(--line-2);border-radius:8px;height:24px;display:flex;align-items:center;padding:0 10px;font-size:11.5px;color:var(--muted);gap:6px}
+
+  .app{display:flex;flex-direction:column;height:744px;background:var(--paper)}
+  /* topbar */
+  .topbar{height:58px;background:var(--forest-deep);display:flex;align-items:center;justify-content:space-between;padding:0 18px;flex:none}
+  .topbar .l{display:flex;align-items:center;gap:12px;color:#fff}
+  .topbar .tmark{width:30px;height:30px;border-radius:8px;background:#fff;color:var(--forest);display:grid;place-items:center;font-family:'Fraunces';font-weight:900;font-size:14px}
+  .topbar .crumb{font-family:'Fraunces';font-weight:600;font-size:15px;letter-spacing:.01em}
+  .topbar .crumb .ar{opacity:.5;margin:0 8px;font-weight:400}
+  .topbar .crumb .cur{color:#bfe0c6}
+  .topbar .r{display:flex;align-items:center;gap:14px}
+  .topbar .search{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.16);border-radius:9px;height:34px;width:220px;display:flex;align-items:center;gap:8px;padding:0 11px;color:#cfe0c8;font-size:12.5px}
+  .topbar .ti{position:relative;color:#cfe0c8;display:grid;place-items:center}
+  .topbar .ti .bdg{position:absolute;top:-5px;right:-6px;background:var(--clay);color:#fff;font-size:9px;font-weight:800;border-radius:999px;min-width:15px;height:15px;display:grid;place-items:center;padding:0 3px;border:2px solid var(--forest-deep)}
+  .topbar .ava{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#4d8a64,#2C5A3B);display:grid;place-items:center;color:#fff;font-weight:700;font-size:12px}
+
+  .shell{flex:1;display:flex;min-height:0}
+  /* sidebar */
+  .side{width:284px;flex:none;border-right:1px solid var(--line);display:flex;flex-direction:column;background:#FCFAF4;overflow:auto}
+  .smap{height:152px;margin:14px 14px 8px;border-radius:14px;position:relative;overflow:hidden;border:1px solid var(--line);
+    background:linear-gradient(0deg,rgba(44,90,59,.05),rgba(44,90,59,.05)),repeating-linear-gradient(0deg,#EAF0E4 0 1px,transparent 1px 24px),repeating-linear-gradient(90deg,#EAF0E4 0 1px,transparent 1px 24px),#F3F7EF}
+  .smap .rd{position:absolute;background:#E4EBDC}
+  .smap .pin{position:absolute;width:20px;height:20px;transform:translate(-50%,-100%)}
+  .smap .pin svg{filter:drop-shadow(0 3px 3px rgba(0,0,0,.18))}
+  .smap .mtog{position:absolute;left:8px;top:8px;background:#fff;border:1px solid var(--line);border-radius:7px;font-size:10px;font-weight:700;color:var(--forest);padding:4px 8px;display:flex;align-items:center;gap:5px}
+  .nav{padding:6px 10px 4px}
+  .ni{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:9px;font-size:13.5px;font-weight:600;color:#586458;margin-bottom:1px;cursor:pointer;position:relative}
+  .ni:hover{background:#F1EDE1}
+  .ni.on{background:var(--sage);color:var(--forest);font-weight:700}
+  .ni svg{opacity:.9;flex:none}
+  .ni .bdg{margin-left:auto;background:var(--clay);color:#fff;font-size:10px;font-weight:800;border-radius:999px;min-width:18px;height:18px;display:grid;place-items:center;padding:0 5px}
+  .ni .help{margin-left:auto;width:16px;height:16px;border-radius:50%;border:1.4px solid var(--line-2);color:var(--muted);font-size:10px;font-weight:800;display:grid;place-items:center}
+  .navsec{font-size:10px;text-transform:uppercase;letter-spacing:.09em;color:#9aa595;font-weight:800;margin:14px 14px 7px;display:flex;align-items:center;justify-content:space-between}
+  .navsec .tg{width:30px;height:17px;border-radius:999px;background:var(--sage-line);position:relative}
+  .navsec .tg::after{content:"";position:absolute;left:2px;top:2px;width:13px;height:13px;border-radius:50%;background:#fff}
+  .navsec .tg.on{background:var(--forest)}.navsec .tg.on::after{left:auto;right:2px}
+  .place{display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:12.5px;color:#586458;font-weight:600;cursor:pointer}
+  .place:hover{background:#F1EDE1}
+  .place .pd{width:9px;height:9px;border-radius:50%;flex:none}
+  .place .pt{flex:1}
+  .place .pc{font-size:10.5px;color:var(--muted);font-weight:700}
+
+  /* main feed */
+  .main{flex:1;display:flex;flex-direction:column;min-width:0;background:
+    radial-gradient(700px 300px at 90% 0%,rgba(229,169,63,.05),transparent 60%),var(--paper)}
+  .mhead{display:flex;align-items:center;justify-content:space-between;padding:18px 26px 14px;border-bottom:1px solid var(--line);flex:none}
+  .mhead .ht{font-family:'Fraunces';font-weight:600;font-size:24px;letter-spacing:-.01em}
+  .mhead .hs{font-size:12.5px;color:var(--muted);margin-top:2px}
+  .mhead .filters{display:flex;gap:8px}
+  .fbtn{font-size:12px;font-weight:700;padding:8px 13px;border-radius:9px;border:1px solid var(--line-2);background:#fff;color:var(--muted)}
+  .fbtn.on{background:var(--forest);border-color:var(--forest);color:#fff}
+  .feed{flex:1;overflow:auto;padding:20px 26px 28px}
+  .dgroup{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:6px 0 12px}
+  .dgroup:not(:first-child){margin-top:22px}
+
+  .card{display:flex;gap:0;background:#fff;border:1px solid var(--line);border-radius:16px;margin-bottom:13px;overflow:hidden;transition:transform .16s ease,box-shadow .16s ease}
+  .card:hover{transform:translateY(-2px);box-shadow:0 16px 30px -20px rgba(28,42,33,.45)}
+  .card .stripe{width:5px;flex:none}
+  .card .body{flex:1;padding:15px 17px;min-width:0}
+  .card .ctop{display:flex;align-items:center;gap:10px;margin-bottom:7px}
+  .card .time{font-family:'Fraunces';font-weight:700;font-size:14px;color:var(--ink)}
+  .card .loc{font-weight:700;font-size:13.5px}
+  .card .kind{margin-left:auto;width:28px;height:28px;border-radius:8px;display:grid;place-items:center;flex:none}
+  .card .desc{font-size:13px;color:#56625a;line-height:1.5;max-width:62ch}
+  .card .foot{display:flex;align-items:center;justify-content:space-between;margin-top:13px}
+  .slots{display:flex;align-items:center}
+  .slots .s{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:10px;font-weight:700;color:#fff;margin-left:-7px;border:2px solid #fff}
+  .slots .s:first-child{margin-left:0}
+  .slots .s.a{background:#3a7350}.slots .s.b{background:var(--clay)}.slots .s.c{background:var(--amber)}.slots .s.d{background:var(--sky)}
+  .slots .e{width:26px;height:26px;border-radius:50%;border:1.7px dashed #C7CEC2;margin-left:-7px;background:#fff}
+  .slabel{font-size:12px;font-weight:700;margin-left:11px}
+  .slabel.need{color:var(--clay)}.slabel.ok{color:var(--forest)}
+  .chat{display:flex;align-items:center;gap:7px;color:var(--forest);font-weight:700;font-size:12.5px}
+  .chat svg{opacity:.9}
+
+  .legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .ltag{font-size:12px;font-weight:600;padding:6px 12px;border-radius:999px;border:1px solid var(--line-2);background:#fff;color:var(--muted)}
+  .ltag b{color:var(--forest);font-weight:700}
+  .foot-note{margin-top:18px;text-align:center;color:var(--muted);font-size:12.5px}
+  .foot-note b{color:var(--ink);font-family:'Fraunces';font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brandrow">
+    <div class="mark">ז</div>
+    <div class="brandtxt"><b>Zeh L'Zeh&nbsp; <span class="heb">זה לזה</span></b><span>Coordinator portal — customized from the Karrot layout</span></div>
+  </div>
+  <h1>The portal, <em>reimagined for Rockland.</em></h1>
+  <p class="sub">Same information architecture as the Foodsharing Stockholm screen you shared — map, navigation, Places, and a date-grouped activity feed with sign-up slots and per-pickup chat — rebuilt in the Zeh L'Zeh aesthetic.</p>
+
+  <div class="browser">
+    <div class="bbar">
+      <div class="tl"><i></i><i></i><i></i></div>
+      <div class="url"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg>app.zehlzeh.org/pickups</div>
+    </div>
+    <div class="app">
+      <!-- topbar -->
+      <div class="topbar">
+        <div class="l">
+          <div class="tmark">ז</div>
+          <div class="crumb">Zeh L'Zeh Rockland <span class="ar">▸</span><span class="cur">Pickups</span></div>
+        </div>
+        <div class="r">
+          <div class="search"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4-4"/></svg>Search pickups, stores…</div>
+          <div class="ti"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v11H8l-4 4z"/></svg></div>
+          <div class="ti"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0112 0c0 7 3 7 3 9H3c0-2 3-2 3-9z"/><path d="M10 21h4"/></svg><span class="bdg">3</span></div>
+          <div class="ava">CR</div>
+        </div>
+      </div>
+      <div class="shell">
+        <!-- sidebar -->
+        <div class="side">
+          <div class="smap">
+            <div class="mtog"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 21s7-8 7-13a7 7 0 10-14 0c0 5 7 13 7 13z"/></svg>Pins · 6 live</div>
+            <div class="rd" style="left:0;right:0;top:66px;height:6px"></div>
+            <div class="rd" style="top:0;bottom:0;left:96px;width:6px"></div>
+            <div class="rd" style="top:0;bottom:0;left:188px;width:5px"></div>
+            <div class="pin" style="left:60px;top:48px"><svg viewBox="0 0 24 24" fill="#D27A4C"><path d="M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z"/></svg></div>
+            <div class="pin" style="left:128px;top:96px"><svg viewBox="0 0 24 24" fill="#2C5A3B"><path d="M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z"/></svg></div>
+            <div class="pin" style="left:204px;top:42px"><svg viewBox="0 0 24 24" fill="#E5A93F"><path d="M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z"/></svg></div>
+            <div class="pin" style="left:236px;top:104px"><svg viewBox="0 0 24 24" fill="#2C5A3B"><path d="M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z"/></svg></div>
+          </div>
+          <div class="nav">
+            <div class="ni"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 11 12 4l8 7v9H4z"/></svg>Home <span class="help">i</span></div>
+            <div class="ni"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Updates</div>
+            <div class="ni on"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 9h16M8 3v4M16 3v4"/></svg>Pickups <span class="help" style="border-color:var(--sage-line);color:var(--forest)">?</span></div>
+            <div class="ni"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h11v8H3zM14 10h4l3 3v2h-7z"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></svg>Offers</div>
+            <div class="ni"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 6a3 3 0 010 6"/></svg>Volunteers</div>
+            <div class="ni"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9h16v11H4zM7 9V6h10v3"/></svg>Suppliers <span class="bdg">1</span></div>
+            <div class="ni"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>History</div>
+            <div class="ni"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5M4 19h16M8 16v-5M12 16V8M16 16v-3"/></svg>Reports</div>
+          </div>
+          <div class="navsec">Places <span class="tg on"></span></div>
+          <div class="place"><span class="pd" style="background:#7DC47D"></span><span class="pt">Trader Joe's, New City</span><span class="pc">active</span></div>
+          <div class="place"><span class="pd" style="background:#E5A93F"></span><span class="pt">Rockland Kosher</span><span class="pc">today</span></div>
+          <div class="place"><span class="pd" style="background:#7DC47D"></span><span class="pt">Bagel Mongers</span><span class="pc">Fri</span></div>
+          <div class="place"><span class="pd" style="background:#7DC47D"></span><span class="pt">Spring Valley Pantry</span><span class="pc">drop-off</span></div>
+          <div class="place"><span class="pd" style="background:#C7CEC2"></span><span class="pt">Cedar Market</span><span class="pc">paused</span></div>
+          <div class="place" style="color:var(--forest);font-weight:700"><span class="pd" style="background:transparent;border:1.6px dashed var(--sage-line)"></span><span class="pt">＋ Approaching stores (2)</span></div>
+        </div>
+        <!-- main -->
+        <div class="main">
+          <div class="mhead">
+            <div><div class="ht">Pickups</div><div class="hs">This week · 6 scheduled · 9 volunteers active</div></div>
+            <div class="filters"><span class="fbtn on">All</span><span class="fbtn">Needs drivers</span><span class="fbtn">Mine</span></div>
+          </div>
+          <div class="feed">
+            <div class="dgroup">Tuesday, June 2</div>
+
+            <div class="card">
+              <div class="stripe" style="background:var(--sky)"></div>
+              <div class="body">
+                <div class="ctop"><span class="time">7:00 PM</span><span class="loc">· Online</span>
+                  <span class="kind" style="background:var(--sky-soft);color:var(--sky)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="13" rx="2"/><path d="M8 21h8"/></svg></span></div>
+                <div class="desc">Volunteer check-in — we're onboarding three new stores across north &amp; south Rockland this month. Everyone welcome, north and south.</div>
+                <div class="foot">
+                  <div style="display:flex;align-items:center"><div class="slots"><span class="s a">CR</span><span class="s b">DG</span><span class="s c">YB</span><span class="s d">SL</span></div><span class="slabel ok">12 going</span></div>
+                  <span class="chat"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v11H8l-4 4z"/></svg>Open chat</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="stripe" style="background:var(--clay)"></div>
+              <div class="body">
+                <div class="ctop"><span class="time">11:00 AM – 12:00 PM</span><span class="loc">· Trader Joe's, New City</span>
+                  <span class="kind" style="background:var(--clay-soft);color:var(--clay)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 7h11v8H3zM14 10h4l3 3v2h-7z"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></svg></span></div>
+                <div class="desc">Produce &amp; bakery run, ~6 crates. Some refrigerated — please bring a cooler bag. Drop at Spring Valley pantry, about 15 min away.</div>
+                <div class="foot">
+                  <div style="display:flex;align-items:center"><div class="slots"><span class="s a">RK</span><span class="s b">AM</span><span class="e"></span><span class="e"></span></div><span class="slabel need">2 of 4 needed</span></div>
+                  <span class="chat"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v11H8l-4 4z"/></svg>Open chat</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="stripe" style="background:var(--forest)"></div>
+              <div class="body">
+                <div class="ctop"><span class="time">12:00 PM</span><span class="loc">· Spring Valley Pantry</span>
+                  <span class="kind" style="background:var(--sage);color:var(--forest)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-4.5-7-11a7 7 0 0114 0c0 6.5-7 11-7 11z" fill="none"/><path d="M9 11l2 2 4-4"/></svg></span></div>
+                <div class="desc">Distribution — ~90 families expected, 9am–12. After the produce run lands, lend a hand filling the fridges and bagging for pickup. :)</div>
+                <div class="foot">
+                  <div style="display:flex;align-items:center"><div class="slots"><span class="s c">ET</span><span class="s a">MB</span><span class="e"></span></div><span class="slabel need">2 of 3 needed</span></div>
+                  <span class="chat"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v11H8l-4 4z"/></svg>Open chat</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="dgroup">Wednesday, June 3</div>
+
+            <div class="card">
+              <div class="stripe" style="background:var(--clay)"></div>
+              <div class="body">
+                <div class="ctop"><span class="time">5:00 PM</span><span class="loc">· Rockland Kosher</span>
+                  <span class="kind" style="background:var(--clay-soft);color:var(--clay)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 7h11v8H3zM14 10h4l3 3v2h-7z"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></svg></span></div>
+                <div class="desc">Prepared meals, 4 trays. Hot — straight to the pantry, no cold storage needed. Quick ~15 min run.</div>
+                <div class="foot">
+                  <div style="display:flex;align-items:center"><div class="slots"><span class="s d">YB</span><span class="s a">SL</span></div><span class="slabel ok">Fully covered</span></div>
+                  <span class="chat"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v11H8l-4 4z"/></svg>Open chat</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="dgroup">Friday, June 5</div>
+
+            <div class="card">
+              <div class="stripe" style="background:var(--amber)"></div>
+              <div class="body">
+                <div class="ctop"><span class="time">9:30 AM</span><span class="loc">· Bagel Mongers</span>
+                  <span class="kind" style="background:var(--amber-soft);color:#b9831f"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg></span></div>
+                <div class="desc">Erev Shabbos surplus — bagels &amp; spreads, ~8 bags. Anyone can join this pickup and take what they can distribute before Shabbos.</div>
+                <div class="foot">
+                  <div style="display:flex;align-items:center"><div class="slots"><span class="s b">ET</span><span class="e"></span></div><span class="slabel need">1 of 2 needed</span></div>
+                  <span class="chat"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v11H8l-4 4z"/></svg>Open chat</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span class="ltag"><b>Left →</b> map · nav · Places (from Karrot)</span>
+    <span class="ltag"><b>Feed →</b> date groups + sign-up slots + Open chat</span>
+    <span class="ltag"><b>Stripe colours →</b> meeting · pickup · distribution</span>
+  </div>
+  <div class="foot-note"><b>Coordinator portal</b> · Karrot information architecture, Zeh L'Zeh aesthetic · placeholder data &amp; palette</div>
+</div>
+</body>
+</html>

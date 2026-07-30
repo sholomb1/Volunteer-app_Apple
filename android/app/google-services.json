@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "160518611325",
+    "project_id": "zeh-l-zeh-volunteer",
+    "storage_bucket": "zeh-l-zeh-volunteer.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:160518611325:android:6d75139dc5b1a79c15ec14",
+        "android_client_info": {
+          "package_name": "org.zehlzeh.volunteer"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD-Xnl1kQtReJ2TsJgQOrE5lCTzPfKj5Q8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

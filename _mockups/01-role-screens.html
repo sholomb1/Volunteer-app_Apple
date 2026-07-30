@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zeh L'Zeh Rescue — Concept Mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700;9..144,900&family=Hanken+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --cream:#FAF5EC; --paper:#FFFFFF; --ink:#1C2A21; --muted:#6E7C70;
+    --forest:#2C5A3B; --forest-deep:#1E3F29; --sage:#E5EEE2; --sage-line:#CFE0CC;
+    --clay:#D27A4C; --clay-soft:#F7E4D6; --amber:#E5A93F; --amber-soft:#FBEBC8;
+    --line:#EAE3D4; --line-2:#E0D8C6; --shadow:24px 40px 80px -32px rgba(28,42,33,.45);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:'Hanken Grotesk',sans-serif; color:var(--ink);
+    background:
+      radial-gradient(1200px 600px at 80% -5%, #EAF1E4 0%, transparent 55%),
+      radial-gradient(900px 500px at 5% 110%, #F4E7D8 0%, transparent 50%),
+      var(--cream);
+    -webkit-font-smoothing:antialiased; padding:48px 28px 80px; line-height:1.45;
+  }
+  .wrap{max-width:1320px;margin:0 auto}
+  .masthead{margin-bottom:8px}
+  .brandrow{display:flex;align-items:center;gap:14px;margin-bottom:18px}
+  .mark{width:46px;height:46px;border-radius:13px;background:var(--forest);display:grid;place-items:center;color:#fff;font-family:'Fraunces';font-weight:900;font-size:20px;box-shadow:0 8px 20px -8px rgba(44,90,59,.7)}
+  .brandtxt b{font-family:'Fraunces';font-weight:600;font-size:19px;letter-spacing:-.01em;display:block;line-height:1.1}
+  .brandtxt span{font-size:12.5px;color:var(--muted);letter-spacing:.02em}
+  .heb{font-family:'Fraunces';font-weight:500}
+  h1{font-family:'Fraunces';font-weight:600;font-size:clamp(30px,4vw,48px);letter-spacing:-.02em;line-height:1.04;max-width:18ch;margin-top:6px}
+  h1 em{font-style:italic;color:var(--forest)}
+  .sub{color:var(--muted);font-size:16px;max-width:62ch;margin-top:14px}
+  .lineage{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .tag{font-size:12px;font-weight:600;padding:6px 12px;border-radius:999px;border:1px solid var(--line-2);background:#fff;color:var(--muted)}
+  .tag b{color:var(--forest);font-weight:700}
+
+  .stage{display:flex;flex-wrap:wrap;gap:30px 26px;align-items:flex-start;justify-content:center;margin-top:46px}
+  .col{display:flex;flex-direction:column;align-items:center;gap:12px}
+  .caption{font-size:12.5px;color:var(--muted);text-align:center;max-width:230px;font-weight:500}
+  .caption b{color:var(--ink);font-weight:700;display:block;font-family:'Fraunces';font-size:14px;margin-bottom:2px}
+
+  /* phone */
+  .phone{width:286px;border-radius:46px;background:#11160F;padding:11px;box-shadow:var(--shadow);position:relative;opacity:0;transform:translateY(26px);animation:rise .8s cubic-bezier(.2,.7,.2,1) forwards}
+  .col:nth-child(1) .phone{animation-delay:.05s}
+  .col:nth-child(2) .phone{animation-delay:.16s}
+  .col:nth-child(3) .phone{animation-delay:.27s}
+  .col:nth-child(4) .phone{animation-delay:.38s}
+  @keyframes rise{to{opacity:1;transform:translateY(0)}}
+  .screen{background:var(--paper);border-radius:36px;overflow:hidden;height:600px;position:relative;display:flex;flex-direction:column}
+  .notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:120px;height:26px;background:#11160F;border-radius:0 0 16px 16px;z-index:30}
+  .stbar{display:flex;justify-content:space-between;align-items:center;padding:14px 22px 4px;font-size:12px;font-weight:700;color:var(--ink)}
+  .stbar .dots{display:flex;gap:3px;align-items:center}
+  .stbar .dots i{width:5px;height:5px;border-radius:50%;background:var(--ink);display:block}
+
+  .appbar{display:flex;align-items:center;justify-content:space-between;padding:8px 18px 12px}
+  .appbar .l{display:flex;align-items:center;gap:9px}
+  .logo-s{width:28px;height:28px;border-radius:8px;background:var(--forest);display:grid;place-items:center;color:#fff;font-family:'Fraunces';font-weight:900;font-size:13px}
+  .logo-s.alt{background:var(--clay)}
+  .appbar .name{font-family:'Fraunces';font-weight:600;font-size:14px}
+  .ava{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#3a7350,#2C5A3B);display:grid;place-items:center;color:#fff;font-weight:700;font-size:12px;border:2px solid #fff;box-shadow:0 0 0 1px var(--line)}
+  .body{flex:1;overflow:hidden;padding:0 18px}
+  .crumb{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.02em;margin-bottom:4px}
+  .crumb b{color:var(--forest)}
+  .h-lg{font-family:'Fraunces';font-weight:600;font-size:25px;letter-spacing:-.02em;line-height:1.05}
+  .h-md{font-family:'Fraunces';font-weight:600;font-size:18px;letter-spacing:-.01em}
+  .greet{font-family:'Fraunces';font-weight:600;font-size:23px;letter-spacing:-.01em;margin-top:2px}
+  .greet .heb{color:var(--forest)}
+  .lede{color:var(--muted);font-size:13px;margin-top:5px;margin-bottom:14px}
+
+  /* map strip */
+  .mapstrip{height:96px;border-radius:18px;position:relative;overflow:hidden;border:1px solid var(--line);margin-bottom:16px;
+    background:
+      linear-gradient(0deg,rgba(44,90,59,.05),rgba(44,90,59,.05)),
+      repeating-linear-gradient(0deg,#EEF3E9 0 1px,transparent 1px 22px),
+      repeating-linear-gradient(90deg,#EEF3E9 0 1px,transparent 1px 22px),
+      #F3F7EF}
+  .road{position:absolute;background:#E2E9DA}
+  .pin{position:absolute;width:18px;height:18px;transform:translate(-50%,-100%)}
+  .pin svg{filter:drop-shadow(0 3px 3px rgba(0,0,0,.18))}
+
+  /* task cards (Sharing Excess concept) */
+  .taskcard{display:flex;align-items:center;gap:14px;padding:17px 16px;border-radius:18px;margin-bottom:11px;border:1px solid transparent;cursor:pointer;transition:transform .18s ease, box-shadow .18s ease}
+  .taskcard:hover{transform:translateY(-2px);box-shadow:0 14px 26px -16px rgba(28,42,33,.4)}
+  .taskcard .ic{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;flex:none}
+  .taskcard .tx{flex:1}
+  .taskcard .tt{font-family:'Fraunces';font-weight:600;font-size:16px}
+  .taskcard .ds{font-size:12px;color:var(--muted);margin-top:1px}
+  .taskcard .ct{font-family:'Fraunces';font-weight:700;font-size:22px;line-height:1}
+  .tc-green{background:var(--sage);border-color:var(--sage-line)}
+  .tc-green .ic{background:#fff;color:var(--forest)}
+  .tc-clay{background:var(--clay-soft);border-color:#EED2BF}
+  .tc-clay .ic{background:#fff;color:var(--clay)}
+  .tc-paper{background:#fff;border-color:var(--line)}
+  .tc-paper .ic{background:var(--amber-soft);color:var(--amber)}
+
+  /* feed (Karrot concept) */
+  .daterow{font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin:6px 0 9px}
+  .pickcard{background:#fff;border:1px solid var(--line);border-radius:16px;padding:13px 14px;margin-bottom:11px;transition:transform .18s ease, box-shadow .18s ease;cursor:pointer}
+  .pickcard:hover{transform:translateY(-2px);box-shadow:0 14px 26px -18px rgba(28,42,33,.4)}
+  .pc-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+  .pc-time{font-family:'Fraunces';font-weight:700;font-size:14px;color:var(--forest)}
+  .pc-time .pm{color:var(--muted);font-size:11px;font-weight:600}
+  .pc-store{font-weight:700;font-size:13.5px;margin-top:3px}
+  .pc-desc{font-size:12px;color:var(--muted);margin-top:3px;line-height:1.4}
+  .pc-foot{display:flex;align-items:center;justify-content:space-between;margin-top:11px}
+  .slots{display:flex;align-items:center;gap:-6px}
+  .slots .s{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:9.5px;font-weight:700;color:#fff;margin-left:-6px;border:2px solid #fff}
+  .slots .s:first-child{margin-left:0}
+  .slots .s.f1{background:#3a7350}.slots .s.f2{background:var(--clay)}.slots .s.f3{background:var(--amber)}
+  .slots .e{width:24px;height:24px;border-radius:50%;border:1.6px dashed #C7CEC2;margin-left:-6px;background:#fff}
+  .slotlabel{font-size:11px;color:var(--muted);margin-left:9px;font-weight:600}
+  .slotlabel.need{color:var(--clay)}
+  .slotlabel.ok{color:var(--forest)}
+  .miniact{display:flex;gap:7px;align-items:center}
+  .chatbtn{width:30px;height:30px;border-radius:9px;border:1px solid var(--line);display:grid;place-items:center;color:var(--muted)}
+  .claim{background:var(--forest);color:#fff;font-weight:700;font-size:12px;padding:8px 14px;border-radius:10px;border:none}
+  .claim.full{background:var(--sage);color:var(--forest)}
+
+  /* detail + chips + timeline (SE + DMS concepts) */
+  .metarow{display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--line)}
+  .metarow .mi{width:30px;height:30px;border-radius:9px;background:var(--sage);display:grid;place-items:center;color:var(--forest);flex:none}
+  .metarow .mk{font-size:10.5px;color:var(--muted);font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+  .metarow .mv{font-weight:600;font-size:13.5px}
+  .statblock{display:flex;gap:10px;margin:14px 0}
+  .stat{flex:1;background:var(--sage);border:1px solid var(--sage-line);border-radius:14px;padding:12px}
+  .stat .n{font-family:'Fraunces';font-weight:700;font-size:21px;color:var(--forest);line-height:1}
+  .stat .l{font-size:10.5px;color:var(--muted);font-weight:600;margin-top:4px}
+  .chiplabel{font-size:10.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin:14px 0 8px}
+  .chips{display:flex;gap:7px;flex-wrap:wrap}
+  .chip{font-size:12px;font-weight:600;padding:7px 13px;border-radius:999px;border:1.4px solid var(--line-2);background:#fff;color:var(--muted)}
+  .chip.on{background:var(--forest);border-color:var(--forest);color:#fff}
+  .chip.clay.on{background:var(--clay);border-color:var(--clay)}
+
+  .timeline{margin:16px 0 8px;position:relative;padding-left:6px}
+  .tl{display:flex;gap:11px;padding-bottom:14px;position:relative}
+  .tl:not(:last-child)::before{content:"";position:absolute;left:9px;top:20px;bottom:-2px;width:2px;background:var(--sage-line)}
+  .tl .dot{width:20px;height:20px;border-radius:50%;flex:none;display:grid;place-items:center;z-index:1}
+  .tl.done .dot{background:var(--forest);color:#fff}
+  .tl.now .dot{background:var(--clay);color:#fff;box-shadow:0 0 0 4px var(--clay-soft)}
+  .tl.todo .dot{background:#fff;border:2px solid var(--line-2)}
+  .tl .tlx .tt{font-weight:700;font-size:13px}
+  .tl.todo .tlx .tt{color:var(--muted);font-weight:600}
+  .tl .tlx .ts{font-size:11px;color:var(--muted)}
+
+  /* slider (SE concept) */
+  .sliderwrap{margin:6px 0 4px}
+  .sliderrow{display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted);font-weight:700}
+  .track{height:6px;border-radius:6px;background:var(--line);margin:9px 0;position:relative}
+  .track .fill{position:absolute;left:0;top:0;bottom:0;width:46%;background:var(--forest);border-radius:6px}
+  .track .knob{position:absolute;left:46%;top:50%;transform:translate(-50%,-50%);width:20px;height:20px;border-radius:50%;background:#fff;border:3px solid var(--forest);box-shadow:0 3px 8px rgba(0,0,0,.2)}
+  .sval{font-family:'Fraunces';font-weight:700;font-size:18px;color:var(--forest)}
+
+  .field{margin-bottom:13px}
+  .flabel{font-size:10.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-bottom:7px}
+  .inp{border:1.4px solid var(--line-2);border-radius:12px;padding:11px 13px;font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:space-between;color:var(--ink)}
+  .inp .ph{color:#A9B2A6;font-weight:500}
+  .toggle{width:42px;height:24px;border-radius:999px;background:var(--forest);position:relative;flex:none}
+  .toggle::after{content:"";position:absolute;right:3px;top:3px;width:18px;height:18px;border-radius:50%;background:#fff}
+  .photo{border:1.6px dashed var(--line-2);border-radius:14px;height:74px;display:grid;place-items:center;color:var(--muted);font-size:12px;font-weight:600;gap:6px}
+
+  .cta{position:absolute;left:18px;right:18px;bottom:74px;background:var(--clay);color:#fff;font-weight:700;font-size:14px;text-align:center;padding:14px;border-radius:14px;box-shadow:0 12px 24px -10px rgba(210,122,76,.7)}
+  .cta.green{background:var(--forest);box-shadow:0 12px 24px -10px rgba(44,90,59,.7)}
+
+  /* tab bar */
+  .tabbar{position:absolute;left:0;right:0;bottom:0;height:62px;background:#fff;border-top:1px solid var(--line);display:flex;justify-content:space-around;align-items:center;padding-bottom:6px}
+  .tabbar .t{display:flex;flex-direction:column;align-items:center;gap:3px;color:#AEB6AA;font-size:9px;font-weight:700}
+  .tabbar .t.on{color:var(--forest)}
+
+  /* coordinator desktop */
+  .console{margin-top:64px;background:#fff;border:1px solid var(--line);border-radius:24px;overflow:hidden;box-shadow:var(--shadow);display:flex;min-height:520px;opacity:0;transform:translateY(26px);animation:rise .8s cubic-bezier(.2,.7,.2,1) .5s forwards}
+  .nav{width:212px;background:var(--forest-deep);color:#cfe0c8;padding:20px 14px;flex:none}
+  .nav .nb{display:flex;align-items:center;gap:11px;margin-bottom:26px}
+  .nav .nb .mark{width:34px;height:34px;border-radius:9px;background:#fff;color:var(--forest);font-size:15px}
+  .nav .nb b{color:#fff;font-family:'Fraunces';font-weight:600;font-size:15px}
+  .nav .ni{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:10px;font-size:13px;font-weight:600;color:#a9c2a0;margin-bottom:3px}
+  .nav .ni.on{background:rgba(255,255,255,.12);color:#fff}
+  .nav .ni svg{opacity:.85}
+  .nav .navsec{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#7fa078;margin:18px 12px 8px;font-weight:800}
+  .nav .place{display:flex;align-items:center;gap:9px;padding:7px 12px;font-size:12.5px;color:#bcd2b4}
+  .nav .place .pd{width:8px;height:8px;border-radius:50%}
+  .main{flex:1;display:flex;flex-direction:column;min-width:0}
+  .mhead{display:flex;align-items:center;justify-content:space-between;padding:18px 24px;border-bottom:1px solid var(--line)}
+  .mhead .h-md{font-size:20px}
+  .mhead .smuted{font-size:12.5px;color:var(--muted)}
+  .pill{font-size:11px;font-weight:700;padding:6px 12px;border-radius:999px}
+  .pill.live{background:var(--clay-soft);color:var(--clay)}
+  .split{flex:1;display:flex;min-height:0}
+  .map{flex:1.1;position:relative;border-right:1px solid var(--line);
+    background:
+      linear-gradient(0deg,rgba(44,90,59,.04),rgba(44,90,59,.04)),
+      repeating-linear-gradient(0deg,#EDF2E7 0 1px,transparent 1px 30px),
+      repeating-linear-gradient(90deg,#EDF2E7 0 1px,transparent 1px 30px),
+      #F4F8F0;min-height:340px}
+  .feedpane{width:360px;flex:none;padding:18px 18px 22px;overflow:auto}
+  .cfeed-date{font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin:4px 0 10px}
+  .crow{border:1px solid var(--line);border-radius:14px;padding:12px 13px;margin-bottom:10px;display:flex;flex-direction:column;gap:8px}
+  .crow .ct{display:flex;justify-content:space-between;align-items:baseline}
+  .crow .cstore{font-weight:700;font-size:13.5px}
+  .crow .ctime{font-family:'Fraunces';font-weight:700;font-size:13px;color:var(--forest)}
+  .crow .cmeta{font-size:11.5px;color:var(--muted)}
+  .crow .cfoot{display:flex;align-items:center;justify-content:space-between}
+  .spill{font-size:10.5px;font-weight:700;padding:4px 10px;border-radius:999px}
+  .spill.posted{background:var(--amber-soft);color:#9a7415}
+  .spill.claimed{background:var(--sage);color:var(--forest)}
+  .spill.transit{background:var(--clay-soft);color:var(--clay)}
+  .assign{font-size:11.5px;font-weight:700;color:var(--forest);border:1px solid var(--sage-line);background:var(--sage);padding:6px 11px;border-radius:9px}
+  .foot{margin-top:54px;text-align:center;color:var(--muted);font-size:12.5px}
+  .foot b{color:var(--ink);font-family:'Fraunces';font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <div class="brandrow">
+      <div class="mark">ז</div>
+      <div class="brandtxt"><b>Zeh L'Zeh&nbsp; <span class="heb">זה לזה</span></b><span>Rescue — concept mockup</span></div>
+    </div>
+    <h1>One pickup, <em>one to another.</em></h1>
+    <p class="sub">A fresh face for the food-rescue flow — the Karrot map-and-feed with volunteer sign-up slots, married to the Sharing Excess task hub, chip selectors and quantity controls. Original UI, themed for Zeh L'Zeh. Palette and logo are placeholders to swap for the real identity.</p>
+    <div class="lineage">
+      <span class="tag"><b>Karrot →</b> feed + slot avatars + console</span>
+      <span class="tag"><b>Sharing Excess →</b> task hub + chips + slider</span>
+      <span class="tag"><b>New →</b> supplier "post a pickup" + status timeline</span>
+    </div>
+  </header>
+
+  <div class="stage">
+
+    <!-- PHONE 1: Volunteer home -->
+    <div class="col">
+      <div class="phone"><div class="notch"></div>
+        <div class="screen">
+          <div class="stbar"><span>9:41</span><span class="dots"><i></i><i></i><i></i></span></div>
+          <div class="appbar"><div class="l"><div class="logo-s">ז</div><span class="name">Zeh L'Zeh</span></div><div class="ava">DG</div></div>
+          <div class="body">
+            <div class="greet">Shalom, Dovid</div>
+            <div class="lede">3 pickups near New City still need a driver tonight.</div>
+            <div class="mapstrip">
+              <div class="road" style="left:0;right:0;top:42px;height:6px"></div>
+              <div class="road" style="top:0;bottom:0;left:90px;width:6px"></div>
+              <div class="road" style="top:0;bottom:0;left:188px;width:5px"></div>
+              <div class="pin" style="left:64px;top:40px"><svg viewBox="0 0 24 24" fill="#D27A4C"><path d="M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z"/></svg></div>
+              <div class="pin" style="left:120px;top:62px"><svg viewBox="0 0 24 24" fill="#2C5A3B"><path d="M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z"/></svg></div>
+              <div class="pin" style="left:206px;top:34px"><svg viewBox="0 0 24 24" fill="#2C5A3B"><path d="M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z"/></svg></div>
+            </div>
+            <div class="taskcard tc-green">
+              <div class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 7c0-2 1.5-4 4-4 0 2.5-2 4-4 4z" fill="currentColor" stroke="none"/><path d="M12 8c-3 0-6 2-6 6s3 7 6 7 6-3 6-7-3-6-6-6z" fill="currentColor" stroke="none"/></svg></div>
+              <div class="tx"><div class="tt">Available Pickups</div><div class="ds">Near you · refrigerated &amp; dry</div></div>
+              <div class="ct" style="color:var(--forest)">6</div>
+            </div>
+            <div class="taskcard tc-clay">
+              <div class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h11v8H3zM14 10h4l3 3v2h-7z"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></svg></div>
+              <div class="tx"><div class="tt">My Pickups</div><div class="ds">1 tonight · 1 tomorrow</div></div>
+              <div class="ct" style="color:var(--clay)">2</div>
+            </div>
+            <div class="taskcard tc-paper">
+              <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></div>
+              <div class="tx"><div class="tt">Completed this week</div><div class="ds">~340 lbs rescued by you</div></div>
+              <div class="ct" style="color:var(--amber)">14</div>
+            </div>
+          </div>
+          <div class="tabbar">
+            <div class="t on"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 11 12 4l8 7v9H4z"/></svg>Home</div>
+            <div class="t"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 9h16"/></svg>Pickups</div>
+            <div class="t"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 4 4 6v14l5-2 6 2 5-2V4l-5 2-6-2z"/></svg>Map</div>
+            <div class="t"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v11H8l-4 4z"/></svg>Chat</div>
+            <div class="t"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>You</div>
+          </div>
+        </div>
+      </div>
+      <div class="caption"><b>Volunteer · Home</b>Sharing Excess task-hub cards, colour-coded by action.</div>
+    </div>
+
+    <!-- PHONE 2: Available pickups feed -->
+    <div class="col">
+      <div class="phone"><div class="notch"></div>
+        <div class="screen">
+          <div class="stbar"><span>9:41</span><span class="dots"><i></i><i></i><i></i></span></div>
+          <div class="appbar"><div class="l"><div class="logo-s">ז</div><span class="name">Available Pickups</span></div><div class="ava">DG</div></div>
+          <div class="body" style="overflow:auto">
+            <div class="daterow">Today · Mon, Jun 1</div>
+            <div class="pickcard">
+              <div class="pc-top"><span class="pc-time">5:00 <span class="pm">PM</span></span><span class="pc-store">Trader Joe's, New City</span></div>
+              <div class="pc-desc">Produce &amp; bakery, ~6 crates. Some refrigerated — please bring a cooler bag.</div>
+              <div class="pc-foot">
+                <div style="display:flex;align-items:center"><div class="slots"><span class="s f1">RK</span><span class="s f2">AM</span><span class="e"></span><span class="e"></span></div><span class="slotlabel need">2 of 4 needed</span></div>
+                <div class="miniact"><div class="chatbtn"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v11H8l-4 4z"/></svg></div><button class="claim">Claim</button></div>
+              </div>
+            </div>
+            <div class="pickcard">
+              <div class="pc-top"><span class="pc-time">6:30 <span class="pm">PM</span></span><span class="pc-store">Rockland Kosher</span></div>
+              <div class="pc-desc">Prepared meals, 4 trays. Hot — straight to the pantry, ~15 min drive.</div>
+              <div class="pc-foot">
+                <div style="display:flex;align-items:center"><div class="slots"><span class="s f3">YB</span><span class="s f1">SL</span></div><span class="slotlabel ok">Fully covered</span></div>
+                <div class="miniact"><div class="chatbtn"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v11H8l-4 4z"/></svg></div><button class="claim full">Joined ✓</button></div>
+              </div>
+            </div>
+            <div class="daterow">Tomorrow · Tue, Jun 2</div>
+            <div class="pickcard">
+              <div class="pc-top"><span class="pc-time">11:00 <span class="pm">AM</span></span><span class="pc-store">Bagel Mongers</span></div>
+              <div class="pc-desc">Surplus bagels &amp; spreads, ~8 bags. Dry, no rush — flexible window.</div>
+              <div class="pc-foot">
+                <div style="display:flex;align-items:center"><div class="slots"><span class="s f2">ET</span><span class="e"></span></div><span class="slotlabel need">1 of 2 needed</span></div>
+                <div class="miniact"><div class="chatbtn"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v11H8l-4 4z"/></svg></div><button class="claim">Claim</button></div>
+              </div>
+            </div>
+          </div>
+          <div class="tabbar">
+            <div class="t"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 11 12 4l8 7v9H4z"/></svg>Home</div>
+            <div class="t on"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 9h16"/></svg>Pickups</div>
+            <div class="t"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 4 4 6v14l5-2 6 2 5-2V4l-5 2-6-2z"/></svg>Map</div>
+            <div class="t"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v11H8l-4 4z"/></svg>Chat</div>
+            <div class="t"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>You</div>
+          </div>
+        </div>
+      </div>
+      <div class="caption"><b>Volunteer · Feed</b>Karrot's date-grouped feed + sign-up slot avatars (filled vs. dashed).</div>
+    </div>
+
+    <!-- PHONE 3: Pickup detail + timeline -->
+    <div class="col">
+      <div class="phone"><div class="notch"></div>
+        <div class="screen">
+          <div class="stbar"><span>9:41</span><span class="dots"><i></i><i></i><i></i></span></div>
+          <div class="appbar"><div class="l"><div class="logo-s">ז</div><span class="name">Pickup</span></div><div class="ava">DG</div></div>
+          <div class="body" style="overflow:auto;padding-bottom:96px">
+            <div class="crumb">Pickups <b>›</b> Detail</div>
+            <div class="h-lg">Trader Joe's</div>
+            <div class="lede" style="margin-top:2px">New City · Produce &amp; Bakery</div>
+            <div class="statblock">
+              <div class="stat"><div class="n">~6</div><div class="l">crates</div></div>
+              <div class="stat"><div class="n">120</div><div class="l">est. lbs</div></div>
+              <div class="stat"><div class="n">2.4</div><div class="l">mi away</div></div>
+            </div>
+            <div class="metarow"><div class="mi"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg></div><div><div class="mk">Drop-off</div><div class="mv">Zeh L'Zeh Pantry, Spring Valley</div></div></div>
+            <div class="chiplabel">Container</div>
+            <div class="chips"><span class="chip on">Crates</span><span class="chip">Boxes</span><span class="chip">Bags</span><span class="chip">Trays</span></div>
+            <div class="chiplabel">Status</div>
+            <div class="timeline">
+              <div class="tl done"><div class="dot"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6 9 17l-5-5"/></svg></div><div class="tlx"><div class="tt">Posted by supplier</div><div class="ts">4:42 PM · Trader Joe's</div></div></div>
+              <div class="tl done"><div class="dot"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M20 6 9 17l-5-5"/></svg></div><div class="tlx"><div class="tt">Claimed by you</div><div class="ts">4:55 PM</div></div></div>
+              <div class="tl now"><div class="dot"><svg width="10" height="10" viewBox="0 0 24 24" fill="#fff"><circle cx="12" cy="12" r="6"/></svg></div><div class="tlx"><div class="tt">En route to pickup</div><div class="ts">Now</div></div></div>
+              <div class="tl todo"><div class="dot"></div><div class="tlx"><div class="tt">Picked up</div></div></div>
+              <div class="tl todo"><div class="dot"></div><div class="tlx"><div class="tt">Delivered</div></div></div>
+            </div>
+          </div>
+          <div class="cta">Mark picked up</div>
+        </div>
+      </div>
+      <div class="caption"><b>Volunteer · Detail</b>SE entry-detail (stats + chips) fused with a DMS-style status timeline.</div>
+    </div>
+
+    <!-- PHONE 4: Supplier post a pickup -->
+    <div class="col">
+      <div class="phone"><div class="notch"></div>
+        <div class="screen">
+          <div class="stbar"><span>9:41</span><span class="dots"><i></i><i></i><i></i></span></div>
+          <div class="appbar"><div class="l"><div class="logo-s alt">ז</div><span class="name">New Pickup</span></div><div class="ava" style="background:linear-gradient(135deg,#e09a6f,#D27A4C)">RK</div></div>
+          <div class="body" style="overflow:auto;padding-bottom:96px">
+            <div class="crumb" style="margin-top:2px">Rockland Kosher Market</div>
+            <div class="h-lg" style="margin-bottom:6px">What's ready?</div>
+            <div class="field">
+              <div class="flabel">Food type</div>
+              <div class="chips"><span class="chip">Produce</span><span class="chip">Bakery</span><span class="chip">Dairy</span><span class="chip clay on">Prepared</span><span class="chip">Dry goods</span></div>
+            </div>
+            <div class="field">
+              <div class="flabel">Quantity · <span class="sval">4 trays</span></div>
+              <div class="sliderwrap">
+                <div class="track"><div class="fill" style="width:40%"></div><div class="knob" style="left:40%"></div></div>
+                <div class="sliderrow"><span>0</span><span>10 trays</span></div>
+              </div>
+            </div>
+            <div class="field">
+              <div class="flabel">Container</div>
+              <div class="chips"><span class="chip">Boxes</span><span class="chip">Bags</span><span class="chip clay on">Trays</span><span class="chip">Crates</span></div>
+            </div>
+            <div class="field">
+              <div class="flabel">Ready by</div>
+              <div class="inp">Today, 6:30 PM <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#A9B2A6" stroke-width="2"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M4 10h16M8 3v4M16 3v4"/></svg></div>
+            </div>
+            <div class="field" style="display:flex;align-items:center;justify-content:space-between;border:1.4px solid var(--line-2);border-radius:12px;padding:11px 13px">
+              <div><div style="font-weight:700;font-size:13px">Refrigerated</div><div style="font-size:11px;color:var(--muted)">Tell the driver to bring a cooler</div></div>
+              <div class="toggle"></div>
+            </div>
+            <div class="photo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="18" height="14" rx="2"/><circle cx="12" cy="13" r="3.5"/><path d="M8 6l1.5-2h5L16 6"/></svg>Add a photo</div>
+          </div>
+          <div class="cta green">Post pickup → notify drivers</div>
+        </div>
+      </div>
+      <div class="caption"><b>Supplier · Post</b>New flow built from SE's chip + slider inputs — the "food is ready" trigger.</div>
+    </div>
+
+  </div>
+
+  <!-- COORDINATOR CONSOLE -->
+  <div class="console">
+    <div class="nav">
+      <div class="nb"><div class="mark">ז</div><b>Zeh L'Zeh</b></div>
+      <div class="ni on"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 11 12 4l8 7v9H4z"/></svg>Live Board</div>
+      <div class="ni"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 9h16"/></svg>Pickups</div>
+      <div class="ni"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 6a3 3 0 010 6"/></svg>Volunteers</div>
+      <div class="ni"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9h16v11H4zM7 9V6h10v3"/></svg>Suppliers</div>
+      <div class="ni"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7l6-3 6 3 6-3v13l-6 3-6-3-6 3z"/></svg>Map</div>
+      <div class="ni"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5M4 19h16M8 16v-5M12 16V8M16 16v-3"/></svg>Reports</div>
+      <div class="navsec">Places</div>
+      <div class="place"><span class="pd" style="background:#7DC47D"></span>Trader Joe's, New City</div>
+      <div class="place"><span class="pd" style="background:#E5A93F"></span>Rockland Kosher</div>
+      <div class="place"><span class="pd" style="background:#7DC47D"></span>Bagel Mongers</div>
+      <div class="place"><span class="pd" style="background:#C7CEC2"></span>Cedar Market (paused)</div>
+    </div>
+    <div class="main">
+      <div class="mhead">
+        <div><div class="h-md">Live Board</div><div class="smuted">Monday, June 1 · 6 active pickups · 9 volunteers online</div></div>
+        <span class="pill live">● Live</span>
+      </div>
+      <div class="split">
+        <div class="map">
+          <div class="pin" style="left:22%;top:30%;width:24px;height:24px"><svg viewBox="0 0 24 24" fill="#D27A4C"><path d="M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z"/></svg></div>
+          <div class="pin" style="left:48%;top:54%;width:24px;height:24px"><svg viewBox="0 0 24 24" fill="#2C5A3B"><path d="M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z"/></svg></div>
+          <div class="pin" style="left:66%;top:32%;width:24px;height:24px"><svg viewBox="0 0 24 24" fill="#E5A93F"><path d="M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z"/></svg></div>
+          <div class="pin" style="left:78%;top:62%;width:24px;height:24px"><svg viewBox="0 0 24 24" fill="#2C5A3B"><path d="M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z"/></svg></div>
+        </div>
+        <div class="feedpane">
+          <div class="cfeed-date">Today · Mon, Jun 1</div>
+          <div class="crow">
+            <div class="ct"><span class="cstore">Trader Joe's, New City</span><span class="ctime">5:00 PM</span></div>
+            <div class="cmeta">Produce &amp; bakery · ~6 crates · refrigerated</div>
+            <div class="cfoot"><div style="display:flex;align-items:center"><div class="slots"><span class="s f1">RK</span><span class="s f2">AM</span><span class="e"></span><span class="e"></span></div><span class="slotlabel need">2 of 4</span></div><span class="spill transit">En route</span></div>
+          </div>
+          <div class="crow">
+            <div class="ct"><span class="cstore">Rockland Kosher</span><span class="ctime">6:30 PM</span></div>
+            <div class="cmeta">Prepared meals · 4 trays · hot</div>
+            <div class="cfoot"><div style="display:flex;align-items:center"><div class="slots"><span class="s f3">YB</span><span class="s f1">SL</span></div><span class="slotlabel ok">covered</span></div><span class="spill claimed">Claimed</span></div>
+          </div>
+          <div class="crow">
+            <div class="ct"><span class="cstore">Bagel Mongers</span><span class="ctime">7:15 PM</span></div>
+            <div class="cmeta">Bagels &amp; spreads · ~8 bags · dry</div>
+            <div class="cfoot"><div style="display:flex;align-items:center"><div class="slots"><span class="e"></span><span class="e"></span></div><span class="slotlabel need">0 of 2</span></div><button class="assign">Assign driver</button></div>
+          </div>
+          <div class="crow" style="border-style:dashed">
+            <div class="ct"><span class="cstore">Cedar Market</span><span class="ctime">7:40 PM</span></div>
+            <div class="cmeta">Produce · ~3 crates · just posted</div>
+            <div class="cfoot"><div style="display:flex;align-items:center"><div class="slots"><span class="e"></span></div><span class="slotlabel need">0 of 1</span></div><span class="spill posted">Just posted</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot"><b>Concept mockup</b> · original UI · Karrot + Sharing Excess patterns, themed for Zeh L'Zeh · swap palette &amp; logo for the real identity</div>
+</div>
+</body>
+</html>

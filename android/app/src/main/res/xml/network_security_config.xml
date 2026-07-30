@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Trust both system CAs and any user-installed CAs. Required for users
+         behind kosher-style content filters (TAG, Gentech, JNet) that do TLS
+         interception with their own CA. Without `user`, those users get a
+         java.security.cert.CertPathValidatorException at sign-in. Tradeoff:
+         someone with elevated control of the device could intercept this
+         app's traffic — but they could already intercept any other app's. -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system"/>
+            <certificates src="user"/>
+        </trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">staging.zehlzeh.org</domain>
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">10.0.2.2</domain>
+        <trust-anchors>
+            <certificates src="system"/>
+            <certificates src="user"/>
+        </trust-anchors>
+    </domain-config>
+</network-security-config>

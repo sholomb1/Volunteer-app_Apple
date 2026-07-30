@@ -1,0 +1,93 @@
+/* Fonts — match the rescue-kit mockup */
+@import '@fontsource/fraunces/400.css';
+@import '@fontsource/fraunces/500.css';
+@import '@fontsource/fraunces/600.css';
+@import '@fontsource/fraunces/700.css';
+@import '@fontsource/fraunces/400-italic.css';
+@import '@fontsource/fraunces/600-italic.css';
+@import '@fontsource-variable/hanken-grotesk';
+@import 'leaflet/dist/leaflet.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  @media (max-width: 640px) { html { font-size: 14.5px; } }
+  body {
+    @apply text-ink antialiased font-sans;
+    background-color: #FAF5EC;
+    background-image:
+      radial-gradient(1200px 600px at 80% -5%, #EAF1E4 0%, transparent 55%),
+      radial-gradient(900px 500px at 5% 110%, #F4E7D8 0%, transparent 50%);
+    line-height: 1.45;
+    /* No safe-area-inset padding here — the Android theme inset the WebView
+       already, and viewport-fit=cover is off so iOS WebKit handles it too. */
+  }
+  h1, h2, h3 { font-family: 'Fraunces', serif; font-weight: 600; letter-spacing: -0.02em; }
+  :focus-visible { @apply outline-none ring-2 ring-forest/50 ring-offset-2 ring-offset-cream; }
+}
+
+@layer components {
+  /* Phone-screen tap-effect */
+  .haptic { @apply active:scale-[0.97] transition-transform duration-100; }
+
+  /* Chip pattern from the mockup */
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-4 py-2 text-[14px] font-semibold;
+    border: 1.4px solid #E0D8C6;
+    background: #FFFFFF;
+    color: #6E7C70;
+  }
+  .chip.on   { background: #2C5A3B; border-color: #2C5A3B; color: #fff; }
+  .chip.clay-on { background: #D27A4C; border-color: #D27A4C; color: #fff; }
+
+  /* Eyebrow micro-label */
+  .eyebrow { @apply text-[13px] font-extrabold uppercase tracking-[0.05em] text-muted; }
+
+  /* Surface conventions */
+  .surface       { @apply bg-paper border border-line rounded-[18px] }
+  .surface-tight { @apply bg-paper border border-line rounded-2xl }
+}
+
+@layer utilities {
+  .text-balance { text-wrap: balance; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { scrollbar-width: none; }
+  .pb-safe { padding-bottom: calc(env(safe-area-inset-bottom) + 0.75rem); }
+  .pt-safe { padding-top: calc(env(safe-area-inset-top) + 0.75rem); }
+
+  /* Fraunces italic for the "em" accent in mockup headlines */
+  .accent-italic { font-style: italic; color: #2C5A3B; }
+}
+
+/* ================== Kiosk print labels (3" round) ================== */
+/* On-screen: hide print-only content. In print media: hide app UI and
+   show only the label pages, each a 3-inch square page with a 3-inch
+   die-cut circle. */
+.print-only { display: none; }
+@media print {
+  @page { size: 3in 3in; margin: 0; }
+  html, body { background: #fff !important; }
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+  .label-page {
+    width: 3in; height: 3in; page-break-after: always;
+    display: flex; align-items: center; justify-content: center;
+    color: #000; background: #fff;
+  }
+  .label-page:last-child { page-break-after: auto; }
+  .label-circle {
+    width: 2.7in; height: 2.7in;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; padding: 0.12in;
+    font-family: 'Hanken Grotesk', system-ui, sans-serif;
+  }
+  .label-store { font-size: 16pt; font-weight: 800; line-height: 1.05; margin-bottom: 4pt; }
+  .label-date  { font-size: 10pt; font-weight: 700; color: #333; margin-bottom: 6pt; }
+  .label-idx   { font-size: 22pt; font-weight: 800; margin-bottom: 6pt; }
+  .label-desc  { font-size: 10pt; font-weight: 600; line-height: 1.15; margin-bottom: 4pt;
+                 overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+  .label-meta  { font-size: 8pt; text-transform: uppercase; letter-spacing: .05em; color: #555; }
+}

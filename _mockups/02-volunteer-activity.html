@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zeh L'Zeh — Volunteer Activity</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700;9..144,900&family=Hanken+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --cream:#FAF5EC;--paper:#FFFFFF;--ink:#1C2A21;--muted:#6E7C70;
+    --forest:#2C5A3B;--forest-deep:#1E3F29;--sage:#E5EEE2;--sage-line:#CFE0CC;
+    --clay:#D27A4C;--clay-soft:#F7E4D6;--amber:#E5A93F;--amber-soft:#FBEBC8;
+    --sky:#3E6F8E;--sky-soft:#DCE9F0;--line:#EAE3D4;--line-2:#E0D8C6;
+    --shadow:24px 40px 80px -32px rgba(28,42,33,.45);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Hanken Grotesk',sans-serif;color:var(--ink);
+    background:radial-gradient(1200px 600px at 80% -5%,#EAF1E4 0%,transparent 55%),radial-gradient(900px 500px at 5% 110%,#F4E7D8 0%,transparent 50%),var(--cream);
+    -webkit-font-smoothing:antialiased;padding:48px 28px 80px;line-height:1.45}
+  .wrap{max-width:920px;margin:0 auto}
+  .brandrow{display:flex;align-items:center;gap:14px;margin-bottom:18px}
+  .mark{width:46px;height:46px;border-radius:13px;background:var(--forest);display:grid;place-items:center;color:#fff;font-family:'Fraunces';font-weight:900;font-size:20px;box-shadow:0 8px 20px -8px rgba(44,90,59,.7)}
+  .brandtxt b{font-family:'Fraunces';font-weight:600;font-size:19px;display:block;line-height:1.1}
+  .brandtxt span{font-size:12.5px;color:var(--muted)}
+  .heb{font-family:'Fraunces';font-weight:500}
+  h1{font-family:'Fraunces';font-weight:600;font-size:clamp(28px,3.6vw,40px);letter-spacing:-.02em;line-height:1.05;margin-top:6px}
+  h1 em{font-style:italic;color:var(--forest)}
+  .sub{color:var(--muted);font-size:16px;max-width:60ch;margin-top:12px}
+
+  .stage{display:flex;flex-wrap:wrap;gap:30px 26px;align-items:flex-start;justify-content:center;margin-top:44px}
+  .col{display:flex;flex-direction:column;align-items:center;gap:12px}
+  .caption{font-size:12.5px;color:var(--muted);text-align:center;max-width:240px;font-weight:500}
+  .caption b{color:var(--ink);font-weight:700;display:block;font-family:'Fraunces';font-size:14px;margin-bottom:2px}
+
+  .phone{width:300px;border-radius:46px;background:#11160F;padding:11px;box-shadow:var(--shadow);position:relative;opacity:0;transform:translateY(26px);animation:rise .8s cubic-bezier(.2,.7,.2,1) forwards}
+  .col:nth-child(2) .phone{animation-delay:.14s}
+  @keyframes rise{to{opacity:1;transform:translateY(0)}}
+  .screen{background:var(--paper);border-radius:36px;overflow:hidden;height:606px;position:relative;display:flex;flex-direction:column}
+  .notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:120px;height:26px;background:#11160F;border-radius:0 0 16px 16px;z-index:30}
+  .stbar{display:flex;justify-content:space-between;align-items:center;padding:14px 22px 4px;font-size:12px;font-weight:700}
+  .stbar .dots{display:flex;gap:3px}.stbar .dots i{width:5px;height:5px;border-radius:50%;background:var(--ink);display:block}
+  .appbar{display:flex;align-items:center;justify-content:space-between;padding:8px 18px 8px}
+  .appbar .l{display:flex;align-items:center;gap:9px}
+  .logo-s{width:28px;height:28px;border-radius:8px;background:var(--forest);display:grid;place-items:center;color:#fff;font-family:'Fraunces';font-weight:900;font-size:13px}
+  .appbar .name{font-family:'Fraunces';font-weight:600;font-size:14px}
+  .ava{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#3a7350,#2C5A3B);display:grid;place-items:center;color:#fff;font-weight:700;font-size:12px;border:2px solid #fff;box-shadow:0 0 0 1px var(--line)}
+  .body{flex:1;overflow:auto;padding:0 18px}
+
+  .ahead{margin:6px 0 14px}
+  .ahead .pn{font-family:'Fraunces';font-weight:600;font-size:22px;letter-spacing:-.01em}
+  .ahead .pm{font-size:12.5px;color:var(--muted);margin-top:2px}
+  .toggle{display:flex;background:#F3EFE4;border:1px solid var(--line);border-radius:11px;padding:3px;margin-bottom:16px}
+  .toggle .o{flex:1;text-align:center;font-size:12px;font-weight:700;padding:8px;border-radius:8px;color:var(--muted)}
+  .toggle .o.on{background:#fff;color:var(--forest);box-shadow:0 2px 6px rgba(28,42,33,.08)}
+
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-bottom:18px}
+  .metric{border-radius:18px;padding:15px 15px 16px;border:1px solid var(--line);position:relative;overflow:hidden}
+  .metric .ic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;margin-bottom:14px}
+  .metric .n{font-family:'Fraunces';font-weight:700;font-size:30px;letter-spacing:-.02em;line-height:1}
+  .metric .n small{font-size:14px;font-weight:600;color:var(--muted)}
+  .metric .l{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-top:5px}
+  .metric .d{font-size:11px;color:var(--muted);margin-top:6px;font-weight:600}
+  .m-green{background:var(--sage);border-color:var(--sage-line)}.m-green .ic{background:#fff;color:var(--forest)}.m-green .n{color:var(--forest)}
+  .m-sky{background:var(--sky-soft);border-color:#C6DAE6}.m-sky .ic{background:#fff;color:var(--sky)}.m-sky .n{color:var(--sky)}
+  .m-clay{background:var(--clay-soft);border-color:#EED2BF}.m-clay .ic{background:#fff;color:var(--clay)}.m-clay .n{color:var(--clay)}
+  .m-amber{background:var(--amber-soft);border-color:#F0DDA8}.m-amber .ic{background:#fff;color:var(--amber)}.m-amber .n{color:#b9831f}
+
+  .seclabel{font-size:10.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin:4px 0 9px;display:flex;justify-content:space-between;align-items:center}
+  .seclabel a{color:var(--forest);font-weight:700;text-transform:none;letter-spacing:0;font-size:12px}
+  .logrow{display:flex;align-items:center;gap:11px;padding:11px 0;border-bottom:1px solid var(--line)}
+  .logrow:last-child{border-bottom:none}
+  .logrow .di{width:34px;height:34px;border-radius:10px;background:#F3EFE4;display:grid;place-items:center;color:var(--muted);flex:none}
+  .logrow .lt{flex:1;min-width:0}
+  .logrow .ls{font-weight:700;font-size:13px}
+  .logrow .ld{font-size:11px;color:var(--muted);margin-top:1px}
+  .logrow .lr{text-align:right;flex:none}
+  .logrow .lr .mi{font-family:'Fraunces';font-weight:700;font-size:13px;color:var(--ink)}
+  .logrow .lr .hr{font-size:11px;color:var(--muted);margin-top:1px}
+
+  /* pickup capture screen */
+  .capwrap{padding:0 18px;flex:1;display:flex;flex-direction:column}
+  .map{height:150px;border-radius:18px;position:relative;overflow:hidden;border:1px solid var(--line);margin-bottom:16px;
+    background:linear-gradient(0deg,rgba(44,90,59,.04),rgba(44,90,59,.04)),repeating-linear-gradient(0deg,#EEF3E9 0 1px,transparent 1px 26px),repeating-linear-gradient(90deg,#EEF3E9 0 1px,transparent 1px 26px),#F3F7EF}
+  .route{position:absolute;left:30px;top:110px;width:0;height:0}
+  .pin{position:absolute;width:20px;height:20px;transform:translate(-50%,-100%)}
+  .caphead{text-align:center;margin-bottom:6px}
+  .caphead .k{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--forest)}
+  .caphead .t{font-family:'Fraunces';font-weight:600;font-size:23px;letter-spacing:-.01em;margin-top:3px}
+  .caphead .s{font-size:12.5px;color:var(--muted);margin-top:3px}
+  .caplist{margin-top:14px;border:1px solid var(--line);border-radius:16px;overflow:hidden}
+  .capr{display:flex;align-items:center;gap:12px;padding:13px 14px;border-bottom:1px solid var(--line)}
+  .capr:last-child{border-bottom:none}
+  .capr .ci{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;flex:none}
+  .capr .ck{font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.03em;text-transform:uppercase}
+  .capr .cv{font-family:'Fraunces';font-weight:700;font-size:16px}
+  .capr .cv small{font-size:11px;color:var(--muted);font-weight:600}
+  .cta{margin:16px 0 0;background:var(--forest);color:#fff;font-weight:700;font-size:14px;text-align:center;padding:14px;border-radius:14px;box-shadow:0 12px 24px -10px rgba(44,90,59,.7)}
+  .editnote{text-align:center;font-size:11.5px;color:var(--muted);margin-top:11px;font-weight:600}
+
+  .tabbar{position:absolute;left:0;right:0;bottom:0;height:62px;background:#fff;border-top:1px solid var(--line);display:flex;justify-content:space-around;align-items:center;padding-bottom:6px}
+  .tabbar .t{display:flex;flex-direction:column;align-items:center;gap:3px;color:#AEB6AA;font-size:9px;font-weight:700}
+  .tabbar .t.on{color:var(--forest)}
+  .foot{margin-top:54px;text-align:center;color:var(--muted);font-size:12.5px}
+  .foot b{color:var(--ink);font-family:'Fraunces';font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brandrow">
+    <div class="mark">ז</div>
+    <div class="brandtxt"><b>Zeh L'Zeh&nbsp; <span class="heb">זה לזה</span></b><span>Volunteer activity tracking — concept</span></div>
+  </div>
+  <h1>Four numbers, <em>nothing more.</em></h1>
+  <p class="sub">Just the metrics you asked for — pickups, miles, stores, and hours — totalled on one screen, and captured automatically from each trip.</p>
+
+  <div class="stage">
+
+    <!-- 1: Activity totals -->
+    <div class="col">
+      <div class="phone"><div class="notch"></div>
+        <div class="screen">
+          <div class="stbar"><span>9:41</span><span class="dots"><i></i><i></i><i></i></span></div>
+          <div class="appbar"><div class="l"><div class="logo-s">ז</div><span class="name">My Activity</span></div><div class="ava">DG</div></div>
+          <div class="body" style="padding-bottom:74px">
+            <div class="ahead"><div class="pn">Dovid Gold</div><div class="pm">Volunteer · Spring Valley</div></div>
+            <div class="toggle"><div class="o">This month</div><div class="o on">All time</div></div>
+            <div class="grid">
+              <div class="metric m-green">
+                <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 7h11v8H3zM14 10h4l3 3v2h-7z"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></svg></div>
+                <div class="n">47</div><div class="l">Pickups</div><div class="d">+3 this week</div>
+              </div>
+              <div class="metric m-sky">
+                <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 19c-2 0-3-1-3-3s1-3 3-3h8c2 0 3-1 3-3s-1-3-3-3"/><circle cx="6" cy="5" r="2"/><circle cx="18" cy="19" r="2"/></svg></div>
+                <div class="n">612 <small>mi</small></div><div class="l">Miles driven</div><div class="d">~13 mi / pickup</div>
+              </div>
+              <div class="metric m-clay">
+                <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 9h16v11H4zM7 9V6h10v3M9 20v-5h6v5"/></svg></div>
+                <div class="n">9</div><div class="l">Stores</div><div class="d">picked up from</div>
+              </div>
+              <div class="metric m-amber">
+                <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+                <div class="n">38.5 <small>hrs</small></div><div class="l">Hours</div><div class="d">~49 min / pickup</div>
+              </div>
+            </div>
+            <div class="seclabel">Recent pickups <a>Export</a></div>
+            <div class="logrow">
+              <div class="di"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 9h16v11H4zM7 9V6h10v3"/></svg></div>
+              <div class="lt"><div class="ls">Trader Joe's, New City</div><div class="ld">Mon, Jun 1 · 5:00 PM</div></div>
+              <div class="lr"><div class="mi">8.2 mi</div><div class="hr">0h 45m</div></div>
+            </div>
+            <div class="logrow">
+              <div class="di"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 9h16v11H4zM7 9V6h10v3"/></svg></div>
+              <div class="lt"><div class="ls">Rockland Kosher</div><div class="ld">Sun, May 31 · 6:30 PM</div></div>
+              <div class="lr"><div class="mi">14.6 mi</div><div class="hr">1h 05m</div></div>
+            </div>
+            <div class="logrow">
+              <div class="di"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 9h16v11H4zM7 9V6h10v3"/></svg></div>
+              <div class="lt"><div class="ls">Bagel Mongers</div><div class="ld">Fri, May 29 · 11:00 AM</div></div>
+              <div class="lr"><div class="mi">6.0 mi</div><div class="hr">0h 35m</div></div>
+            </div>
+            <div class="logrow">
+              <div class="di"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 9h16v11H4zM7 9V6h10v3"/></svg></div>
+              <div class="lt"><div class="ls">Trader Joe's, New City</div><div class="ld">Wed, May 27 · 5:10 PM</div></div>
+              <div class="lr"><div class="mi">8.4 mi</div><div class="hr">0h 50m</div></div>
+            </div>
+          </div>
+          <div class="tabbar">
+            <div class="t"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 11 12 4l8 7v9H4z"/></svg>Home</div>
+            <div class="t"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 9h16"/></svg>Pickups</div>
+            <div class="t on"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5M4 19h16M8 16v-6M12 16V9M16 16v-3"/></svg>Activity</div>
+            <div class="t"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>You</div>
+          </div>
+        </div>
+      </div>
+      <div class="caption"><b>Totals</b>The four metrics, with a recent log and an export for the office.</div>
+    </div>
+
+    <!-- 2: Per-pickup capture -->
+    <div class="col">
+      <div class="phone"><div class="notch"></div>
+        <div class="screen">
+          <div class="stbar"><span>9:41</span><span class="dots"><i></i><i></i><i></i></span></div>
+          <div class="appbar"><div class="l"><div class="logo-s">ז</div><span class="name">Pickup complete</span></div><div class="ava">DG</div></div>
+          <div class="capwrap" style="padding-bottom:18px">
+            <div class="map">
+              <svg width="100%" height="100%" viewBox="0 0 264 150" preserveAspectRatio="none" style="position:absolute;inset:0">
+                <path d="M40 120 C 90 110, 80 50, 150 55 S 220 40, 224 34" fill="none" stroke="#2C5A3B" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="2 7"/>
+              </svg>
+              <div class="pin" style="left:40px;top:124px"><svg viewBox="0 0 24 24" fill="#D27A4C"><path d="M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z"/></svg></div>
+              <div class="pin" style="left:224px;top:38px"><svg viewBox="0 0 24 24" fill="#2C5A3B"><path d="M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z"/></svg></div>
+            </div>
+            <div class="caphead">
+              <div class="k">Logged automatically</div>
+              <div class="t">Trader Joe's, New City</div>
+              <div class="s">Store → Zeh L'Zeh Pantry, Spring Valley</div>
+            </div>
+            <div class="caplist">
+              <div class="capr"><div class="ci" style="background:var(--sage);color:var(--forest)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg></div><div style="flex:1"><div class="ck">This pickup</div></div><div class="cv">+1</div></div>
+              <div class="capr"><div class="ci" style="background:var(--sky-soft);color:var(--sky)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 19c-2 0-3-1-3-3s1-3 3-3h8c2 0 3-1 3-3s-1-3-3-3"/><circle cx="6" cy="5" r="2"/><circle cx="18" cy="19" r="2"/></svg></div><div style="flex:1"><div class="ck">Miles driven</div></div><div class="cv">8.2 <small>mi</small></div></div>
+              <div class="capr"><div class="ci" style="background:var(--clay-soft);color:var(--clay)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 9h16v11H4zM7 9V6h10v3"/></svg></div><div style="flex:1"><div class="ck">Store</div></div><div class="cv" style="font-size:13px">Trader Joe's</div></div>
+              <div class="capr"><div class="ci" style="background:var(--amber-soft);color:#b9831f"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div><div style="flex:1"><div class="ck">Time spent</div></div><div class="cv">0h 45m</div></div>
+            </div>
+            <div class="cta">Save to my activity</div>
+            <div class="editnote">Tap any value to adjust before saving</div>
+          </div>
+        </div>
+      </div>
+      <div class="caption"><b>How it's captured</b>Each trip logs the pickup, miles, store, and time — editable before saving.</div>
+    </div>
+
+  </div>
+
+  <div class="foot"><b>Volunteer activity</b> · pickups · miles · stores · hours · auto-captured per trip, editable, exportable</div>
+</div>
+</body>
+</html>

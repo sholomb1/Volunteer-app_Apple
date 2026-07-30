@@ -1,0 +1,46 @@
+# ---- Node / Vite / TS ----
+node_modules/
+dist/
+dist-cap/
+*.log
+.env
+.env.local
+.env.*.local
+.DS_Store
+
+# ---- Android ----
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/keystore.properties
+android/*.keystore
+android/*.jks
+android/app/release/
+android/captures/
+android/**/.cxx/
+
+# Do NOT commit the release signing keystore or its password file
+*.jks
+keystore.properties
+
+# ---- iOS / Xcode ----
+ios/App/build/
+ios/App/DerivedData/
+ios/App/Pods/
+ios/App/App.xcworkspace/xcuserdata/
+ios/App/App.xcodeproj/xcuserdata/
+ios/App/App.xcodeproj/project.xcworkspace/xcuserdata/
+ios/App/App.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+*.xcuserstate
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+xcuserdata/
+DerivedData/
+
+# ---- Editor cruft ----
+.vscode/
+.idea/
+*.swp
+Thumbs.db
