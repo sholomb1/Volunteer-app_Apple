@@ -44,8 +44,15 @@ jobs:
       - name: Build web bundle for Capacitor
         run: npx vite build --config vite.cap.config.ts
 
-      - name: Sync iOS platform (copies web bundle + regenerates config)
-        run: npx cap sync ios
+      # `cap sync` runs `pod install` inline and errors if the Podfile.lock
+      # isn't already checked in. Split into copy (web bundle) + update
+      # (regenerate capacitor.config.json / plugin bridge) + pod install as
+      # separate steps so each can be diagnosed on failure.
+      - name: Copy web bundle into ios/App/App/public
+        run: npx cap copy ios
+
+      - name: Update iOS native project (plugin bridge, config)
+        run: npx cap update ios
 
       - name: Install CocoaPods
         working-directory: ios/App
