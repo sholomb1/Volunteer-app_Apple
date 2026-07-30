@@ -57,22 +57,17 @@ jobs:
       - name: Copy web bundle into ios/App/App/public
         run: npx cap copy ios
 
-      - name: Strip all Capacitor plugins from iOS SPM (v1 IPA)
-        # All three plugins (geolocation@8.2.0, status-bar@8.0.2, push-
-        # notifications@8.1.1) ship 8.x npm tags but their native Swift
-        # still calls Capacitor 7 iOS APIs (.reject, .webView, .getString,
-        # .getArray, fromHex:) that don't exist in any stable 8.x of
-        # capacitor-swift-pm. Ship v1 iOS with no native plugins — the
-        # React WebView still works fully. v2: either upgrade plugins to
-        # ones that actually target 8.x, or downgrade whole app to
-        # Capacitor 7.x where plugin/platform versions align.
+      - name: Force capacitor-swift-pm pin to 7.6.8 (matches plugin API surface)
+        # cap update regenerates Package.swift and clobbers our pin. Force
+        # it back to 7.6.8 (matches @capacitor/ios in package.json) so all
+        # three plugins (geolocation, status-bar, push-notifications)
+        # compile against the runtime they were built for.
         run: |
           set -euo pipefail
           F=ios/App/CapApp-SPM/Package.swift
-          sed -i '' '/CapacitorGeolocation/d'       "$F"
-          sed -i '' '/CapacitorStatusBar/d'         "$F"
-          sed -i '' '/CapacitorPushNotifications/d' "$F"
-          echo "=== stripped Package.swift ==="
+          sed -i '' 's|exact: "[0-9.]*"|exact: "7.6.8"|' "$F"
+          sed -i '' 's|from: "[0-9.]*"|exact: "7.6.8"|'  "$F"
+          echo "=== pinned Package.swift ==="
           cat "$F"
 
       # This project uses Swift Package Manager (ios/App/CapApp-SPM), not
