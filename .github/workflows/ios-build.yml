@@ -57,17 +57,17 @@ jobs:
       - name: Copy web bundle into ios/App/App/public
         run: npx cap copy ios
 
-      - name: Strip mismatched plugins from iOS SPM
-        # push-notifications@8.1.1 and status-bar@8.0.2 reference Capacitor
-        # iOS APIs that don't exist in either 8.1.0 or 8.4.x stable. Both
-        # plugins keep working on Android; drop them from the iOS SPM graph
-        # after cap update regenerates it so the archive step compiles.
+      - name: Force capacitor-swift-pm pin to 8.0.2 (matches plugin API surface)
+        # cap update regenerates Package.swift and clobbers the pin. Force
+        # it back to the version that has the API surface all three plugin
+        # versions (geolocation@8.2.0, status-bar@8.0.2, push-notifications@8.1.1)
+        # were compiled against.
         run: |
           set -euo pipefail
           F=ios/App/CapApp-SPM/Package.swift
-          sed -i '' '/CapacitorPushNotifications/d' "$F"
-          sed -i '' '/CapacitorStatusBar/d' "$F"
-          echo "=== stripped Package.swift ==="
+          sed -i '' 's|exact: "8\.[0-9]*\.[0-9]*"|exact: "8.0.2"|' "$F"
+          sed -i '' 's|from: "8\.0\.0"|exact: "8.0.2"|' "$F"
+          echo "=== pinned Package.swift ==="
           cat "$F"
 
       # This project uses Swift Package Manager (ios/App/CapApp-SPM), not
