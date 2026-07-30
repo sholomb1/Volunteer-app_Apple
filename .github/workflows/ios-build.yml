@@ -57,14 +57,9 @@ jobs:
       - name: Copy web bundle into ios/App/App/public
         run: npx cap copy ios
 
-      - name: Install CocoaPods
-        working-directory: ios/App
-        # --repo-update is slow (5+ min) and often times out on GitHub
-        # runners. Try plain pod install first; if a spec is missing,
-        # the fallback catches it.
-        run: |
-          pod --version
-          pod install || pod install --repo-update
+      # This project uses Swift Package Manager (ios/App/CapApp-SPM), not
+      # CocoaPods — xcodebuild resolves the SPM graph automatically. No
+      # `pod install` step needed.
 
       # ---------- Path 1: UNSIGNED compile check ----------
       # Runs when signing secrets are NOT set. Just proves the app builds.
