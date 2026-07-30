@@ -30,10 +30,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Node 20
+      - name: Set up Node 22
+        # Capacitor CLI requires Node >= 22.0.0 (and GitHub is deprecating
+        # Node 20 on Actions runners anyway).
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install JS dependencies
