@@ -59,7 +59,12 @@ jobs:
 
       - name: Install CocoaPods
         working-directory: ios/App
-        run: pod install --repo-update
+        # --repo-update is slow (5+ min) and often times out on GitHub
+        # runners. Try plain pod install first; if a spec is missing,
+        # the fallback catches it.
+        run: |
+          pod --version
+          pod install || pod install --repo-update
 
       # ---------- Path 1: UNSIGNED compile check ----------
       # Runs when signing secrets are NOT set. Just proves the app builds.
