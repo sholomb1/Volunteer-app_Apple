@@ -209,9 +209,32 @@ jobs:
           APPSTORE_API_ISSUER_ID: '377f4798-5c68-41e0-b2e3-ab6640f41711'
           APPSTORE_API_KEY_BASE64: ${{ secrets.APPSTORE_API_KEY_BASE64 }}
         run: |
-          mkdir -p ~/.appstoreconnect/private_keys
-          echo "$APPSTORE_API_KEY_BASE64" | base64 --decode \
-            > ~/.appstoreconnect/private_keys/AuthKey_${APPSTORE_API_KEY_ID}.p8
+          set -euo pipefail
+          KEY_DIR="$HOME/.appstoreconnect/private_keys"
+          mkdir -p "$KEY_DIR"
+          KEY_FILE="$KEY_DIR/AuthKey_${APPSTORE_API_KEY_ID}.p8"
+
+          # Decode via python3 — more forgiving than bash + macOS base64:
+          # strips any embedded whitespace/newlines/BOM that a GitHub
+          # secret paste can carry over, and refuses invalid input.
+          python3 -c "
+          import base64, os, sys
+          raw = os.environ['APPSTORE_API_KEY_BASE64']
+          # Strip any whitespace/newlines that might be in the secret
+          cleaned = ''.join(raw.split())
+          key = base64.b64decode(cleaned)
+          open(sys.argv[1], 'wb').write(key)
+          " "$KEY_FILE"
+
+          # Validate the .p8 actually looks like a PEM before we hand it
+          # to altool — otherwise altool errors are cryptic.
+          echo "cert file size: $(wc -c < "$KEY_FILE") bytes"
+          head -1 "$KEY_FILE"
+          if ! head -1 "$KEY_FILE" | grep -q 'BEGIN PRIVATE KEY'; then
+            echo "::error::AuthKey did not decode to a valid PEM. Check APPSTORE_API_KEY_BASE64 secret."
+            exit 1
+          fi
+
           xcrun altool --upload-app -f "$RUNNER_TEMP"/export/*.ipa -t ios \
             --apiKey "$APPSTORE_API_KEY_ID" \
             --apiIssuer "$APPSTORE_API_ISSUER_ID"
