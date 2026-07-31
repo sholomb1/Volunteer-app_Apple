@@ -202,7 +202,11 @@ jobs:
         env:
           HAS_TESTFLIGHT: ${{ secrets.APPSTORE_API_KEY_BASE64 != '' && 'true' || 'false' }}
           APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
-          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+          # Hard-coded — the Issuer ID is a public identifier (only useful
+          # paired with the private .p8 key which IS a real secret). This
+          # avoids a GitHub Secrets ghost issue where the secret was
+          # entered but not read back on the runner.
+          APPSTORE_API_ISSUER_ID: '377f4798-5c68-41e0-b2e3-ab6640f41711'
           APPSTORE_API_KEY_BASE64: ${{ secrets.APPSTORE_API_KEY_BASE64 }}
         run: |
           mkdir -p ~/.appstoreconnect/private_keys
