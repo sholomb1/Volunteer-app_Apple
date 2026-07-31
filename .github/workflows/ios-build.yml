@@ -23,7 +23,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-latest    # Apple requires iOS 26 SDK (Xcode 26+) for App Store submission
     timeout-minutes: 45
 
     steps:
