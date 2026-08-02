@@ -31,7 +31,6 @@ type Screen =
   | { kind: 'manualVendor'; dropoffId: number; volunteerName: string }
   | { kind: 'stores'; dropoffId: number; volunteerName: string; stores: KioskStore[]; lines: KioskLine[] }
   | { kind: 'entry';  dropoffId: number; volunteerName: string; stores: KioskStore[]; lines: KioskLine[]; store: KioskStore }
-  | { kind: 'complete'; dropoffId: number; volunteerName: string; stores: KioskStore[]; lines: KioskLine[] }
   | { kind: 'labels';  labels: KioskLabel[]; volunteerName: string };
 
 const CATEGORIES = ['Dairy', 'Produce', 'Bakery', 'Prepared', 'Frozen', 'Grocery / Dry', 'Meat / Fish', 'Other'];
@@ -90,13 +89,12 @@ export function KioskApp() {
       {screen.kind === 'manualVendor' && <ManualVendor secret={secret} screen={screen}
         onCreated={(store) => setScreen({ kind: 'stores', dropoffId: screen.dropoffId, volunteerName: screen.volunteerName, stores: [store], lines: [] })}
         onCancel={() => setScreen({ kind: 'signin' })} />}
-      {screen.kind === 'stores'   && <Stores  screen={screen}
+      {screen.kind === 'stores'   && <Stores  secret={secret} screen={screen}
         onPickStore={(s) => setScreen({ ...screen, kind: 'entry', store: s })}
-        onDone={() => setScreen({ ...screen, kind: 'complete' })} />}
+        onLabels={(labels) => setScreen({ kind: 'labels', labels, volunteerName: screen.volunteerName })}
+        onBack={() => setScreen({ kind: 'signin' })} />}
       {screen.kind === 'entry'    && <StoreEntry secret={secret} screen={screen}
         onDone={(newLines) => setScreen({ kind: 'stores', dropoffId: screen.dropoffId, volunteerName: screen.volunteerName, stores: screen.stores, lines: newLines })} />}
-      {screen.kind === 'complete' && <Complete secret={secret} screen={screen}
-        onLabels={(labels) => setScreen({ kind: 'labels', labels, volunteerName: screen.volunteerName })} />}
       {screen.kind === 'labels'   && <Labels  labels={screen.labels} volunteerName={screen.volunteerName}
         kioskSecret={secret}
         onFinish={() => setScreen({ kind: 'welcome' })} />}
@@ -620,10 +618,30 @@ function DriverPicker({ secret, screen, onSigned, onCancel }: {
   );
 }
 
-function Stores({ screen, onPickStore, onDone }:
-  { screen: Extract<Screen, { kind: 'stores' }>; onPickStore: (s: KioskStore) => void; onDone: () => void }) {
+function Stores({ secret, screen, onPickStore, onLabels, onBack }:
+  { secret: string; screen: Extract<Screen, { kind: 'stores' }>; onPickStore: (s: KioskStore) => void;
+    onLabels: (labels: KioskLabel[]) => void; onBack: () => void }) {
   const linesByStore = groupLinesBySupplier(screen.lines);
   const allStoresHaveLines = screen.stores.every((s) => (linesByStore.get(s.supplierId)?.length ?? 0) > 0);
+  const [finishing, setFinishing] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // §4.2/§4.3: One-tap finish. No intermediate "Almost done" screen; POST
+  // completion and hand the returned label manifest straight to <Labels/>,
+  // which auto-fires the printer on mount. Notes/timeIssues are passed null
+  // (they were optional textareas today; drivers left them blank ~always).
+  async function finish() {
+    if (!allStoresHaveLines || finishing) return;
+    setFinishing(true); setErr(null);
+    try {
+      const r = await kiosk.complete(secret, screen.dropoffId, null, null);
+      onLabels(r.data.labels);
+    } catch (e: any) {
+      setErr(e?.message || 'Could not finish — please try again.');
+      setFinishing(false);
+    }
+  }
+
   return (
     <Center>
       <div className="text-[36px] font-extrabold text-forest text-center">Hi {screen.volunteerName.split(' ')[0]}!</div>
@@ -653,9 +671,18 @@ function Stores({ screen, onPickStore, onDone }:
           );
         })}
       </div>
-      <PrimaryButton onClick={onDone} disabled={!allStoresHaveLines} className="mt-10">
-        {allStoresHaveLines ? 'Done — finish drop-off' : `Enter items for ${screen.stores.length - Array.from(linesByStore.keys()).length} more store(s)`}
+      {err && <div className="text-clay text-[19px] font-bold text-center bg-clay/10 rounded-[16px] py-3 px-4 mt-6 max-w-[560px]">{err}</div>}
+      <PrimaryButton onClick={finish} disabled={!allStoresHaveLines || finishing} className="mt-10">
+        {finishing
+          ? 'Finishing + printing labels…'
+          : allStoresHaveLines
+            ? 'Done — finish + print labels'
+            : `Enter items for ${screen.stores.length - Array.from(linesByStore.keys()).length} more store(s)`}
       </PrimaryButton>
+      <button onClick={onBack} disabled={finishing}
+              className="mt-4 text-[16px] font-bold text-muted underline underline-offset-2 py-2 disabled:opacity-40">
+        ← Back to sign-in
+      </button>
     </Center>
   );
 }
@@ -780,52 +807,6 @@ function StoreEntry({ secret, screen, onDone }:
   );
 }
 
-function Complete({ secret, screen, onLabels }:
-  { secret: string; screen: Extract<Screen, { kind: 'complete' }>; onLabels: (labels: KioskLabel[]) => void }) {
-  const [notes, setNotes] = useState('');
-  const [timeIssues, setTimeIssues] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  async function submit() {
-    setBusy(true); setErr(null);
-    try {
-      const r = await kiosk.complete(secret, screen.dropoffId, notes.trim() || null, timeIssues.trim() || null);
-      onLabels(r.data.labels);
-    } catch (e: any) { setErr(e?.message || 'Could not complete — please try again.'); }
-    finally { setBusy(false); }
-  }
-
-  const totalContainers = screen.lines.reduce((n, l) => n + Number(l.quantity), 0);
-
-  return (
-    <Center>
-      <Big>Almost done — anything to tell the office?</Big>
-      <div className="mt-8 w-full max-w-[720px] space-y-4">
-        <div>
-          <FieldLabel>Time delays or issues (optional)</FieldLabel>
-          <KioskTextarea placeholder="e.g. Store was 30 min late opening; asked me to come back tomorrow"
-                         value={timeIssues} onChange={setTimeIssues} />
-        </div>
-        <div>
-          <FieldLabel>Notes or feedback (optional)</FieldLabel>
-          <KioskTextarea placeholder="Anything the office should know"
-                         value={notes} onChange={setNotes} />
-        </div>
-        <div className="rounded-[16px] bg-sage/40 border border-sage-line px-5 py-4">
-          <div className="text-[18px] text-ink">
-            We'll print <span className="font-extrabold text-forest">{totalContainers}</span> label{totalContainers === 1 ? '' : 's'} across <span className="font-extrabold text-forest">{new Set(screen.lines.map((l) => l.supplierId)).size}</span> store{new Set(screen.lines.map((l) => l.supplierId)).size === 1 ? '' : 's'}.
-          </div>
-        </div>
-        {err && <div className="text-clay text-[19px] font-bold text-center bg-clay/10 rounded-[16px] py-3 px-4">{err}</div>}
-        <PrimaryButton onClick={submit} disabled={busy}>
-          {busy ? 'Finishing…' : 'Finish + print labels'}
-        </PrimaryButton>
-      </div>
-    </Center>
-  );
-}
-
 function Labels({ labels, volunteerName, kioskSecret, onFinish }:
   { labels: KioskLabel[]; volunteerName: string; kioskSecret: string; onFinish: () => void }) {
   const [status, setStatus] = useState<'printing' | 'ok' | 'err'>('printing');
@@ -920,14 +901,6 @@ function KioskInput({ value, onChange, placeholder, autoFocus }: {
   return (
     <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} autoFocus={autoFocus}
            className="w-full rounded-[16px] border-[2px] border-line bg-paper px-5 py-4 text-[24px] outline-none focus:border-forest" />
-  );
-}
-function KioskTextarea({ value, onChange, placeholder }: {
-  value: string; onChange: (v: string) => void; placeholder?: string;
-}) {
-  return (
-    <textarea value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} rows={3}
-              className="w-full rounded-[16px] border-[2px] border-line bg-paper px-5 py-3 text-[20px] outline-none focus:border-forest resize-none" />
   );
 }
 function PrimaryButton({ onClick, disabled, children, className = '' }: {

@@ -12,10 +12,11 @@ export const DROPOFF = {
 } as const;
 
 /**
- * Universal maps URL that opens the native maps app on iOS/Android when
- * possible and falls back to Google Maps on the web. Using the standard
- * https://www.google.com/maps/dir/?api=1 form so both platforms accept it.
+ * Universal maps URL. Query is the street address ONLY — including the display
+ * name ("Zeh L'Zeh Drop-off Center") caused Google Maps to occasionally
+ * disambiguate to a different pin. Use ?query= (search intent) so both the
+ * native maps app and the mobile web fall back cleanly.
  */
 export const DROPOFF_MAPS_URL =
-  'https://www.google.com/maps/dir/?api=1&destination=' +
-  encodeURIComponent(`${DROPOFF.name}, ${DROPOFF.address}`);
+  'https://www.google.com/maps/search/?api=1&query=' +
+  encodeURIComponent(DROPOFF.address);
