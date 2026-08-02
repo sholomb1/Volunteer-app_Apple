@@ -24,6 +24,10 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Zeh L'Zeh Rescue uses your location to show food-rescue pickups near you and to let the office see where drivers are while they're on an active pickup. Location sharing is opt-in and only active while the app is open.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Zeh L'Zeh Rescue uses your location to show food-rescue pickups near you and to let the office see where drivers are while they're on an active pickup. Location sharing is opt-in and only active while the app is open.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
