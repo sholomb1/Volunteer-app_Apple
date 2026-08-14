@@ -28,6 +28,12 @@
 	<string>Zeh L'Zeh Rescue uses your location to show food-rescue pickups near you and to let the office see where drivers are while they're on an active pickup. Location sharing is opt-in and only active while the app is open.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>Zeh L'Zeh Rescue uses your location to show food-rescue pickups near you and to let the office see where drivers are while they're on an active pickup. Location sharing is opt-in and only active while the app is open.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Zeh L'Zeh Rescue uses the camera so drivers can attach a proof photo when they pick up or deliver food, and so suppliers can take a photo of the food they're posting for pickup. Camera access is only requested when you tap Take Photo.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Zeh L'Zeh Rescue lets you choose an existing photo from your library to attach to a pickup or supplier post instead of taking a new one. Photos are only accessed when you tap Add a Photo.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Zeh L'Zeh Rescue saves receipts and shipping labels to your photo library when you tap Save.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
