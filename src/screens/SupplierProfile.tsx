@@ -277,7 +277,7 @@ function DangerZone() {
     onSuccess: () => { setAuth(null, null); nav('/', { replace: true }); window.location.reload(); },
     onError: (e: any) => setErr(e?.message ?? 'Could not delete account. Try again.'),
   });
-  const enabled = phrase.trim().toLowerCase() === 'delete my account';
+  const enabled = phrase.trim().toLowerCase() === 'delete';
   return (
     <>
       <div className="mt-10 rounded-[14px] border-2 border-clay/40 bg-clay/5 p-4">
@@ -300,7 +300,7 @@ function DangerZone() {
               This permanently removes your profile and personal info. Past pickups you completed stay in our records (anonymized). You can't undo this.
             </p>
             <div className="mt-4">
-              <div className="text-[12px] text-muted mb-1">Type <b>delete my account</b> to confirm:</div>
+              <div className="text-[12px] text-muted mb-1">Type <b>delete</b> to confirm:</div>
               <input value={phrase} onChange={(e) => setPhrase(e.target.value)} autoFocus
                      className="w-full rounded-[10px] border-[1.4px] border-line px-3 py-2 text-[15px] outline-none focus:border-clay" />
             </div>
