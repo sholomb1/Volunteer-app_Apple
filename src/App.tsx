@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { getUser, kioskDevice, type AuthUser } from './api';
+import { getUser, kioskDevice, appVersion, type AuthUser } from './api';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ensureNativePushRegistered } from './native-push-client';
 import { ensureWebPushSubscribed } from './web-push-client';
@@ -18,6 +18,7 @@ import { MapView } from './screens/MapView';
 import { Chat } from './screens/Chat';
 import { Activity } from './screens/Activity';
 import { CoordinatorPortal } from './screens/CoordinatorPortal';
+import { AdminPickupDetail } from './screens/AdminPickupDetail';
 import { VolunteerRegistration } from './screens/VolunteerRegistration';
 import { SupplierRegistration } from './screens/SupplierRegistration';
 import { OneTimePickupRegistration } from './screens/OneTimePickupRegistration';
@@ -36,9 +37,72 @@ export default function App() {
   return (
     <QueryClientProvider client={qc}>
       <BrowserRouter basename={BASENAME}>
-        <Root />
+        <UpdateGate>
+          <Root />
+        </UpdateGate>
       </BrowserRouter>
     </QueryClientProvider>
+  );
+}
+
+// C12 Aug 13 — installed-APK version check. Reads GET /api/app/version and:
+//   • hard-gates the whole app when installed versionCode < minSupported
+//   • shows a dismissible "Update Available" banner when < latest
+// Web PWA doesn't hit this gate (it self-refreshes via portal_reload_epoch).
+function UpdateGate({ children }: { children: React.ReactNode }) {
+  const [dismissed, setDismissed] = useState<boolean>(() => {
+    try { return sessionStorage.getItem('zlz_update_banner_dismissed') === '1'; } catch { return false; }
+  });
+  const isNative = (() => {
+    const cap = (window as any).Capacitor;
+    return cap?.isNativePlatform?.() === true;
+  })();
+  const q = useQuery({
+    queryKey: ['app-version'],
+    queryFn: appVersion.get,
+    enabled: isNative,
+    staleTime: 5 * 60_000,
+    retry: 0,
+  });
+  const installed = Number(__APP_VERSION_CODE__ || 0);
+  const latest    = q.data?.data.android.latestVersionCode ?? null;
+  const minSup    = q.data?.data.android.minSupportedVersionCode ?? null;
+  const playUrl   = q.data?.data.android.playStoreUrl ?? 'https://play.google.com/store';
+
+  const mustUpdate = isNative && minSup != null && installed > 0 && installed < minSup;
+  const wantUpdate = isNative && latest != null && installed > 0 && installed < latest;
+
+  if (mustUpdate) {
+    return (
+      <div className="min-h-screen bg-cream grid place-items-center px-6">
+        <div className="max-w-[420px] w-full bg-paper border border-line rounded-[18px] shadow-lift p-6 text-center">
+          <div className="text-[13px] uppercase tracking-[.15em] font-extrabold text-clay">Update required</div>
+          <div className="mt-2 text-[24px] font-extrabold text-ink font-display">Please update Zeh L'Zeh</div>
+          <p className="text-[14px] text-muted mt-3 leading-snug">
+            Your app version ({__APP_VERSION_NAME__}) is no longer supported. Install the latest version to continue.
+          </p>
+          <a href={playUrl} target="_blank" rel="noopener noreferrer"
+             className="mt-5 inline-flex justify-center w-full bg-forest text-paper font-extrabold text-[16px] py-3 rounded-full active:scale-95">
+            Open Play Store to update
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {wantUpdate && !dismissed && (
+        <div className="fixed top-0 left-0 right-0 z-[8000] bg-forest text-paper text-[13.5px] font-bold px-3 py-2 flex items-center gap-2 shadow-lift">
+          <span className="flex-1">🔄 Update available for Zeh L'Zeh — tap to get the latest.</span>
+          <a href={playUrl} target="_blank" rel="noopener noreferrer"
+             className="bg-paper text-forest font-extrabold px-3 py-1 rounded-full text-[12.5px]">Update</a>
+          <button onClick={() => { setDismissed(true); try { sessionStorage.setItem('zlz_update_banner_dismissed', '1'); } catch { /* fine */ } }}
+                  className="text-paper/80 px-2 text-[16px]" aria-label="Dismiss">×</button>
+        </div>
+      )}
+      {children}
+    </>
   );
 }
 
@@ -104,6 +168,7 @@ function AuthedApp() {
     return (
       <Routes>
         <Route path="/"                 element={<CoordinatorPortal />} />
+        <Route path="/admin/pickup/:id" element={<AdminPickupDetail />} />
         <Route path="/pickup/:mode/:id" element={<PickupDetail />} />
         <Route path="*"                 element={<Navigate to="/" replace />} />
       </Routes>
@@ -118,6 +183,7 @@ function AuthedApp() {
           <Routes>
             <Route path="/"     element={<SupplierHome user={user} />} />
             <Route path="/post" element={<SupplierPost user={user} />} />
+            <Route path="/pickups/:id/edit" element={<SupplierPost user={user} />} />
             <Route path="/profile" element={<SupplierProfile />} />
             <Route path="*"     element={<Navigate to="/" replace />} />
           </Routes>

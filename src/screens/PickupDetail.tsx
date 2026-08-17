@@ -23,8 +23,11 @@ export function PickupDetail() {
   const isStaffUser = me && (me.role === 'admin' || me.role === 'coordinator' || me.role === 'staff');
   const mode = (rawMode === 'mine' && isStaffUser) ? 'admin' : rawMode;
 
-  const open   = useQuery({ queryKey: ['open'], queryFn: volunteer.open, enabled: mode === 'open' });
-  const mine   = useQuery({ queryKey: ['mine'], queryFn: volunteer.mine, enabled: mode === 'mine' });
+  // fgh103 (Aug 17): live-poll + focus-refetch on the detail screen too so
+  // if a driver sits on the detail after another driver claims, they see the
+  // "no longer available" state within seconds instead of a stale claim CTA.
+  const open   = useQuery({ queryKey: ['open'], queryFn: volunteer.open, enabled: mode === 'open', refetchInterval: 15_000, refetchOnWindowFocus: true, staleTime: 5_000 });
+  const mine   = useQuery({ queryKey: ['mine'], queryFn: volunteer.mine, enabled: mode === 'mine', refetchOnWindowFocus: true, staleTime: 5_000 });
   const adminQ = useQuery({ queryKey: ['admin-pickup', id], queryFn: () => admin.pickup(Number(id)), enabled: mode === 'admin' });
   const pickup: any = useMemo(() => {
     const pid = Number(id);
@@ -48,6 +51,10 @@ export function PickupDetail() {
     return null;
   }, [mode, id, open.data, mine.data, adminQ.data]);
 
+  // C4 Aug 13 — pick-up is the new intermediate transition. Advances status to
+  // 'picked_up' (driver has the food but hasn't dropped off yet). complete is
+  // now reserved for the final "Mark delivered" tap.
+  const pickUp = useMutation({ mutationFn: () => volunteer.pickUp(pickup?.assignment_id), onSuccess: () => qc.invalidateQueries() });
   const claim = useMutation({ mutationFn: () => volunteer.claim(Number(id)),
     onSuccess: () => { qc.invalidateQueries(); nav(`/pickup/mine/${id}`, { replace: true }); },
     onError:   (e: any) => { /* error rendered below the CTA — no silent failure */ void e; } });
@@ -73,12 +80,25 @@ export function PickupDetail() {
   }
 
   if (!pickup) {
+    // Aug 15 audit: distinguish "still loading" from "loaded but null" so
+    // an admin viewing an unknown/gone pickup doesn't sit on a Loading…
+    // spinner forever (adminQ resolves to null → old code kept spinning).
+    const isAdminMode = mode === 'admin';
+    const adminDone = isAdminMode && !adminQ.isLoading && adminQ.data === null;
+    const otherDone = !isAdminMode && !open.isLoading && !mine.isLoading;
+    const shouldShowNotFound = adminDone || otherDone;
     return (
       <div className="min-h-screen">
         <div className="flex items-center px-5 py-3">
           <button onClick={() => nav(-1)} className="haptic"><ArrowLeft size={20} /></button>
         </div>
-        <p className="text-center text-muted mt-12">Loading…</p>
+        {shouldShowNotFound ? (
+          <div className="mx-4 mt-6 rounded-[14px] border border-line bg-paper p-6 text-center text-muted text-[14px]">
+            This pickup is no longer available. It may have been cancelled, delivered, or reassigned.
+          </div>
+        ) : (
+          <p className="text-center text-muted mt-12">Loading…</p>
+        )}
       </div>
     );
   }
@@ -104,32 +124,56 @@ export function PickupDetail() {
       </div>
 
       <main className="flex-1 px-5 pb-4">
-        <div className="text-[13px] font-bold uppercase tracking-[.06em] text-muted">
-          Pickups <span className="text-forest">›</span> Detail
+        <div className="text-[13px] font-bold uppercase tracking-[.06em] text-muted flex items-center gap-2">
+          <span>Pickups <span className="text-forest">›</span> Detail</span>
+          {/* C3 Aug 13 — visible 4-digit reference so drivers can quote it on
+              the phone. Backend column pickup_instances.ref_number. */}
+          {pickup.ref_number && (
+            <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-cream border border-line px-2 py-0.5 text-forest font-extrabold tracking-wider">
+              #{pickup.ref_number}
+            </span>
+          )}
         </div>
         <h1 className="font-display font-semibold text-[34px] leading-[1.05] tracking-[-0.02em] mt-1.5">{pickup.suppliers || 'One-time donor'}</h1>
         <p className="text-muted text-[16px] mt-2">{pickup.food_description || (pickup.is_one_time ? 'One-time pickup' : 'Pickup')}</p>
 
         {/* Stat tiles */}
         <div className="flex gap-2.5 mt-4">
-          <Stat n={pickup.estimated_quantity ?? '~6'} l="crates" />
-          <Stat n="120" l="est. lbs" />
-          <Stat n="2.4" l="mi away" />
+          {/* Aug 15 audit: was hardcoded 120 lbs + 2.4 mi placeholders on
+              every card. Now render only real values — estimated_quantity
+              when supplied; hide the placeholder columns entirely. */}
+          {pickup.estimated_quantity && <Stat n={pickup.estimated_quantity} l="qty" />}
+          {pickup.ref_number && <Stat n={`#${pickup.ref_number}`} l="ref" />}
         </div>
 
-        {/* Drop-off meta row — after picking up, driver taps the address to
-            open native maps navigation to the Airmont center. */}
-        <div className="flex items-center gap-3 py-4 border-b border-line">
-          <span className="grid h-[40px] w-[40px] place-items-center rounded-[10px] bg-sage text-forest"><User2 size={20} /></span>
-          <div className="flex-1 min-w-0">
-            <div className="text-[13px] font-extrabold uppercase tracking-[.06em] text-muted">Heading to drop-off</div>
-            <div className="text-[17px] font-bold mt-0.5">{DROPOFF.name}</div>
-            <a href={DROPOFF_MAPS_URL} target="_blank" rel="noopener noreferrer"
-               className="text-[13.5px] font-bold text-forest underline underline-offset-2 mt-0.5 inline-block">
-              {DROPOFF.address}  ·  Open in Maps →
-            </a>
-          </div>
-        </div>
+        {/* C2 Aug 13 — Maps address flips based on stage. Before Picked Up
+            the driver navigates to the supplier; after Picked Up, to the
+            Zeh L'Zeh drop-off. Prior build always showed the drop-off. */}
+        {(() => {
+          const isPickedUpOrLater = pickup.status === 'picked_up' || pickup.status === 'completed' || pickup.status === 'delivered';
+          const supplierAddr = pickup.supplier_address || '';
+          const supplierMapsUrl = supplierAddr
+            ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(supplierAddr)}`
+            : '';
+          const showSupplier = !isPickedUpOrLater && !!supplierAddr;
+          const label = showSupplier ? 'Heading to pickup' : 'Heading to drop-off';
+          const name  = showSupplier ? (pickup.suppliers || 'Supplier') : DROPOFF.name;
+          const addr  = showSupplier ? supplierAddr : DROPOFF.address;
+          const href  = showSupplier ? supplierMapsUrl : DROPOFF_MAPS_URL;
+          return (
+            <div className="flex items-center gap-3 py-4 border-b border-line">
+              <span className="grid h-[40px] w-[40px] place-items-center rounded-[10px] bg-sage text-forest"><User2 size={20} /></span>
+              <div className="flex-1 min-w-0">
+                <div className="text-[13px] font-extrabold uppercase tracking-[.06em] text-muted">{label}</div>
+                <div className="text-[17px] font-bold mt-0.5">{name}</div>
+                <a href={href} target="_blank" rel="noopener noreferrer"
+                   className="text-[13.5px] font-bold text-forest underline underline-offset-2 mt-0.5 inline-block">
+                  {addr}  ·  Open in Maps →
+                </a>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Container chips */}
         <ChipLabel>Container</ChipLabel>
@@ -188,9 +232,16 @@ export function PickupDetail() {
         <ChipLabel>Status</ChipLabel>
         <StatusTimeline stages={stages} current={stage} />
 
-        {/* Chat */}
-        <ChipLabel>Chat</ChipLabel>
-        <ChatPanel pickupId={Number(id)} />
+        {/* Aug 13 (abc844): chat is participants-only. Volunteers browsing an
+            unclaimed pickup no longer see the chat section — they haven't opted
+            in, and previously they saw messages typed by unrelated users. Once
+            claimed (mode='mine') or on staff/admin view, chat is visible. */}
+        {(mode === 'mine' || isAdmin) && (
+          <>
+            <ChipLabel>Chat</ChipLabel>
+            <ChatPanel pickupId={Number(id)} />
+          </>
+        )}
       </main>
 
       {isAdmin ? (
@@ -200,24 +251,23 @@ export function PickupDetail() {
         </div>
       ) : (
         <>
-          {(claim.error || accept.error || start.error || complete.error) && (
+          {(claim.error || accept.error || start.error || pickUp.error || complete.error) && (
             <div className="sticky bottom-[64px] px-4 py-2 bg-clay-soft border-t border-clay/30 text-[13px] font-bold text-clay text-center">
-              {((claim.error || accept.error || start.error || complete.error) as Error).message}
+              {((claim.error || accept.error || start.error || pickUp.error || complete.error) as Error).message}
             </div>
           )}
           <StickyCTA tone={isOpen ? 'clay' : (stage === 2 ? 'forest' : 'clay')}
-                     loading={claim.isPending || accept.isPending || start.isPending || complete.isPending}
+                     loading={claim.isPending || accept.isPending || start.isPending || pickUp.isPending || complete.isPending}
                      onClick={() => {
                        if (isOpen) return claim.mutate();
-                       // Stage 0 = admin-assigned but driver hasn't accepted yet; ack with accept.
-                       // Stage 1 = accepted (self-claim lands here); next is "I'm on my way" (start).
-                       // Stage 2 = en route; next is "Mark picked up" (complete → wraps as delivered).
+                       // C4 Aug 13 — stage 2 (en route) now advances to
+                       // picked_up via the dedicated /pick-up endpoint (no
+                       // dialog). Stage 3 (picked_up) shows the delivery
+                       // capture dialog and hits /complete to finalize.
                        if (stage === 0) return accept.mutate();
                        if (stage === 1) return start.mutate();
-                       if (stage === 2 || stage === 3) {
-                         // Ask for actual quantity so stats aren't estimates.
-                         // Pre-seed with the pickup's estimated_quantity if it
-                         // was posted with one.
+                       if (stage === 2) return pickUp.mutate();
+                       if (stage === 3) {
                          setQtyText(pickup.estimated_quantity || '');
                          setShowQtyPrompt(true);
                          return;

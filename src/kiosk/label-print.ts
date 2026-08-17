@@ -26,9 +26,15 @@ const LabelPrint = registerPlugin<LabelPrintPlugin>('LabelPrint');
 const LS_HOST = 'zlz_label_printer_host';
 const LS_PORT = 'zlz_label_printer_port';
 
+// Build-time defaults so a fresh APK install prints without needing the
+// `?printerHost=…&printerPort=…` bootstrap step. localStorage still wins so
+// an admin can override per-tablet from the URL.
+const DEFAULT_PRINTER_HOST = '192.168.1.2';
+const DEFAULT_PRINTER_PORT = 9100;
+
 export const labelPrinter = {
-  getHost: () => localStorage.getItem(LS_HOST),
-  getPort: () => Number(localStorage.getItem(LS_PORT) || '9100'),
+  getHost: () => localStorage.getItem(LS_HOST) || DEFAULT_PRINTER_HOST,
+  getPort: () => Number(localStorage.getItem(LS_PORT) || DEFAULT_PRINTER_PORT),
   setHost: (h: string) => localStorage.setItem(LS_HOST, h),
   setPort: (p: number) => localStorage.setItem(LS_PORT, String(p)),
   clear: () => { localStorage.removeItem(LS_HOST); localStorage.removeItem(LS_PORT); },
@@ -37,6 +43,15 @@ export const labelPrinter = {
 /** Whether the direct-TCP native path is available on this device. */
 export function canPrintDirect(): boolean {
   return Capacitor.getPlatform() === 'android' && !!labelPrinter.getHost();
+}
+
+/** Wrap a promise with a timeout so a hung TCP socket doesn't stick the UI. */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    p.then((v) => { clearTimeout(t); resolve(v); },
+           (e) => { clearTimeout(t); reject(e); });
+  });
 }
 
 /**
@@ -56,14 +71,20 @@ export async function printLabels(
   labels: KioskLabel[],
   opts?: { kioskSecret?: string },
 ): Promise<{ transport: 'relay' | 'tcp' | 'browser'; ok: boolean; error?: string }> {
-  // Path 1 — relay via vp-api.
+  // Path 1 — relay via vp-api. Concatenate ALL labels into ONE TSPL
+  // payload and POST once. TSC printers accept a multi-label buffer
+  // (each label is its own CLS…PRINT block). One request replaces the
+  // per-label loop, which used to time out after ~3 labels and stall
+  // Hershy's kiosk when a big drop-off came in.
   if (opts?.kioskSecret) {
     try {
-      for (const lb of labels) {
-        const bytes = buildLabelTspl(lb);
-        const b64   = arrayBufferToBase64(bytes);
-        await kiosk.printTspl(opts.kioskSecret, b64);
-      }
+      const chunks: Uint8Array[] = labels.map(buildLabelTspl);
+      const total = chunks.reduce((n, c) => n + c.length, 0);
+      const combined = new Uint8Array(total);
+      let off = 0;
+      for (const c of chunks) { combined.set(c, off); off += c.length; }
+      const b64 = arrayBufferToBase64(combined);
+      await kiosk.printTspl(opts.kioskSecret, b64);
       return { transport: 'relay', ok: true };
     } catch (e: any) {
       // Fall through to direct/browser paths so we don't leave the driver
@@ -77,16 +98,36 @@ export async function printLabels(
       console.warn('[label-print] relay failed, trying fallbacks:', relayErr);
     }
   }
-  // Path 2 — native TCP (Capacitor APK on Android, host configured).
+  // Path 2 — native TCP (Capacitor APK on Android). PER-LABEL loop with a
+  // hard 8s timeout per label. The combined-buffer approach hung the native
+  // plugin on 6-label jobs in v14 (never resolved, never rejected — the UI
+  // sat on "Printing N labels…" forever). Per-label is proven-working from
+  // v13 and the timeout prevents any single label from stalling the batch.
   if (canPrintDirect()) {
     const host = labelPrinter.getHost()!;
     const port = labelPrinter.getPort();
+    // Concatenate every label into ONE payload, send over ONE TCP socket.
+    // The native plugin (v16+) chunks the write with tiny inter-chunk sleeps
+    // so the TSC printer never overruns its receive buffer, even at 6+
+    // labels — no need to open six separate sockets or sleep between labels
+    // on the JS side. Total wall-time is roughly (payload / 8KB) × 50ms +
+    // 500ms final drain, so ~3-4s for a 6-label batch.
     try {
-      for (const lb of labels) {
-        const bytes = buildLabelTspl(lb);
-        const b64 = arrayBufferToBase64(bytes);
-        await LabelPrint.printTspl({ host, port, bytes: b64 });
-      }
+      const chunks: Uint8Array[] = labels.map(buildLabelTspl);
+      const total = chunks.reduce((n, c) => n + c.length, 0);
+      const combined = new Uint8Array(total);
+      let off = 0;
+      for (const c of chunks) { combined.set(c, off); off += c.length; }
+      const b64 = arrayBufferToBase64(combined);
+      // Timeout scales with payload — 3s base + 20ms per KB gives ample
+      // margin over the native chunked-write pacing without ever stalling
+      // the UI forever if the printer disappears.
+      const timeoutMs = 3000 + Math.ceil(total / 1024) * 20;
+      await withTimeout(
+        LabelPrint.printTspl({ host, port, bytes: b64 }),
+        timeoutMs,
+        `${labels.length}-label batch`,
+      );
       return { transport: 'tcp', ok: true };
     } catch (e: any) {
       return { transport: 'tcp', ok: false, error: e?.message || String(e) };
@@ -122,7 +163,7 @@ export function buildLabelTspl(lb: KioskLabel): Uint8Array {
     'DIRECTION 1',
     'REFERENCE 0,0',
     'DENSITY 8',
-    'SPEED 4',
+    'SPEED 6',
     'SET TEAR ON',
     'CLS',
     `BITMAP 0,0,${bytesPerRow},${LABEL_H},0,`,

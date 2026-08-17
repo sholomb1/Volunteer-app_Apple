@@ -110,7 +110,9 @@ export async function api<T = unknown>(path: string, init: RequestInit = {}): Pr
   }
   if (!r.ok) {
     const body = await r.json().catch(() => ({}));
-    throw new Error((body as any).error || `${r.status} ${r.statusText}`);
+    const err = new Error((body as any).error || `${r.status} ${r.statusText}`) as Error & { status?: number };
+    err.status = r.status;
+    throw err;
   }
   return r.json() as Promise<T>;
 }
@@ -189,7 +191,7 @@ export async function login(username: string, password: string): Promise<AuthUse
 
 // ---------- volunteer endpoints ----------
 
-export type SignupRow = { slot: number; first_name: string; last_name: string };
+export type SignupRow = { slot: number; first_name: string; last_name: string; unit_number?: number | null };
 export type OpenPickup = {
   pickup_instance_id: number; scheduled_date: string; scheduled_time: string;
   status: string; urgency_level: string; notes: string | null;
@@ -199,6 +201,10 @@ export type OpenPickup = {
   suppliers: string | null; supplier_address: string | null;
   supplier_contact_name: string | null; supplier_phone: string | null;
   supplier_instructions: string | null;
+  // C3 Aug 13 — short 4-digit reference for phone/office lookups.
+  ref_number: string | null;
+  // C4 Aug 13 — populated once the driver marks Picked Up.
+  picked_up_at?: string | null;
   signups: SignupRow[];
 };
 export type MyPickup = OpenPickup & {
@@ -222,6 +228,10 @@ export const volunteer = {
   accept:  (assignmentId: number) => api(`/api/me/pickups/${assignmentId}/respond`, { method: 'POST', body: JSON.stringify({ action: 'accept' }) }),
   decline: (assignmentId: number) => api(`/api/me/pickups/${assignmentId}/respond`, { method: 'POST', body: JSON.stringify({ action: 'decline' }) }),
   start:   (assignmentId: number) => api(`/api/me/pickups/${assignmentId}/start`, { method: 'POST' }),
+  // C4 Aug 13 — new intermediate state. "pickUp" advances to status='picked_up'
+  // (driver has the food); "complete" is now the "Mark delivered" step and
+  // captures qty/notes/photo when the food reaches Zeh L'Zeh.
+  pickUp:  (assignmentId: number) => api(`/api/me/pickups/${assignmentId}/pick-up`, { method: 'POST' }),
   complete: (assignmentId: number, body: { quantity?: string; notes?: string; photoUrl?: string; pickedUpAt?: string }) =>
     api(`/api/me/pickups/${assignmentId}/complete`, { method: 'POST', body: JSON.stringify(body) }),
   messages:    (pickupId: number) => api<{ data: ChatMsg[] }>(`/api/me/pickups/${pickupId}/messages`),
@@ -294,7 +304,7 @@ export const crm = {
 
 // Global portal search (volunteers + suppliers + neighborhoods + pickups).
 export type SearchResults = {
-  volunteers:    Array<{ id: number; firstName: string; lastName: string; phone: string | null; area: string | null }>;
+  volunteers:    Array<{ id: number; firstName: string; lastName: string; phone: string | null; area: string | null; unitNumber: number | null }>;
   suppliers:     Array<{ id: number; name: string; type: string | null; city: string | null }>;
   steadyPickups: Array<{ id: number; name: string | null }>;
   neighborhoods: Array<{ id: number; name: string; slug: string }>;
@@ -324,6 +334,40 @@ export const notificationPrefs = {
   remove: (id: number) => api(`/api/notification-prefs/${id}`, { method: 'DELETE' }),
 };
 
+// Fork M · client Aug 6 — Dispatcher SMS access. Thin wrapper over the
+// sms_inbound event in sms_notification_prefs. Anyone in this list receives
+// driver-reply notifications AND can *NN a driver to reply privately.
+export type SmsDispatcher = {
+  id: number;
+  phone: string;
+  phone_last10: string;
+  label: string | null;
+  enabled: boolean;
+  created_at: string;
+  matched_volunteer: { id: number; name: string; unit_number: number | null } | null;
+};
+export const smsDispatchers = {
+  list:   () => api<{ data: SmsDispatcher[] }>('/api/sms-dispatchers'),
+  add:    (body: { phone: string; label?: string | null }) =>
+    api<{ data: SmsDispatcher }>('/api/sms-dispatchers', { method: 'POST', body: JSON.stringify(body) }),
+  remove: (phone: string) => api(`/api/sms-dispatchers/${encodeURIComponent(phone)}`, { method: 'DELETE' }),
+};
+
+// Fork R · Aug 7 — Dispatcher management page: staff-role roster joined with
+// phone, SMS-inbound access flag, last-seen, and recent SMS activity counts.
+export type AdminDispatcher = {
+  id: number; email: string | null; firstName: string; lastName: string;
+  role: 'admin' | 'coordinator' | 'staff' | 'dispatcher';
+  phone: string | null; phoneLast10: string | null;
+  isActive: boolean;
+  lastLoginAt: string | null;
+  smsDispatcher: boolean;
+  inLast7: number; outLast7: number;
+};
+export const adminDispatchers = {
+  list: () => api<{ data: AdminDispatcher[] }>('/api/admin/dispatchers'),
+};
+
 // Staff users for the "Spoke with" dropdown in CRM Log Interaction.
 export type StaffUser = { id: number; name: string; role: string; email: string | null };
 export const staffUsers = {
@@ -348,6 +392,7 @@ export const adminUsers = {
 };
 
 // Volunteer self-profile
+// C9 Aug 14 — notifChannel + quietDays + vacation range added.
 export type VolunteerSelfProfile = {
   id: number;
   firstName: string; lastName: string;
@@ -357,6 +402,12 @@ export type VolunteerSelfProfile = {
   refrigeratedHandling: string | null;
   prefersWhatsapp: boolean; smsOptIn: boolean;
   isAvailable: boolean;
+  notifChannel: 'app' | 'sms' | 'both' | 'none';
+  quietHoursStart: string | null;
+  quietHoursEnd: string | null;
+  quietDays: number;
+  vacationFrom: string | null;
+  vacationUntil: string | null;
 };
 export const volunteerSelf = {
   get:   () => api<{ data: VolunteerSelfProfile }>('/api/me/volunteer-profile'),
@@ -364,7 +415,18 @@ export const volunteerSelf = {
     api<{ data: { id: number; first_name: string } }>('/api/me/volunteer-profile', { method: 'PATCH', body: JSON.stringify(body) }),
 };
 
+// Apple 2.1 (Aug 14) — in-app "Delete my account" flow required for App Store.
+// Scrubs PII from volunteer/supplier row + anonymizes users row. Not recoverable.
+export const account = {
+  delete: () => api<{ data: { deleted: true } }>('/api/me/account', { method: 'DELETE' }),
+};
+
 // Supplier self-profile
+// C10 Aug 13 — DayHours + WeekHours describe the structured 7-day schedule.
+// null means "closed that day"; open/close are "HH:MM".
+export type DayHours = { open: string; close: string } | null;
+export type WeekHours = Partial<Record<'sun'|'mon'|'tue'|'wed'|'thu'|'fri'|'sat', DayHours>>;
+
 export type SupplierSelfProfile = {
   id: number; name: string; addressLine1: string | null; city: string | null;
   state: string | null; zip: string | null;
@@ -373,6 +435,17 @@ export type SupplierSelfProfile = {
   contactHours: string | null; typicalDonation: string | null; holidaySchedule: string | null;
   kosherCertification: string | null; logoUrl: string | null;
   entrancePhotoUrl: string | null;
+  neighborhoodId?: number | null;
+  // C10 Aug 13 — structured store hours + notification prefs.
+  storeHours?: WeekHours | null;
+  contactHoursStructured?: WeekHours | null;
+  notifChannel?: 'app' | 'sms' | 'both' | 'none';
+  notifWindow?: 'anytime' | 'store_hours' | 'custom';
+  quietHoursStart?: string | null;
+  quietHoursEnd?: string | null;
+  quietDays?: number;   // bitmask; bit 0=Sun … bit 6=Sat
+  awayFrom?: string | null;
+  awayUntil?: string | null;
 };
 export const supplierSelf = {
   get:   () => api<{ data: SupplierSelfProfile }>('/api/me/supplier-profile'),
@@ -427,12 +500,44 @@ export const adminCRUD = {
   createVolunteer: (body: any) => api<{ data: any }>('/api/volunteers', { method: 'POST', body: JSON.stringify(body) }),
   patchVolunteer:  (id: number, body: any) => api<{ data: any }>(`/api/volunteers/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteVolunteer: (id: number) => api(`/api/volunteers/${id}`, { method: 'DELETE' }),
+  // §3 — application follow-up status + CSV export of full intake payloads.
+  setApplicationStatus: (id: number, status: 'new' | 'contacted' | 'approved' | 'assigned') =>
+    api<{ data: any }>(`/api/volunteers/${id}/application-status`,
+      { method: 'PATCH', body: JSON.stringify({ status }) }),
+  exportVolunteers: async (body: { ids: number[] | 'all'; applicationStatus?: string; search?: string; format?: 'txt' | 'xlsx' }) => {
+    const token = getToken();
+    const res = await fetch(API_BASE.replace(/\/$/, '') + '/api/volunteers/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`export failed: ${res.status}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const ext = body.format === 'xlsx' ? 'xlsx' : 'txt';
+    a.download = `volunteers-${new Date().toISOString().slice(0, 10)}.${ext}`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
 
   // Steady pickups
   steady:        () => api<{ data: any[] }>('/api/steady-pickups'),
   createSteady:  (body: any) => api<{ data: any }>('/api/steady-pickups', { method: 'POST', body: JSON.stringify(body) }),
   patchSteady:   (id: number, body: any) => api<{ data: any }>(`/api/steady-pickups/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteSteady:  (id: number) => api(`/api/steady-pickups/${id}`, { method: 'DELETE' }),
+
+  // Steady default drivers — per-day-of-week auto-assign (Fork J · Aug 4).
+  // See steady-pickup-default-drivers table + steady-materializer for how
+  // these get pre-inserted into pickup_instance_volunteers on materialize.
+  steadyDefaultDrivers: {
+    list:    (steadyId: number) =>
+      api<{ data: Array<{ day_of_week: number; volunteer_id: number; first_name: string; last_name: string; unit_number: number | null }> }>(`/api/steady-pickups/${steadyId}/default-drivers`),
+    replace: (steadyId: number, assignments: Array<{ dayOfWeek: number; volunteerId: number }>) =>
+      api<{ data: { ok: boolean; count: number } }>(`/api/steady-pickups/${steadyId}/default-drivers`,
+        { method: 'PUT', body: JSON.stringify({ assignments }) }),
+  },
 
   // Office sign-ins
   signins:       () => api<{ data: any[] }>('/api/office-signins'),
@@ -456,7 +561,7 @@ export const adminCRUD = {
   deleteGift:   (id: number) => api(`/api/gifts/${id}`, { method: 'DELETE' }),
 
   // Quick-add one-time pickup
-  createPickup: (body: any) => api<{ data: any }>('/api/pickup-instances', { method: 'POST', body: JSON.stringify(body) }),
+  createPickup: (body: any) => api<{ data: any; autoBroadcast?: any }>('/api/pickup-instances', { method: 'POST', body: JSON.stringify(body) }),
   patchPickup:  (id: number, body: any) => api<{ data: any }>(`/api/pickup-instances/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deletePickup: (id: number) => api(`/api/pickup-instances/${id}`, { method: 'DELETE' }),
 
@@ -520,11 +625,142 @@ export const broadcast = {
   pickupSms: (body: { pickupIds: number[]; volunteerIds: number[]; extraNote?: string | null }) =>
     api<{ data: { sent: number; failed: number; skipped: number; attempted: number; preview: string } }>(
       `/api/sms/pickup-broadcast`, { method: 'POST', body: JSON.stringify(body) }),
+  // §5 — office SMS composer. "Pickup SMS" uses pickup-broadcast (§2 codes);
+  // "Other SMS" uses plain /sms/broadcast. `sendAllOpen` fires the one-shot
+  // "here are today's open pickups" list (§2.5).
+  smsBroadcast: (body: { body: string; volunteerIds?: number[] }) =>
+    api<{ data: { sent: number; failed: number; attempted: number } }>(
+      `/api/sms/broadcast`, { method: 'POST', body: JSON.stringify(body) }),
+  sendAllOpen: (body: { volunteerIds?: number[] }) =>
+    api<{ data: { sent: number; failed: number; attempted: number; openPickups: number; preview?: string; note?: string } }>(
+      `/api/sms/send-all-open`, { method: 'POST', body: JSON.stringify(body) }),
+  // §5.2 — templates + scheduled sends.
+  listTemplates: () => api<{ data: Array<{ id: number; name: string; body: string; message_type: 'pickup' | 'other'; created_at: string }> }>('/api/sms/templates'),
+  createTemplate: (body: { name: string; body: string; messageType: 'pickup' | 'other' }) =>
+    api<{ data: any }>('/api/sms/templates', { method: 'POST', body: JSON.stringify(body) }),
+  deleteTemplate: (id: number) => api(`/api/sms/templates/${id}`, { method: 'DELETE' }),
+  listScheduled: () => api<{ data: Array<{ id: number; body: string; volunteer_ids: number[] | null; message_type: string; send_at: string; created_at: string }> }>('/api/sms/scheduled'),
+  scheduleSms:  (body: { body: string; volunteerIds?: number[]; messageType: 'pickup' | 'other'; sendAt: string }) =>
+    api<{ data: any }>('/api/sms/scheduled', { method: 'POST', body: JSON.stringify(body) }),
+  cancelScheduled: (id: number) => api(`/api/sms/scheduled/${id}`, { method: 'DELETE' }),
+  storeBroadcast: (body: { body: string; supplierIds: number[] }) =>
+    api<{ data: { sent: number; failed: number; attempted: number } }>(
+      `/api/sms/store-broadcast`, { method: 'POST', body: JSON.stringify(body) }),
+};
+
+export const shifts = {
+  list: (from?: string, to?: string) => {
+    const qs = new URLSearchParams();
+    if (from) qs.set('from', from);
+    if (to) qs.set('to', to);
+    return api<{ data: any[] }>(`/api/shifts${qs.toString() ? `?${qs}` : ''}`);
+  },
+  // Two shapes accepted server-side: steady (isSteady:true + dayOfWeek+startTime+endTime)
+  // and one-time (isSteady:false + startsAt+endsAt). Steady defaults per client Aug 4.
+  create: (body: {
+    volunteerId: number;
+    notes?: string | null;
+    isSteady?: boolean;
+    dayOfWeek?: number;
+    startTime?: string;
+    endTime?: string;
+    startsAt?: string;
+    endsAt?: string;
+  }) => api<{ data: any }>('/api/shifts', { method: 'POST', body: JSON.stringify(body) }),
+  action: (id: number, action: 'sign-in' | 'sign-out') =>
+    api<{ data: any }>(`/api/shifts/${id}/action`, { method: 'POST', body: JSON.stringify({ action }) }),
+  cancel: (id: number) => api(`/api/shifts/${id}`, { method: 'DELETE' }),
+  update: (id: number, body: { volunteerId?: number; startsAt?: string; endsAt?: string; notes?: string | null }) =>
+    api<{ data: any }>(`/api/shifts/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  cancelSeries: (recurringId: number) =>
+    api(`/api/recurring-shifts/${recurringId}`, { method: 'DELETE' }),
+  listRecurring: () => api<{ data: any[] }>('/api/recurring-shifts'),
+};
+
+// batch abc801 Aug 9 — Center Help schedule (packing, stocking, deliveries, cleaning, other).
+export type CenterHelpTaskType = 'packing_orders' | 'stocking_shelves' | 'preparing_deliveries' | 'cleaning' | 'other';
+export const CENTER_HELP_TASK_LABELS: Record<CenterHelpTaskType, string> = {
+  packing_orders:       'Packing Orders',
+  stocking_shelves:     'Stocking Shelves',
+  preparing_deliveries: 'Preparing Deliveries',
+  cleaning:             'Cleaning',
+  other:                'Other',
+};
+export type CenterHelpTemplate = {
+  id: number; task_type: CenterHelpTaskType; day_of_week: number;
+  start_time: string; end_time: string; volunteers_needed: number;
+  is_recurring: boolean; notes: string | null; created_at: string;
+  volunteer_ids: number[];
+};
+export type CenterHelpSignup = { id: number; first_name: string; last_name: string; unit_number: number | null; phone_primary: string | null };
+export type CenterHelpInstance = {
+  id: number; template_id: number | null; task_type: CenterHelpTaskType;
+  starts_at: string; ends_at: string; volunteers_needed: number;
+  notes: string | null; reminder_sent_at: string | null; cancelled_at: string | null;
+  signup_count: number; signups: CenterHelpSignup[];
+  is_me?: boolean;
+};
+export const centerHelp = {
+  templates:      () => api<{ data: CenterHelpTemplate[] }>('/api/center-help/templates'),
+  createTemplate: (body: { taskType: CenterHelpTaskType; dayOfWeek: number; startTime: string; endTime: string; volunteersNeeded: number; isRecurring: boolean; notes: string | null; volunteerIds: number[] }) =>
+    api<{ data: CenterHelpTemplate }>('/api/center-help/templates', { method: 'POST', body: JSON.stringify(body) }),
+  patchTemplate:  (id: number, body: Partial<{ taskType: CenterHelpTaskType; dayOfWeek: number; startTime: string; endTime: string; volunteersNeeded: number; isRecurring: boolean; notes: string | null; volunteerIds: number[] }>) =>
+    api<{ data: any }>(`/api/center-help/templates/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteTemplate: (id: number) => api(`/api/center-help/templates/${id}`, { method: 'DELETE' }),
+  instances:      (from?: string, to?: string) => {
+    const qs = new URLSearchParams();
+    if (from) qs.set('from', from);
+    if (to)   qs.set('to',   to);
+    return api<{ data: CenterHelpInstance[] }>(`/api/center-help/instances${qs.toString() ? `?${qs}` : ''}`);
+  },
+  patchInstance:  (id: number, body: Partial<{ volunteersNeeded: number; notes: string | null; startsAt: string; endsAt: string; cancel: boolean }>) =>
+    api<{ data: any }>(`/api/center-help/instances/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  assign:         (id: number, volunteerIds: number[]) =>
+    api<{ data: { added: number } }>(`/api/center-help/instances/${id}/assign`, { method: 'POST', body: JSON.stringify({ volunteerIds }) }),
+  signupSelf:     (id: number) =>
+    api<{ data: { ok: boolean } }>(`/api/center-help/instances/${id}/signup`, { method: 'POST' }),
+  cancelSelf:     (id: number) =>
+    api<{ data: { ok: boolean } }>(`/api/center-help/instances/${id}/signup`, { method: 'DELETE' }),
+};
+
+export type VolunteerGroup = { id: number; name: string; is_default_broadcast: boolean; member_count: number };
+export const volunteerGroups = {
+  list:   () => api<{ data: VolunteerGroup[] }>('/api/volunteer-groups'),
+  get:    (id: number) => api<{ data: VolunteerGroup & { members: any[] } }>(`/api/volunteer-groups/${id}`),
+  create: (body: { name: string; isDefaultBroadcast?: boolean; volunteerIds?: number[] }) =>
+    api<{ data: VolunteerGroup }>('/api/volunteer-groups', { method: 'POST', body: JSON.stringify(body) }),
+  patch:  (id: number, body: Partial<{ name: string; isDefaultBroadcast: boolean }>) =>
+    api<{ data: VolunteerGroup }>(`/api/volunteer-groups/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  addMembers:    (id: number, volunteerIds: number[]) =>
+    api<{ data: { added: number } }>(`/api/volunteer-groups/${id}/members`, { method: 'POST', body: JSON.stringify({ volunteerIds }) }),
+  removeMember:  (id: number, volunteerId: number) =>
+    api<{ data: { ok: true } }>(`/api/volunteer-groups/${id}/members/${volunteerId}`, { method: 'DELETE' }),
+  remove: (id: number) => api<{ data: { ok: true } }>(`/api/volunteer-groups/${id}`, { method: 'DELETE' }),
 };
 
 export const smsInbox = {
-  list: () => api<{ data: Array<{ id: number; body: string; created_at: string; from_user_id: number; read_at: string | null; first_name: string; last_name: string; phone: string | null }> }>(
+  list: () => api<{ data: Array<{ id: number; body: string; created_at: string; from_user_id: number; read_at: string | null; first_name: string; last_name: string; phone: string | null; unit_number: number | null }>; unread: number }>(
     '/api/admin/sms-inbox'),
+};
+
+// SMS Threads panel — dispatcher "chat via SMS" view (Aug 3 request).
+// Backed by zlz.sms_messages; keyed by the last-10 digits of the phone.
+export type SmsThreadRow = {
+  phone: string; last_at: string; in_count: string | number; out_count: string | number; total: string | number;
+  volunteer_id: string | null; first_name: string | null; last_name: string | null;
+  unit_number: number | null; last_body: string | null;
+};
+export type SmsThreadMessage = {
+  id: string | number; direction: 'in' | 'out'; body: string; created_at: string;
+  volunteer_id: string | null; sent_by_user_id: string | null; meta: Record<string, any>;
+};
+export const smsThreads = {
+  list: (opts: { includeShop?: boolean } = {}) => api<{ data: SmsThreadRow[] }>(
+    `/api/sms/threads${opts.includeShop ? '?includeShop=1' : ''}`),
+  get:  (phone: string, opts: { includeShop?: boolean } = {}) => api<{ data: { phone: string; contact: any | null; messages: SmsThreadMessage[] } }>(
+    `/api/sms/threads/${encodeURIComponent(phone)}${opts.includeShop ? '?includeShop=1' : ''}`),
+  send: (phone: string, body: string) => api<{ data: { sent: number } }>(
+    '/api/sms/send-one', { method: 'POST', body: JSON.stringify({ phone, body }) }),
 };
 
 // Kiosk device flag lives in localStorage. When set, App.tsx routes every
@@ -538,16 +774,50 @@ export const kioskDevice = {
   fetchSecret: () => api<{ data: { secret: string | null } }>('/api/admin/kiosk-secret'),
 };
 
+// Aug 13 client redesign: admin PIN gates entry into the kiosk Admin Panel.
+// Configurable from the coordinator UI so the office can rotate it.
+// C12 Aug 13 — installed-app version check + Play Store URL.
+export type AppVersionInfo = {
+  android: {
+    latestVersionCode: number | null;
+    minSupportedVersionCode: number | null;
+    playStoreUrl: string | null;
+  };
+};
+export const appVersion = {
+  get: () => api<{ data: AppVersionInfo }>('/api/app/version'),
+};
+
+export const kioskSettings = {
+  get:  () => api<{ data: { adminPin: string } }>('/api/admin/kiosk-settings'),
+  save: (adminPin: string) => api<{ data: { adminPin: string } }>('/api/admin/kiosk-settings', {
+    method: 'PATCH', body: JSON.stringify({ adminPin }),
+  }),
+};
+
 export const admin = {
   pickups: (from: string, to: string) => api<{ data: AdminPickup[] }>(`/api/pickup-instances?from=${from}&to=${to}`),
   pickup:  async (id: number): Promise<AdminPickup | null> => {
-    const today = new Date().toISOString().slice(0, 10);
-    const horizon = new Date(Date.now() + 30 * 86400e3).toISOString().slice(0, 10);
-    const pastHorizon = new Date(Date.now() - 30 * 86400e3).toISOString().slice(0, 10);
-    const r = await api<{ data: AdminPickup[] }>(`/api/pickup-instances?from=${pastHorizon}&to=${horizon}`);
-    return r.data.find((p) => Number(p.id) === id) ?? null;
-    void today;
+    // abc859 (Aug 14): single-fetch endpoint. Previously we range-fetched and
+    // filtered client-side, which failed for pickups outside the guessed window
+    // ("Pickup #NNNN not found" on the C1 modal). Now backend answers by id.
+    try {
+      const r = await api<{ data: AdminPickup }>(`/api/pickup-instances/${id}`);
+      return r.data ?? null;
+    } catch (e: any) {
+      if (e?.status === 404) return null;
+      throw e;
+    }
   },
+  // C7 Aug 13: drag-drop reschedule from the Calendar. `releaseDriver=true`
+  // deletes assignment rows so the pickup goes back to Needs Driver; sweeper
+  // stamps (auto_broadcast_sent_at, driver_reminder_sent_at) are cleared so
+  // reminders/broadcasts re-fire for the new time.
+  reschedulePickup: (id: number, body: { newDate: string; newTime: string; releaseDriver: boolean }) =>
+    api<{ data: { id: number; newDate: string; newTime: string; releaseDriver: boolean } }>(
+      `/api/pickup-instances/${id}/reschedule`,
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
 };
 
 // ---------- supplier endpoints ----------
@@ -565,7 +835,14 @@ export type SupplierPickup = {
 export const supplier = {
   profile:  () => api<{ data: SupplierProfile }>('/api/me/supplier/profile'),
   pickups:  () => api<{ profile: any; data: SupplierPickup[] }>('/api/me/supplier-pickups'),
-  notify:   (opts: { kind: 'ready' | 'left_behind' | 'additional'; time?: string; readyTill?: string; notes?: string }) =>
+  notify:   (opts: { kind: 'ready' | 'left_behind' | 'additional'; time?: string; readyTill?: string; notes?: string; photoUrl?: string }) =>
     api<{ data: { id: number } }>('/api/me/supplier/notify', { method: 'POST', body: JSON.stringify(opts) }),
   cancel:   (id: number) => api(`/api/me/supplier-pickups/${id}/cancel`, { method: 'POST' }),
+  get:      (id: number) => api<{ data: any }>(`/api/me/supplier-pickups/${id}`),
+  edit:     (id: number, body: {
+    donorName?: string | null; contactName?: string | null; contactPhone?: string | null;
+    pickupAddress?: string | null; pickupInstructions?: string | null;
+    scheduledDate?: string; scheduledTime?: string; mustPickupBy?: string | null;
+    foodDescription?: string | null; estimatedQuantity?: string | null; notes?: string | null;
+  }) => api<{ data: any }>(`/api/me/supplier-pickups/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
 };

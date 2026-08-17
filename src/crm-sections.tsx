@@ -269,7 +269,7 @@ function InteractionRow({ row, onPick }: { row: CrmInteraction; onPick: () => vo
           {due && (
             <span className={cx('text-[11px] font-bold',
                                 overdue ? 'text-clay' : 'text-forest')}>
-              Follow up {overdue ? 'overdue · ' : ''}{due.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}{ due.getHours() !== 0 ? `, ${due.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}
+              Follow up {overdue ? 'overdue · ' : ''}{due.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}{ due.getHours() !== 0 ? `, ${due.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}` : ''}
             </span>
           )}
         </div>

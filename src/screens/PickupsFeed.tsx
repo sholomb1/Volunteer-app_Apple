@@ -15,15 +15,27 @@ export function PickupsFeed() {
   const qc = useQueryClient();
   const tab = (params.get('tab') ?? 'available') as 'available' | 'mine';
 
-  const open = useQuery({ queryKey: ['open'], queryFn: volunteer.open });
-  const mine = useQuery({ queryKey: ['mine'], queryFn: volunteer.mine });
+  // fgh103 (Aug 17): live-poll + focus-refetch so a pickup another driver
+  // just claimed drops off THIS driver's list within seconds — otherwise the
+  // 30s global staleTime + no window-focus refetch let it linger long enough
+  // to be double-tapped.
+  const open = useQuery({ queryKey: ['open'], queryFn: volunteer.open, refetchInterval: 15_000, refetchOnWindowFocus: true, staleTime: 5_000 });
+  const mine = useQuery({ queryKey: ['mine'], queryFn: volunteer.mine, refetchOnWindowFocus: true, staleTime: 5_000 });
 
   const signup = useMutation({
     mutationFn: (id: number) => volunteer.signup(id),
     onSuccess: () => { qc.invalidateQueries(); setParams({ tab: 'mine' }); },
   });
 
-  const openGroups = useMemo(() => groupByDate(open.data?.data ?? []), [open.data]);
+  // batch abc810 Aug 10 — Available Pickups shows TODAY only (NY local).
+  // Future-dated pickups stay off this screen; coordinator Live Board still
+  // shows multi-day. My Pickups keeps the full multi-day view.
+  const todayNYIso = useMemo(() => nyLocalDateIso(new Date()), []);
+  const openToday = useMemo(
+    () => (open.data?.data ?? []).filter((p) => (p.scheduled_date ?? '').slice(0, 10) === todayNYIso),
+    [open.data, todayNYIso],
+  );
+  const openGroups = useMemo(() => groupByDate(openToday), [openToday]);
   const mineGroups = useMemo(() => groupByDate(mine.data?.data ?? []), [mine.data]);
 
   return (
@@ -44,7 +56,7 @@ export function PickupsFeed() {
       <main className="px-4 mt-4">
         {tab === 'available' ? (
           open.isLoading ? <FeedSkeleton /> :
-          openGroups.length === 0 ? <Empty body="No open pickups right now." /> :
+          openGroups.length === 0 ? <Empty body="No open pickups for today." /> :
           openGroups.map((g) => (
             <section key={g.key} className="mb-4">
               <div className="text-[11px] font-extrabold uppercase tracking-[0.05em] text-muted my-2.5">{g.label}</div>
@@ -96,16 +108,30 @@ function PickupRow({ p, onOpen, pill, cta }: {
   const store = p.suppliers || (p.is_one_time ? 'One-time donor' : 'Pickup');
   const desc  = p.food_description || p.notes || '';
   const time  = p.scheduled_time?.slice(0, 5) ?? '—';
+  // abc837 Aug 13 — client wants the pickup address on the card too so drivers
+  // can size up distance/route at a glance without opening the detail page.
+  const address = shortAddress(p.supplier_address);
   const urgent = p.urgency_level === 'high';
   const filled = p.signups.map((s) => ({ initials: (s.first_name?.[0] ?? '') + (s.last_name?.[0] ?? '') }));
+  // batch abc810 Aug 10 — "Later today" chip when scheduled_time is
+  // still in the future today (NY local).
+  const laterToday = isLaterTodayNY(p.scheduled_date, p.scheduled_time);
   return (
     <Card onClick={onOpen} className="!p-3.5 hover:-translate-y-0.5 transition">
       <div className="flex items-baseline gap-3">
         <span className="font-display font-bold text-[14px] text-forest">{fmtTime(time)}</span>
         <span className="font-bold text-[13.5px] truncate">{store}</span>
-        {urgent && !pill && <span className="ml-auto inline-block w-2 h-2 rounded-full bg-clay animate-pulse" />}
+        {/* C3 Aug 13 — small ref# chip so drivers can quote it to the office. */}
+        {p.ref_number && <span className="text-[10.5px] font-extrabold tracking-wider bg-cream border border-line text-muted px-1.5 py-0.5 rounded-full">#{p.ref_number}</span>}
+        {laterToday && !pill && (
+          <span className="ml-auto inline-flex items-center gap-1 bg-clay/15 text-clay font-bold text-[11px] uppercase tracking-wide px-2 py-0.5 rounded-full">
+            Later today · {fmtTime(time)}
+          </span>
+        )}
+        {urgent && !pill && !laterToday && <span className="ml-auto inline-block w-2 h-2 rounded-full bg-clay animate-pulse" />}
         {pill && <span className="ml-auto">{pill}</span>}
       </div>
+      {address && <div className="text-[12px] text-forest/80 mt-1 leading-snug truncate">📍 {address}</div>}
       {desc && <div className="text-[12px] text-muted mt-1 leading-snug line-clamp-2">{desc}</div>}
       <div className="flex items-center justify-between mt-3">
         <div className="flex items-center">
@@ -119,6 +145,27 @@ function PickupRow({ p, onOpen, pill, cta }: {
       </div>
     </Card>
   );
+}
+
+// abc837 Aug 13 — strip trailing ", USA" / ", United States" so a single-line
+// address stays readable on narrow phone widths; return '' for nullish.
+function shortAddress(a: string | null | undefined): string {
+  if (!a) return '';
+  return String(a).replace(/,?\s*(USA|United States)\.?\s*$/i, '').trim();
+}
+
+// batch abc810 Aug 10 — NY-local "today" helpers.
+function nyLocalDateIso(d: Date): string {
+  // en-CA gives YYYY-MM-DD which is directly comparable to backend date-only.
+  return d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
+function isLaterTodayNY(scheduledDate: string | null | undefined, scheduledTime: string | null | undefined): boolean {
+  if (!scheduledDate || !scheduledTime) return false;
+  const todayIso = nyLocalDateIso(new Date());
+  if (scheduledDate.slice(0, 10) !== todayIso) return false;
+  // Compare scheduled_time (HH:MM[:SS]) against current NY wall-clock HH:MM.
+  const nowHHMM = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/New_York' });
+  return scheduledTime.slice(0, 5) > nowHHMM;
 }
 
 

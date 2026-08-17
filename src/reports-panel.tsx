@@ -137,7 +137,7 @@ export function ReportsPanel() {
             <span className="text-[11.5px] font-extrabold uppercase tracking-[.06em] text-muted">Volunteer</span>
             <select value={volunteerId} onChange={(e) => setVolunteerId(e.target.value)} className={cx(filterInput, 'mt-1 w-full')}>
               <option value="">All</option>
-              {(volunteers.data?.data ?? []).map((v: any) => <option key={v.id} value={v.id}>{v.firstName} {v.lastName}</option>)}
+              {(volunteers.data?.data ?? []).map((v: any) => <option key={v.id} value={v.id}>{v.firstName} {v.lastName}{v.unitNumber != null ? ` · #${v.unitNumber}` : ''}</option>)}
             </select>
           </label>
           <div className="flex items-end gap-2">

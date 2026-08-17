@@ -19,7 +19,8 @@ export function MapView() {
   const ref = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layer = useRef<L.LayerGroup | null>(null);
-  const open = useQuery({ queryKey: ['open'], queryFn: volunteer.open });
+  // fgh103 (Aug 17): live-poll + focus-refetch — see PickupsFeed for reason.
+  const open = useQuery({ queryKey: ['open'], queryFn: volunteer.open, refetchInterval: 15_000, refetchOnWindowFocus: true, staleTime: 5_000 });
   const pickups = open.data?.data ?? [];
 
   useEffect(() => {

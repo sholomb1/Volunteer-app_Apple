@@ -68,6 +68,10 @@ export function VolunteerRegistration() {
   // ---- App access + preferred contact (multi-select per PDF update) ----
   const [appAccess, setAppAccess]           = useState<AppAccess | undefined>(undefined);
   const [contactMethods, setContactMethods] = useState<ContactMethod[]>([]);
+  // batch abc811 Aug 10 — quiet-hours window (FROM/UNTIL, NY time).
+  // Both optional. Wrap around midnight is supported (e.g. 11pm – 7am).
+  const [smsQuietStart, setSmsQuietStart]   = useState('');
+  const [smsQuietEnd,   setSmsQuietEnd]     = useState('');
 
   // ---- Pickup Preferences ----
   const [pickupInterest, setPickupInterest]     = useState<PickupInterest | undefined>(undefined);
@@ -134,6 +138,8 @@ export function VolunteerRegistration() {
             contactMethods.includes('call')         ? 'call' :
             contactMethods.includes('notification') ? 'push' :
             'push',
+          smsQuietStart: smsQuietStart || null,
+          smsQuietEnd:   smsQuietEnd   || null,
 
           // PDF-only fields — stored in intake_payload.
           maritalStatus,
@@ -234,6 +240,20 @@ export function VolunteerRegistration() {
             <CheckGroup<ContactMethod>
               values={contactMethods} onChange={setContactMethods}
               options={CONTACT_METHODS} />
+          </Field>
+          <Field label="Quiet hours (optional)" help="Auto-texts pause during this window. Wrap around midnight is supported (e.g. 11pm – 7am)." optional>
+            <div className="flex items-center gap-2 flex-wrap">
+              <label className="flex items-center gap-1.5 text-[12px] font-semibold text-muted">
+                From
+                <Input type="time" value={smsQuietStart}
+                       onChange={(e) => setSmsQuietStart(e.target.value)} />
+              </label>
+              <label className="flex items-center gap-1.5 text-[12px] font-semibold text-muted">
+                Until
+                <Input type="time" value={smsQuietEnd}
+                       onChange={(e) => setSmsQuietEnd(e.target.value)} />
+              </label>
+            </div>
           </Field>
         </Section>
 

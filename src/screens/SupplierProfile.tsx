@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Save } from 'lucide-react';
-import { supplierSelf } from '../api';
+import { supplierSelf, account, setAuth, type WeekHours, type DayHours } from '../api';
 import { FadeUp } from '../design';
 
 const inputCls = 'w-full rounded-[12px] border-[1.4px] border-line bg-paper px-3.5 py-3 text-[14.5px] outline-none focus:border-forest';
@@ -35,6 +35,16 @@ export function SupplierProfile() {
   const [logoErr, setLogoErr] = useState<string | null>(null);
   const [entrancePhotoUrl, setEntranceUrl] = useState<string | null>(null);
   const [entranceErr, setEntranceErr] = useState<string | null>(null);
+  // C10 Aug 13 — structured store hours + notification prefs.
+  const [storeHours, setStoreHours] = useState<WeekHours>({});
+  const [contactHoursStructured, setContactHoursStructured] = useState<WeekHours>({});
+  const [notifChannel, setNotifChannel] = useState<'app'|'sms'|'both'|'none'>('both');
+  const [notifWindow, setNotifWindow] = useState<'anytime'|'store_hours'|'custom'>('anytime');
+  const [quietHoursStart, setQuietStart] = useState<string>('');
+  const [quietHoursEnd,   setQuietEnd]   = useState<string>('');
+  const [quietDays,       setQuietDays]  = useState<number>(0);
+  const [awayFrom,        setAwayFrom]   = useState<string>('');
+  const [awayUntil,       setAwayUntil]  = useState<string>('');
   const [done, setDone] = useState(false);
 
   useEffect(() => {
@@ -55,6 +65,15 @@ export function SupplierProfile() {
     setHechsher(profile.kosherCertification ?? '');
     setLogoUrl(profile.logoUrl ?? null);
     setEntranceUrl(profile.entrancePhotoUrl ?? null);
+    setStoreHours((profile.storeHours ?? {}) as WeekHours);
+    setContactHoursStructured((profile.contactHoursStructured ?? {}) as WeekHours);
+    setNotifChannel((profile.notifChannel ?? 'both') as any);
+    setNotifWindow((profile.notifWindow ?? 'anytime') as any);
+    setQuietStart(profile.quietHoursStart ?? '');
+    setQuietEnd(profile.quietHoursEnd ?? '');
+    setQuietDays(profile.quietDays ?? 0);
+    setAwayFrom(profile.awayFrom ?? '');
+    setAwayUntil(profile.awayUntil ?? '');
   }, [profile]);
 
   function readImageFile(file: File | null, setUrl: (s: string | null) => void, setErr: (s: string | null) => void) {
@@ -81,6 +100,15 @@ export function SupplierProfile() {
       kosherCertification: kosherCertification || null,
       logoUrl: logoUrl || null,
       entrancePhotoUrl: entrancePhotoUrl || null,
+      storeHours,
+      contactHoursStructured,
+      notifChannel,
+      notifWindow,
+      quietHoursStart: quietHoursStart || null,
+      quietHoursEnd:   quietHoursEnd   || null,
+      quietDays,
+      awayFrom:  awayFrom  || null,
+      awayUntil: awayUntil || null,
     }),
     onSuccess: () => { setDone(true); setTimeout(() => setDone(false), 3500); },
   });
@@ -158,6 +186,71 @@ export function SupplierProfile() {
             <Field label="Holiday schedule" optional><textarea rows={2} value={holidaySchedule} onChange={(e) => setHoliday(e.target.value)} className={inputCls} placeholder="e.g. Closed Pesach week, Tisha BAv" /></Field>
           </Section>
 
+          {/* C10 Aug 13 — structured hours + notification preferences.
+              Sits below the existing free-text fields (which stay for backward
+              compat) so the office gets machine-readable schedules to gate
+              notifications against. */}
+          <Section title="Store hours (structured)">
+            <div className="text-[12px] text-muted mb-2 italic">Set the days and times your store is normally open. Leave a day off if closed.</div>
+            <WeekHoursEditor value={storeHours} onChange={setStoreHours} />
+          </Section>
+          <Section title="Preferred contact hours (structured)">
+            <div className="text-[12px] text-muted mb-2 italic">When drivers or the office should be able to reach you.</div>
+            <WeekHoursEditor value={contactHoursStructured} onChange={setContactHoursStructured} />
+          </Section>
+          <Section title="Notifications">
+            <Field label="Notify me via">
+              <div className="flex flex-wrap gap-2">
+                {(['app','sms','both','none'] as const).map((k) => (
+                  <button key={k} type="button"
+                          onClick={() => setNotifChannel(k)}
+                          className={`px-3 py-1.5 rounded-full text-[13px] font-bold border-[1.4px] ${notifChannel === k ? 'bg-forest text-paper border-forest' : 'bg-paper text-muted border-line'}`}>
+                    {k === 'app' ? 'App only' : k === 'sms' ? 'SMS only' : k === 'both' ? 'Both' : 'None'}
+                  </button>
+                ))}
+              </div>
+            </Field>
+            <Field label="Notification window">
+              <div className="flex flex-wrap gap-2">
+                {(['anytime','store_hours','custom'] as const).map((k) => (
+                  <button key={k} type="button"
+                          onClick={() => setNotifWindow(k)}
+                          className={`px-3 py-1.5 rounded-full text-[13px] font-bold border-[1.4px] ${notifWindow === k ? 'bg-forest text-paper border-forest' : 'bg-paper text-muted border-line'}`}>
+                    {k === 'anytime' ? 'Anytime' : k === 'store_hours' ? 'During store hours' : 'Custom quiet hours'}
+                  </button>
+                ))}
+              </div>
+            </Field>
+            {notifWindow === 'custom' && (
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Quiet from"><input type="time" value={quietHoursStart} onChange={(e) => setQuietStart(e.target.value)} className={inputCls} /></Field>
+                <Field label="Quiet until"><input type="time" value={quietHoursEnd}   onChange={(e) => setQuietEnd(e.target.value)}   className={inputCls} /></Field>
+              </div>
+            )}
+            <Field label="Quiet days (no notifications on)">
+              <div className="flex flex-wrap gap-2">
+                {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((lbl, i) => {
+                  const bit = 1 << i;
+                  const on = (quietDays & bit) !== 0;
+                  return (
+                    <button key={lbl} type="button"
+                            onClick={() => setQuietDays(on ? quietDays & ~bit : quietDays | bit)}
+                            className={`px-3 py-1.5 rounded-full text-[13px] font-bold border-[1.4px] ${on ? 'bg-clay text-paper border-clay' : 'bg-paper text-muted border-line'}`}>
+                      {lbl}
+                    </button>
+                  );
+                })}
+              </div>
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Away from" help="Optional — pause optional pickup notifications."><input type="date" value={awayFrom}  onChange={(e) => setAwayFrom(e.target.value)}  className={inputCls} /></Field>
+              <Field label="Away until"><input type="date" value={awayUntil} onChange={(e) => setAwayUntil(e.target.value)} className={inputCls} /></Field>
+            </div>
+            {awayFrom && awayUntil && (
+              <div className="text-[12.5px] text-forest font-semibold">Notifications will resume after {awayUntil}.</div>
+            )}
+          </Section>
+
           {save.error && <p className="text-clay font-bold text-[14px] mt-4">{(save.error as Error).message}</p>}
           {done && <p className="text-forest font-bold text-[14px] mt-4">✓ Saved.</p>}
 
@@ -165,9 +258,65 @@ export function SupplierProfile() {
                   className="haptic w-full bg-forest text-paper rounded-[14px] py-4 font-bold text-[15px] shadow-ctag flex items-center justify-center gap-2 disabled:opacity-50 mt-6">
             <Save size={18} /> {save.isPending ? 'Saving…' : 'Save changes'}
           </button>
+
+          <DangerZone />
         </FadeUp>}
       </main>
     </div>
+  );
+}
+
+// Apple 2.1 (Aug 14) — mirrors the volunteer profile's Danger Zone.
+function DangerZone() {
+  const nav = useNavigate();
+  const [open, setOpen] = useState(false);
+  const [phrase, setPhrase] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const mut = useMutation({
+    mutationFn: () => account.delete(),
+    onSuccess: () => { setAuth(null, null); nav('/', { replace: true }); window.location.reload(); },
+    onError: (e: any) => setErr(e?.message ?? 'Could not delete account. Try again.'),
+  });
+  const enabled = phrase.trim().toLowerCase() === 'delete my account';
+  return (
+    <>
+      <div className="mt-10 rounded-[14px] border-2 border-clay/40 bg-clay/5 p-4">
+        <div className="text-[13px] font-extrabold uppercase tracking-[.06em] text-clay mb-1">Danger zone</div>
+        <div className="text-[13.5px] text-ink/80 leading-snug">
+          Delete your account and personal info from Zeh L'Zeh. Past pickups stay in our records (anonymized). This can't be undone.
+        </div>
+        <button onClick={() => { setOpen(true); setPhrase(''); setErr(null); }}
+                className="haptic mt-3 bg-clay text-paper font-bold text-[13.5px] px-4 py-2 rounded-[10px] shadow-ctag">
+          Delete my account
+        </button>
+      </div>
+      {open && (
+        <div onClick={() => !mut.isPending && setOpen(false)}
+             className="fixed inset-0 z-[3000] bg-ink/60 grid place-items-center p-4">
+          <div onClick={(e) => e.stopPropagation()}
+               className="bg-paper rounded-[18px] shadow-lift w-full max-w-sm p-5">
+            <div className="font-display font-semibold text-[19px] text-clay">Delete your account?</div>
+            <p className="text-[13.5px] text-ink/80 mt-2 leading-snug">
+              This permanently removes your profile and personal info. Past pickups you completed stay in our records (anonymized). You can't undo this.
+            </p>
+            <div className="mt-4">
+              <div className="text-[12px] text-muted mb-1">Type <b>delete my account</b> to confirm:</div>
+              <input value={phrase} onChange={(e) => setPhrase(e.target.value)} autoFocus
+                     className="w-full rounded-[10px] border-[1.4px] border-line px-3 py-2 text-[15px] outline-none focus:border-clay" />
+            </div>
+            {err && <p className="text-clay font-bold text-[13px] mt-2">{err}</p>}
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={() => setOpen(false)} disabled={mut.isPending}
+                      className="haptic text-[13px] font-bold text-muted px-3 py-2">Cancel</button>
+              <button onClick={() => mut.mutate()} disabled={!enabled || mut.isPending}
+                      className="haptic text-[13px] font-bold bg-clay text-paper px-4 py-2 rounded-[10px] shadow-ctag disabled:opacity-50">
+                {mut.isPending ? 'Deleting…' : 'Delete forever'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -176,6 +325,44 @@ function Section({ title, children }: { title: string; children: React.ReactNode
     <div className="mt-6">
       <div className="text-[13px] font-extrabold uppercase tracking-[.06em] text-forest mb-3">{title}</div>
       <div className="space-y-3">{children}</div>
+    </div>
+  );
+}
+
+// C10 Aug 13 — 7-day open/close picker. Compact row-per-day layout with a
+// Closed toggle so a supplier can flip a day off without touching the times.
+const DAY_KEYS = ['sun','mon','tue','wed','thu','fri','sat'] as const;
+const DAY_LABELS: Record<typeof DAY_KEYS[number], string> =
+  { sun: 'Sun', mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat' };
+function WeekHoursEditor({ value, onChange }: { value: WeekHours; onChange: (v: WeekHours) => void }) {
+  function setDay(key: typeof DAY_KEYS[number], patch: DayHours) {
+    onChange({ ...value, [key]: patch });
+  }
+  return (
+    <div className="border border-line rounded-[12px] overflow-hidden">
+      {DAY_KEYS.map((k) => {
+        const h = value[k] ?? null;
+        const closed = h == null;
+        return (
+          <div key={k} className="flex items-center gap-2 px-3 py-2 border-t border-line first:border-t-0">
+            <div className="w-10 font-extrabold text-[13px] text-forest">{DAY_LABELS[k]}</div>
+            <button type="button"
+                    onClick={() => setDay(k, closed ? { open: '09:00', close: '17:00' } : null)}
+                    className={`text-[12px] font-bold px-2.5 py-1 rounded-full border ${closed ? 'bg-cream border-line text-muted' : 'bg-sage border-sage-line text-forest'}`}>
+              {closed ? 'Closed' : 'Open'}
+            </button>
+            {!closed && (
+              <>
+                <input type="time" value={h!.open}  onChange={(e) => setDay(k, { open: e.target.value, close: h!.close })}
+                       className="border border-line rounded-[8px] px-2 py-1 text-[13px] flex-1 max-w-[110px]" />
+                <span className="text-muted text-[12px]">to</span>
+                <input type="time" value={h!.close} onChange={(e) => setDay(k, { open: h!.open, close: e.target.value })}
+                       className="border border-line rounded-[8px] px-2 py-1 text-[13px] flex-1 max-w-[110px]" />
+              </>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

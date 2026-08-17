@@ -8,18 +8,22 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowRight, Truck, Calendar, Check, MapPin } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { volunteer, type AuthUser } from '../api';
+import { volunteer, centerHelp, CENTER_HELP_TASK_LABELS, type CenterHelpInstance, type AuthUser } from '../api';
 import { AppBar, Avatar, FadeUp, Skeleton, cx } from '../design';
 import { useLocationReporting, getTrackingEnabled, setTrackingEnabled, reportNow } from '../location-reporter';
 
 export function VolunteerHome({ user }: { user: AuthUser }) {
   const nav = useNavigate();
 
-  const open = useQuery({ queryKey: ['open'], queryFn: volunteer.open });
-  const mine = useQuery({ queryKey: ['mine'], queryFn: volunteer.mine });
+  // fgh103 (Aug 17): live-poll so the "N available" tile stays current.
+  const open = useQuery({ queryKey: ['open'], queryFn: volunteer.open, refetchInterval: 15_000, refetchOnWindowFocus: true, staleTime: 5_000 });
+  const mine = useQuery({ queryKey: ['mine'], queryFn: volunteer.mine, refetchOnWindowFocus: true, staleTime: 5_000 });
   const hist = useQuery({ queryKey: ['history'], queryFn: volunteer.history });
 
-  const openCount  = open.data?.data.length ?? 0;
+  // batch abc810 Aug 10 — count only TODAY's open pickups so the home tile
+  // matches the Available Pickups feed (which is today-only per spec 8b).
+  const todayIsoNY = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const openCount  = open.data?.data.filter((p) => (p.scheduled_date ?? '').slice(0, 10) === todayIsoNY).length ?? 0;
   const mineCount  = mine.data?.data.filter((p) => p.status !== 'completed' && p.status !== 'cancelled').length ?? 0;
   const thisMonth  = hist.data?.stats.thisMonth ?? 0;
   const initials   = (user.firstName?.[0] ?? '') + (user.lastName?.[0] ?? '');
@@ -190,7 +194,76 @@ export function VolunteerHome({ user }: { user: AuthUser }) {
                     count={hist.isLoading ? null : thisMonth} onClick={() => nav('/you')}
                     icon={<Check size={22} strokeWidth={2.5} />} />
         </FadeUp>
+
+        {/* batch abc801 Aug 9 — Center Help schedule: simple listing of the
+            next 7 days of instances. Volunteer can sign up / cancel here. */}
+        <FadeUp delay={0.14}>
+          <CenterHelpSectionForVolunteer />
+        </FadeUp>
       </main>
+    </div>
+  );
+}
+
+// batch abc801 Aug 9 — small compact listing of upcoming center-help tasks
+// for the volunteer. Sign up or cancel inline. Nothing fancy.
+function CenterHelpSectionForVolunteer() {
+  const qc = useQueryClient();
+  const to  = new Date(Date.now() + 7 * 86400e3).toISOString().slice(0, 10);
+  const from = new Date().toISOString().slice(0, 10);
+  const q = useQuery({
+    queryKey: ['ch-vol-instances', from, to],
+    queryFn:  () => centerHelp.instances(from, to),
+    refetchInterval: 60_000,
+  });
+  const signup = useMutation({
+    mutationFn: (id: number) => centerHelp.signupSelf(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ch-vol-instances', from, to] }),
+  });
+  const cancel = useMutation({
+    mutationFn: (id: number) => centerHelp.cancelSelf(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ch-vol-instances', from, to] }),
+  });
+  const now = Date.now();
+  const list = (q.data?.data ?? []).filter((i) => new Date(i.starts_at).getTime() > now).slice(0, 10);
+  if (q.isLoading) return null;
+  if (list.length === 0) return null;
+  return (
+    <div className="mt-5">
+      <div className="text-[11px] font-extrabold uppercase tracking-[.05em] text-muted mb-1.5">Center help — next 7 days</div>
+      <div className="space-y-2">
+        {list.map((inst) => <CHRow key={inst.id} inst={inst} onSignup={() => signup.mutate(inst.id)} onCancel={() => cancel.mutate(inst.id)} busy={signup.isPending || cancel.isPending} />)}
+      </div>
+    </div>
+  );
+}
+
+function CHRow({ inst, onSignup, onCancel, busy }: { inst: CenterHelpInstance; onSignup: () => void; onCancel: () => void; busy: boolean }) {
+  const label = CENTER_HELP_TASK_LABELS[inst.task_type] ?? inst.task_type;
+  const when  = new Date(inst.starts_at).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+  const filled = inst.signup_count;
+  const target = inst.volunteers_needed;
+  const short  = filled < target;
+  const iAmIn  = inst.is_me === true;
+  return (
+    <div className="rounded-[14px] border border-line bg-paper px-3.5 py-2.5 flex items-center justify-between gap-3">
+      <div className="min-w-0 flex-1">
+        <div className="font-bold text-[13.5px] truncate">{label}</div>
+        <div className="text-[11.5px] text-muted truncate">
+          {when} · <span className={cx('font-extrabold', short ? 'text-clay' : 'text-forest')}>{filled} of {target} filled</span>
+        </div>
+      </div>
+      {iAmIn ? (
+        <button disabled={busy} onClick={onCancel}
+                className="haptic text-[11.5px] font-bold text-clay border border-clay/40 px-3 py-1.5 rounded-[10px] disabled:opacity-50">
+          Signed up ✓
+        </button>
+      ) : (
+        <button disabled={busy || filled >= target} onClick={onSignup}
+                className="haptic text-[11.5px] font-bold text-forest border border-forest/40 bg-sage/40 px-3 py-1.5 rounded-[10px] disabled:opacity-50">
+          + Sign up
+        </button>
+      )}
     </div>
   );
 }

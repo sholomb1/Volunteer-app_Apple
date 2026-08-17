@@ -16,9 +16,13 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { MapPin } from 'lucide-react';
+import { API_BASE, maybeForcePortalReload } from './api';
 
-const PLACES_KEY = (import.meta as any).env?.VITE_GOOGLE_PLACES_KEY as string | undefined;
-const PLACES_URL = 'https://places.googleapis.com/v1/places:autocomplete';
+// Server-side proxy for Google Places autocomplete. Some tablet WebViews strip the
+// Referer header, which breaks the browser-side call (Google's HTTP-referrer
+// restriction returns 403). Routing through vp-api's /api/geocode/autocomplete
+// side-steps that — the server sends a fixed Referer that satisfies the allowlist.
+const PROXY_URL = (API_BASE || '').replace(/\/$/, '') + '/api/geocode/autocomplete';
 
 type Suggestion = {
   placeId: string;
@@ -85,10 +89,6 @@ export function AddressAutocomplete({
   }, []);
 
   function fetchSuggestions(q: string) {
-    if (!PLACES_KEY) {
-      setError('Address suggestions unavailable (missing API key)');
-      return;
-    }
     if (q.trim().length < 3) {
       setSuggestions([]);
       setLoading(false);
@@ -97,37 +97,31 @@ export function AddressAutocomplete({
     ensureFreshSession();
     setLoading(true);
     setError(null);
-    fetch(PLACES_URL, {
+    fetch(PROXY_URL, {
       method: 'POST',
-      // Force the browser to send the FULL current URL as Referer instead of
-      // just the origin. Google's HTTP-referrer key restriction is a glob
-      // (e.g. staging.zehlzeh.org/*), and the origin-only Referer that
-      // strict-origin-when-cross-origin produces (bare hostname, no path)
-      // doesn't match the * — Google returns 403. Full-URL referrer matches
-      // the same pattern that curl-with-referrer works under.
-      referrerPolicy: 'no-referrer-when-downgrade',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Goog-Api-Key': PLACES_KEY,
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         input: q,
         sessionToken: sessionRef.current.token,
-        // Bias toward the US; the app is for Monsey/Rockland-area food rescue.
-        includedRegionCodes: ['us'],
       }),
     })
-      .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(async (r) => {
+        // Honor the portal-wide reload epoch even on raw-fetch calls so
+        // tabs on stale bundles self-heal instead of showing this error
+        // forever (this file doesn't route through the api() wrapper).
+        maybeForcePortalReload(r.headers.get('X-Portal-Reload-Since'));
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const ct = r.headers.get('content-type') || '';
+        if (!ct.includes('application/json')) throw new Error('Address search temporarily unavailable');
+        return r.json();
+      })
       .then((data: any) => {
-        const list: Suggestion[] = (data?.suggestions ?? [])
-          .map((s: any) => s.placePrediction)
-          .filter(Boolean)
-          .map((p: any) => ({
-            placeId:   p.placeId,
-            main:      p.structuredFormat?.mainText?.text ?? p.text?.text ?? '',
-            secondary: p.structuredFormat?.secondaryText?.text ?? '',
-            full:      p.text?.text ?? '',
-          }));
+        const list: Suggestion[] = (data?.data?.suggestions ?? []).map((p: any) => ({
+          placeId:   p.placeId,
+          main:      p.main ?? p.full ?? '',
+          secondary: p.secondary ?? '',
+          full:      p.full ?? '',
+        }));
         setSuggestions(list.slice(0, 6));
       })
       .catch((e) => setError(String(e?.message ?? e)))

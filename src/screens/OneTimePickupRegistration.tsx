@@ -7,6 +7,7 @@ import { api } from '../api';
 import {
   CheckGroup, Field, FormShell, Input, RadioGroup, Section, SubmitBar, Textarea, ThankYou,
 } from '../registration-fields';
+import { AddressAutocomplete } from '../address-autocomplete';
 
 type Urgency = 'now' | 'today' | 'this_week';
 type FoodType = 'refrigerated' | 'frozen' | 'dry' | 'prepared' | 'produce' | 'bakery';
@@ -17,9 +18,11 @@ export function OneTimePickupRegistration() {
   const hh = String((now.getHours() + 1) % 24).padStart(2, '0');
 
   const [donorName, setDonor]       = useState('');
+  const [contactName, setContact]   = useState('');
   const [address, setAddress]       = useState('');
   const [contactPhone, setPhone]    = useState('');
   const [contactEmail, setEmail]    = useState('');
+  const [pickupInstructions, setInstr] = useState('');
   const [readyDate, setReadyDate]   = useState(today);
   const [readyTime, setReadyTime]   = useState(`${hh}:00`);
   const [mustPickupBy, setCutoff]   = useState('');
@@ -41,10 +44,12 @@ export function OneTimePickupRegistration() {
       await api('/api/public/one-time-pickup', {
         method: 'POST',
         body: JSON.stringify({
-          donorName, address, contactPhone, contactEmail: contactEmail || null,
+          donorName, contactName: contactName || null,
+          address, contactPhone, contactEmail: contactEmail || null,
           readyDate, readyTime,
           mustPickupBy: mustPickupBy ? new Date(`${readyDate}T${mustPickupBy}:00`).toISOString() : null,
           foodTypes, foodDescription, estimatedQuantity,
+          pickupInstructions: pickupInstructions || null,
           notes: [notes, `Urgency: ${urgency}`].filter(Boolean).join('\n'),
         }),
       });
@@ -63,17 +68,26 @@ export function OneTimePickupRegistration() {
     >
       <form onSubmit={submit}>
         <Section title="Who you are">
-          <Field label="Your name or business name">
-            <Input required value={donorName} onChange={(e) => setDonor(e.target.value)} placeholder="e.g. Cohen family simcha, A C Caterers" />
+          <Field label="Store / Hall name (shows on driver text)"
+                 help="Public name — e.g. Kroger Airmont, Cohen family simcha, Bites Cafe.">
+            <Input required value={donorName} onChange={(e) => setDonor(e.target.value)} placeholder="e.g. Kroger Airmont, Cohen family simcha" />
+          </Field>
+          <Field label="Contact name (goes to driver on accept)" optional>
+            <Input value={contactName} onChange={(e) => setContact(e.target.value)} placeholder="Person we can reach if the driver has trouble" />
           </Field>
           <Field label="Pickup address">
-            <Textarea required value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Street, city, state, zip" />
+            <AddressAutocomplete value={address} onChange={setAddress}
+                                 placeholder="Start typing — pick from suggestions" />
           </Field>
           <Field label="Contact phone">
             <Input required value={contactPhone} onChange={(e) => setPhone(e.target.value)} placeholder="(845) 555-1234" />
           </Field>
           <Field label="Email" optional>
             <Input type="email" value={contactEmail} onChange={(e) => setEmail(e.target.value)} placeholder="optional" />
+          </Field>
+          <Field label="Access / pickup instructions" optional
+                 help="Anything the driver needs to know on arrival — door code, loading dock, ring bell, etc.">
+            <Textarea value={pickupInstructions} onChange={(e) => setInstr(e.target.value)} placeholder='e.g. "Loading dock on the side. Ring the bell twice."' />
           </Field>
         </Section>
 

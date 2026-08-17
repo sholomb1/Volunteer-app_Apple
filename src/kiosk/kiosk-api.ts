@@ -4,13 +4,16 @@
  * routes). No JWT header. All calls go through here so nothing in the
  * regular authed api.ts leaks into the kiosk flow.
  */
-import { API_BASE } from '../api';
+import { API_BASE, maybeForcePortalReload } from '../api';
 
 async function ksh<T>(secret: string, path: string, init: RequestInit = {}): Promise<T> {
   const url = API_BASE.replace(/\/$/, '') + `/api/kiosk/${encodeURIComponent(secret)}${path}`;
   const headers = new Headers(init.headers);
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   const r = await fetch(url, { ...init, headers });
+  // Honor the portal-wide reload epoch so a stale kiosk bundle self-heals
+  // on its next API call instead of shipping day-old print code forever.
+  maybeForcePortalReload(r.headers.get('X-Portal-Reload-Since'));
   const text = await r.text();
   let json: any = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* leave null */ }
@@ -30,12 +33,23 @@ export type KioskStore = {
   scheduledDate: string;
 };
 
+// C5 Aug 13 — recently-completed pickups the driver can reprint labels for.
+export type KioskRecentCompleted = {
+  pickupId: number;
+  refNumber: string | null;
+  supplierId: number;
+  supplierName: string;
+  scheduledDate: string;
+  completedAt: string | null;
+  labelsPrinted: boolean;
+};
+
 export type KioskSigninResp = {
   data:
     | { needsDriverPick: true; adminName: string; drivers: Array<{ volunteerId: number; name: string; pendingPickups: number }> }
     | { needsVolunteerPick: true; code: string; candidates: Array<{ volunteerId: number; name: string }> }
     | { needsVendorPick: true; dropoffId: number; volunteerId: number; volunteerName: string; greeting: string; allSuppliers: Array<{ supplierId: number; supplierName: string; city: string }> }
-    | { dropoffId: number; volunteerId: number; volunteerName: string; stores: KioskStore[]; needsDriverPick?: false; needsVolunteerPick?: false; needsVendorPick?: false };
+    | { dropoffId: number; volunteerId: number; volunteerName: string; stores: KioskStore[]; recentCompleted?: KioskRecentCompleted[]; needsDriverPick?: false; needsVolunteerPick?: false; needsVendorPick?: false };
 };
 
 export type KioskLine = {
@@ -71,7 +85,10 @@ export const kiosk = {
   }) => ksh<KioskSigninResp>(secret, '/signin', { method: 'POST', body: JSON.stringify(body) }),
 
   // Auto-create a supplier from a manually-typed name + address.
-  manualVendor: (secret: string, body: { name: string; address?: string; city?: string }) =>
+  manualVendor: (secret: string, body: {
+    name: string; address?: string; city?: string;
+    hashgacha?: string; catering_company?: string;
+  }) =>
     ksh<{ data: { supplierId: number; supplierName: string; city: string } }>(
       secret, '/manual-vendor', { method: 'POST', body: JSON.stringify(body) }),
 
@@ -102,5 +119,13 @@ export const kiosk = {
     ksh<{ data: { ok: boolean; sent?: number } }>(secret, '/print-tspl', {
       method: 'POST',
       body: JSON.stringify({ tspl: tsplBase64 }),
+    }),
+
+  // Aug 13 client redesign: single admin entry point via the Help popup.
+  // Kiosk POSTs the entered PIN; server compares to portal_settings.kiosk_admin_pin.
+  verifyAdminPin: (secret: string, pin: string) =>
+    ksh<{ data: { ok: true } }>(secret, '/verify-admin-pin', {
+      method: 'POST',
+      body: JSON.stringify({ pin }),
     }),
 };

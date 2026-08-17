@@ -101,6 +101,7 @@ export function SupplierHome({ user }: { user: AuthUser }) {
           active.length === 0 ? <div className="text-[13px] text-muted py-3">No active pickups yet.</div> :
           <div className="space-y-2.5">
             {active.map((p) => <SupplierRow key={p.pickup_instance_id} p={p}
+                                onEdit={() => nav(`/pickups/${p.pickup_instance_id}/edit`)}
                                 onCancel={() => { if (confirm('Cancel this pickup?')) cancel.mutate(Number(p.pickup_instance_id)); }} />)}
           </div>}
 
@@ -115,7 +116,7 @@ export function SupplierHome({ user }: { user: AuthUser }) {
   );
 }
 
-function SupplierRow({ p, muted, onCancel }: { p: SupplierPickup; muted?: boolean; onCancel?: () => void }) {
+function SupplierRow({ p, muted, onCancel, onEdit }: { p: SupplierPickup; muted?: boolean; onCancel?: () => void; onEdit?: () => void }) {
   // p.scheduled_time is a wall-clock TIME (no timezone, already Eastern).
   // Combine with the date and treat as Eastern by constructing in local then
   // formatting in the Eastern zone for both consistency and 12-hour display.
@@ -131,8 +132,17 @@ function SupplierRow({ p, muted, onCancel }: { p: SupplierPickup; muted?: boolea
           {p.notes && <div className="text-[13px] text-ink mt-1.5">{p.notes}</div>}
           {p.volunteers && <div className="text-[12px] text-forest font-bold mt-1">✓ {p.volunteers}</div>}
         </div>
-        {onCancel && (p.status === 'pending' || p.status === 'scheduled' || p.status === 'confirmed') && (
-          <button onClick={onCancel} className="haptic text-muted hover:text-clay rounded-full p-1.5"><X size={16} /></button>
+        {(p.status === 'pending' || p.status === 'scheduled' || p.status === 'confirmed') && (
+          <div className="flex items-center gap-1">
+            {onEdit && (
+              <button onClick={onEdit} title="Edit pickup"
+                      className="haptic text-muted hover:text-forest rounded-full p-1.5"><Edit3 size={16} /></button>
+            )}
+            {onCancel && (
+              <button onClick={onCancel} title="Cancel pickup"
+                      className="haptic text-muted hover:text-clay rounded-full p-1.5"><X size={16} /></button>
+            )}
+          </div>
         )}
       </div>
     </Card>

@@ -29,17 +29,25 @@ type Screen =
   | { kind: 'vendorPicker'; dropoffId: number; volunteerName: string; greeting: string; allSuppliers: VendorOption[] }
   // Manual entry — driver couldn't find the store in the list. Type name + address.
   | { kind: 'manualVendor'; dropoffId: number; volunteerName: string }
-  | { kind: 'stores'; dropoffId: number; volunteerName: string; stores: KioskStore[]; lines: KioskLine[] }
+  | { kind: 'stores'; dropoffId: number; volunteerName: string; stores: KioskStore[]; lines: KioskLine[]; recentCompleted?: import('./kiosk-api').KioskRecentCompleted[] }
   | { kind: 'entry';  dropoffId: number; volunteerName: string; stores: KioskStore[]; lines: KioskLine[]; store: KioskStore }
   | { kind: 'labels';  labels: KioskLabel[]; volunteerName: string };
 
 const CATEGORIES = ['Dairy', 'Produce', 'Bakery', 'Prepared', 'Frozen', 'Grocery / Dry', 'Meat / Fish', 'Other'];
 const UNITS      = ['box', 'tray', 'container', 'bag'];
 
+// Item 3: 2-minute idle → auto-return to welcome. Any pointer/key/touch resets.
+const IDLE_MS = 2 * 60 * 1000;
+
 export function KioskApp() {
   const { secret = '' } = useParams<{ secret: string }>();
   const [screen, setScreen] = useState<Screen>({ kind: 'welcome' });
   const [showHelp, setShowHelp] = useState(false);
+  // Aug 13 client redesign: Help popup → Admin button → PIN prompt → Admin Panel.
+  // Two-stage modal: PIN prompt first, then panel on success. Both are also
+  // dismissible via a Cancel/Close action so a curious driver can back out.
+  const [showAdminPin, setShowAdminPin]     = useState(false);
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
 
   // Kiosk-mode CSS on the root html: hide scroll, lock font, disable text-select
   useEffect(() => {
@@ -48,6 +56,87 @@ export function KioskApp() {
     document.body.style.cursor = 'default';
     return () => { document.documentElement.style.cssText = prev; };
   }, []);
+
+  // Aug 14 client: kiosk tablet stays on 24/7. Two mechanisms — Android
+  // MainActivity adds FLAG_KEEP_SCREEN_ON natively (primary), and this Wake
+  // Lock request covers the PWA/web-only case as belt-and-suspenders. Re-
+  // request when the tab regains visibility (OS may drop the lock on background).
+  useEffect(() => {
+    let wl: any = null;
+    async function acquire() {
+      try {
+        const nav = navigator as any;
+        if (nav.wakeLock?.request) {
+          wl = await nav.wakeLock.request('screen');
+        }
+      } catch { /* user gesture may be required first — best-effort */ }
+    }
+    void acquire();
+    function onVis() { if (document.visibilityState === 'visible') void acquire(); }
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      try { wl?.release?.(); } catch { /* ignore */ }
+    };
+  }, []);
+
+  // Task #176 (Aug 14): true kiosk lockdown. Call the native KioskLock plugin
+  // on Android to enter Lock Task Mode. If the tablet is device-owner
+  // (provisioned via `adb dpm set-device-owner`) this is silent + unbreakable;
+  // otherwise it falls back to Android's Screen Pinning UX which still needs
+  // gesture-nav to exit. Exit is via the PIN-gated Admin Panel below.
+  useEffect(() => {
+    const cap = (window as any).Capacitor;
+    if (cap?.isNativePlatform?.() !== true) return;
+    const kl = (window as any).Capacitor?.Plugins?.KioskLock;
+    if (!kl?.startLockTask) return;
+    (async () => {
+      try { await kl.startLockTask(); } catch { /* best-effort */ }
+    })();
+  }, []);
+
+  // Item 3: idle auto-return to welcome. Any pointer/key/touch/scroll resets
+  // the countdown. Skipped when already on welcome.
+  useEffect(() => {
+    if (screen.kind === 'welcome') return;
+    let t: any = null;
+    const reset = () => {
+      if (t) clearTimeout(t);
+      t = setTimeout(() => {
+        // Aug 15 audit: also close any admin surfaces so a coordinator who
+        // walked away doesn't leave a PIN prompt / Admin Panel modal on top
+        // of the fresh Welcome screen.
+        setScreen({ kind: 'welcome' });
+        setShowHelp(false);
+        setShowAdminPin(false);
+        setShowAdminPanel(false);
+      }, IDLE_MS);
+    };
+    reset();
+    const events = ['pointerdown', 'keydown', 'touchstart', 'wheel', 'mousemove'];
+    events.forEach((e) => window.addEventListener(e, reset, { passive: true }));
+    return () => {
+      if (t) clearTimeout(t);
+      events.forEach((e) => window.removeEventListener(e, reset));
+    };
+  }, [screen.kind]);
+
+  // ?dropoffId=<N> — jump straight to the Labels/Print screen for an
+  // existing drop-off. Skips the sign-in dance entirely; the URL is the
+  // whole auth (kiosk secret) + the drop-off id. Useful for a "one URL,
+  // one tap" print test from any browser on the LAN. Completes the
+  // drop-off server-side (idempotent) so the labels manifest exists.
+  const [dropoffJumpErr, setDropoffJumpErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (!secret) return;
+    const jumpId = Number(new URLSearchParams(window.location.search).get('dropoffId') || 0);
+    if (!jumpId) return;
+    if (screen.kind !== 'welcome') return;
+    kiosk.complete(secret, jumpId, null, null)
+      .then((r) => setScreen({ kind: 'labels', labels: r.data.labels, volunteerName: '6-Label Print Test' }))
+      .catch((e: any) => setDropoffJumpErr(String(e?.message || e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [secret]);
 
   // One-time printer config via URL params. Load once with
   // `?printerHost=192.168.1.2&printerPort=9100` and the tablet persists
@@ -69,19 +158,24 @@ export function KioskApp() {
 
   return (
     <FullPage>
+      {dropoffJumpErr && (
+        <div className="fixed top-4 left-4 right-4 z-[9000] rounded-[10px] bg-clay text-paper px-4 py-2 text-[13px] font-bold text-center">
+          ?dropoffId= jump failed: {dropoffJumpErr}
+        </div>
+      )}
       {screen.kind === 'welcome'  && <Welcome onStart={() => setScreen({ kind: 'signin' })} />}
       {screen.kind === 'signin'   && <Signin  secret={secret}
-        onSigned={(d) => setScreen({ kind: 'stores', dropoffId: d.dropoffId, volunteerName: d.volunteerName, stores: d.stores, lines: [] })}
+        onSigned={(d) => setScreen({ kind: 'stores', dropoffId: d.dropoffId, volunteerName: d.volunteerName, stores: d.stores, lines: [], recentCompleted: d.recentCompleted })}
         onAdminPick={(p) => setScreen({ kind: 'picker', ...p })}
         onNamePick={(code, cs) => setScreen({ kind: 'namePicker', code, candidates: cs })}
         onWalkIn={(w) => setScreen({ kind: 'vendorPicker', ...w })} />}
       {screen.kind === 'namePicker' && <NamePicker secret={secret} screen={screen}
         onCancel={() => setScreen({ kind: 'signin' })}
-        onSigned={(d) => setScreen({ kind: 'stores', dropoffId: d.dropoffId, volunteerName: d.volunteerName, stores: d.stores, lines: [] })}
+        onSigned={(d) => setScreen({ kind: 'stores', dropoffId: d.dropoffId, volunteerName: d.volunteerName, stores: d.stores, lines: [], recentCompleted: d.recentCompleted })}
         onWalkIn={(w) => setScreen({ kind: 'vendorPicker', ...w })} />}
       {screen.kind === 'picker'   && <DriverPicker secret={secret} screen={screen}
         onCancel={() => setScreen({ kind: 'signin' })}
-        onSigned={(d) => setScreen({ kind: 'stores', dropoffId: d.dropoffId, volunteerName: d.volunteerName, stores: d.stores, lines: [] })} />}
+        onSigned={(d) => setScreen({ kind: 'stores', dropoffId: d.dropoffId, volunteerName: d.volunteerName, stores: d.stores, lines: [], recentCompleted: d.recentCompleted })} />}
       {screen.kind === 'vendorPicker' && <VendorPicker screen={screen}
         onPick={(store) => setScreen({ kind: 'stores', dropoffId: screen.dropoffId, volunteerName: screen.volunteerName, stores: [store], lines: [] })}
         onManualEntry={() => setScreen({ kind: 'manualVendor', dropoffId: screen.dropoffId, volunteerName: screen.volunteerName })}
@@ -98,13 +192,59 @@ export function KioskApp() {
       {screen.kind === 'labels'   && <Labels  labels={screen.labels} volunteerName={screen.volunteerName}
         kioskSecret={secret}
         onFinish={() => setScreen({ kind: 'welcome' })} />}
+      {/* Aug 13 client redesign: top-left Start Over pill removed.
+          Start Over lives inside the Help popup so the surface stays clean. */}
       {/* Always-available help — a "?" in the top-right that pops up the 5-step guide. */}
       <button onClick={() => setShowHelp(true)}
               className="fixed top-3 right-3 z-40 h-11 w-11 rounded-full bg-forest text-paper text-[22px] font-extrabold shadow-lift active:scale-95"
               aria-label="How to use this kiosk">
         ?
       </button>
-      {showHelp && <HelpOverlay onClose={() => setShowHelp(false)} />}
+      {showHelp && (
+        <HelpOverlay
+          onClose={() => setShowHelp(false)}
+          onStartOver={() => { setShowHelp(false); setScreen({ kind: 'welcome' }); }}
+          onAdmin={() => { setShowHelp(false); setShowAdminPin(true); }}
+        />
+      )}
+      {showAdminPin && (
+        <AdminPinPrompt
+          secret={secret}
+          onCancel={() => setShowAdminPin(false)}
+          onOk={() => { setShowAdminPin(false); setShowAdminPanel(true); }}
+        />
+      )}
+      {showAdminPanel && (
+        <AdminPanel
+          onClose={() => setShowAdminPanel(false)}
+          onStartOver={() => { setShowAdminPanel(false); setScreen({ kind: 'welcome' }); }}
+          onForceRefresh={async () => {
+            // Nuke the SW + all caches, then hard-reload. Belt + suspenders so a
+            // wedged bundle unwedges without the tech coming on-site.
+            try {
+              if ('serviceWorker' in navigator) {
+                const regs = await navigator.serviceWorker.getRegistrations();
+                await Promise.all(regs.map((r) => r.unregister()));
+              }
+              if ('caches' in self) {
+                const keys = await caches.keys();
+                await Promise.all(keys.map((k) => caches.delete(k)));
+              }
+            } catch { /* ignore — reload will still fetch fresh */ }
+            window.location.reload();
+          }}
+          onExitKiosk={async () => {
+            // Task #176: release Lock Task Mode BEFORE navigating out so the
+            // OS lets the user leave the app. Best-effort — safe on non-native.
+            try {
+              const kl = (window as any).Capacitor?.Plugins?.KioskLock;
+              if (kl?.stopLockTask) await kl.stopLockTask();
+            } catch { /* ignore */ }
+            kioskDevice.clear();
+            window.location.href = window.location.origin + (import.meta.env.BASE_URL || '/');
+          }}
+        />
+      )}
     </FullPage>
   );
 }
@@ -112,8 +252,16 @@ export function KioskApp() {
 /**
  * How-to overlay — mirrors the printed quick-card. Shows on top of every
  * kiosk screen so a volunteer or guest can pull it up mid-flow.
+ * Aug 13 client redesign: three bottom buttons (Got It, Start Over, Admin).
+ * Start Over used to live in a top-left pill; now it's here so the surface stays clean.
+ * Admin used to be an underlined link that immediately exited kiosk mode after a
+ * text prompt; now it opens a PIN prompt → Admin Panel.
  */
-function HelpOverlay({ onClose }: { onClose: () => void }) {
+function HelpOverlay({ onClose, onStartOver, onAdmin }: {
+  onClose: () => void;
+  onStartOver: () => void;
+  onAdmin: () => void;
+}) {
   return (
     <div onClick={onClose}
          className="fixed inset-0 z-[100] bg-ink/60 flex items-center justify-center p-6">
@@ -148,7 +296,15 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
           Something wrong? Just leave the food with a note and call the office — we'll fix it.
         </div>
 
-        <div className="mt-8 flex justify-end">
+        <div className="mt-8 flex flex-wrap items-center justify-end gap-3">
+          <button onClick={onAdmin}
+                  className="bg-cream text-ink border-2 border-line font-extrabold text-[15px] px-5 py-3 rounded-full active:scale-95">
+            Admin
+          </button>
+          <button onClick={onStartOver}
+                  className="bg-paper text-forest border-2 border-forest font-extrabold text-[16px] px-6 py-3 rounded-full active:scale-95">
+            ⌂ Start over
+          </button>
           <button onClick={onClose}
                   className="bg-forest text-paper font-extrabold text-[17px] px-8 py-3 rounded-full shadow-lift active:scale-95">
             Got it
@@ -158,6 +314,204 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
     </div>
   );
 }
+
+/**
+ * PIN prompt shown when the volunteer taps Admin in the Help popup.
+ * Verifies against portal_settings.kiosk_admin_pin on the server.
+ * Configurable from the coordinator UI so the office can rotate the PIN.
+ */
+function AdminPinPrompt({ secret, onCancel, onOk }: {
+  secret: string;
+  onCancel: () => void;
+  onOk: () => void;
+}) {
+  const [pin, setPin] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(final?: string) {
+    const p = (final ?? pin).trim();
+    if (p.length < 4) return;
+    setBusy(true); setErr(null);
+    try { await kiosk.verifyAdminPin(secret, p); onOk(); }
+    catch (e: any) {
+      setErr(e?.status === 401 ? 'Wrong PIN.' : (e?.message || 'Something went wrong.'));
+      setPin('');
+    } finally { setBusy(false); }
+  }
+  function addDigit(d: string) {
+    if (busy) return;
+    setErr(null);
+    setPin((prev) => {
+      const next = (prev + d).slice(0, 6);
+      if (next.length >= 4) setTimeout(() => submit(next), 100);
+      return next;
+    });
+  }
+  function backspace() { setErr(null); setPin((p) => p.slice(0, -1)); }
+
+  return (
+    <div onClick={onCancel} className="fixed inset-0 z-[200] bg-ink/70 flex items-center justify-center p-6">
+      <div onClick={(e) => e.stopPropagation()}
+           className="bg-paper rounded-[22px] shadow-lift w-full max-w-[420px] p-8 relative">
+        <div className="text-[13px] uppercase tracking-[.15em] text-muted font-extrabold text-center">Admin</div>
+        <div className="text-[24px] font-extrabold text-ink text-center mt-1">Enter admin PIN</div>
+        <div className="mt-6 flex justify-center gap-2">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i}
+                 className={cxKiosk('h-14 w-11 rounded-[10px] border-2 flex items-center justify-center text-[26px] font-extrabold',
+                                    pin.length > i ? 'border-forest bg-sage text-forest' : 'border-line bg-cream text-muted')}>
+              {pin.length > i ? '•' : ''}
+            </div>
+          ))}
+        </div>
+        {err && <div className="mt-3 text-[14px] text-clay font-bold text-center">{err}</div>}
+        <div className="mt-6 grid grid-cols-3 gap-2">
+          {['1','2','3','4','5','6','7','8','9'].map((d) => (
+            <button key={d} onClick={() => addDigit(d)}
+                    className="h-14 rounded-[12px] bg-cream border-2 border-line text-[22px] font-extrabold text-ink active:scale-95">{d}</button>
+          ))}
+          <button onClick={backspace}
+                  className="h-14 rounded-[12px] bg-cream border-2 border-line text-[16px] font-extrabold text-ink active:scale-95">⌫</button>
+          <button onClick={() => addDigit('0')}
+                  className="h-14 rounded-[12px] bg-cream border-2 border-line text-[22px] font-extrabold text-ink active:scale-95">0</button>
+          <button onClick={onCancel}
+                  className="h-14 rounded-[12px] bg-paper border-2 border-line text-[13px] font-bold text-muted active:scale-95">Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Admin Panel — shown after the PIN check passes.
+ * Read-only device status (battery / Wi-Fi / Bluetooth / device info) + three
+ * admin actions (Start Over, Force Refresh, Exit Kiosk Mode). Everything the
+ * office might need without leaving kiosk mode to check the tablet.
+ */
+function AdminPanel({ onClose, onStartOver, onForceRefresh, onExitKiosk }: {
+  onClose: () => void;
+  onStartOver: () => void;
+  onForceRefresh: () => void | Promise<void>;
+  onExitKiosk: () => void;
+}) {
+  const [battery, setBattery]   = useState<{ level: number | null; charging: boolean | null } | null>(null);
+  const [online, setOnline]     = useState<boolean>(navigator.onLine);
+  const [connKind, setConnKind] = useState<string>('unknown');
+  const [btInfo, setBtInfo]     = useState<string>('checking…');
+  const [hidList, setHidList]   = useState<string[]>([]);
+  const [confirmExit, setConfirmExit] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const b: any = await (navigator as any).getBattery?.();
+        if (b && live) {
+          const read = () => setBattery({ level: b.level, charging: b.charging });
+          read();
+          b.addEventListener('levelchange', read);
+          b.addEventListener('chargingchange', read);
+        }
+      } catch { /* Battery API not exposed — leave null. */ }
+    })();
+    const onNet = () => setOnline(navigator.onLine);
+    window.addEventListener('online', onNet); window.addEventListener('offline', onNet);
+    const conn = (navigator as any).connection;
+    if (conn) setConnKind(String(conn.effectiveType || conn.type || 'unknown'));
+    // Web Bluetooth availability. Full pairing needs a user gesture, but we can
+    // at least tell the admin whether the browser supports it at all.
+    (async () => {
+      const bt: any = (navigator as any).bluetooth;
+      if (!bt) { setBtInfo('Not supported on this browser'); return; }
+      try {
+        const avail = await bt.getAvailability?.();
+        setBtInfo(avail === false ? 'Adapter off / unavailable' : 'Available');
+      } catch { setBtInfo('Available'); }
+    })();
+    // HID (paired Bluetooth / USB keyboards, scanners). getDevices() returns
+    // devices the user has previously granted the site access to.
+    (async () => {
+      try {
+        const hid: any = (navigator as any).hid;
+        if (!hid?.getDevices) return;
+        const devs = await hid.getDevices();
+        setHidList((devs || []).map((d: any) => d.productName || `HID ${d.vendorId}:${d.productId}`));
+      } catch { /* ignore */ }
+    })();
+    return () => {
+      live = false;
+      window.removeEventListener('online', onNet); window.removeEventListener('offline', onNet);
+    };
+  }, []);
+
+  const bLevel = battery?.level == null ? '—' : `${Math.round((battery.level || 0) * 100)}%`;
+  const bCharge = battery?.charging == null ? '' : battery.charging ? ' · charging' : ' · on battery';
+
+  return (
+    <div onClick={onClose} className="fixed inset-0 z-[200] bg-ink/70 flex items-center justify-center p-6">
+      <div onClick={(e) => e.stopPropagation()}
+           className="bg-paper rounded-[22px] shadow-lift w-full max-w-[720px] max-h-[92vh] overflow-y-auto p-8 relative">
+        <button onClick={onClose}
+                className="absolute top-3 right-3 h-11 w-11 rounded-full bg-cream text-ink text-[22px] font-extrabold active:scale-95"
+                aria-label="Close admin panel">×</button>
+        <div className="text-[13px] uppercase tracking-[.15em] text-muted font-extrabold">Admin panel</div>
+        <div className="text-[26px] font-extrabold text-forest mt-1 leading-tight">Tablet status &amp; actions</div>
+
+        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <StatusTile label="Battery" value={`${bLevel}${bCharge}`} />
+          <StatusTile label="Internet" value={online ? `Online (${connKind})` : 'Offline'} tone={online ? 'ok' : 'warn'} />
+          <StatusTile label="Bluetooth" value={btInfo} />
+          <StatusTile label="Paired input devices" value={hidList.length ? hidList.join(', ') : 'None granted'} />
+          <StatusTile label="Screen" value={`${window.screen.width} × ${window.screen.height}`} />
+          <StatusTile label="Kiosk build" value={(import.meta.env.VITE_APP_VERSION as string | undefined) || 'web'} />
+        </div>
+
+        <div className="mt-7 text-[13px] uppercase tracking-[.15em] text-muted font-extrabold">Actions</div>
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <button onClick={onStartOver}
+                  className="h-14 rounded-[12px] bg-paper border-2 border-forest text-forest text-[16px] font-extrabold active:scale-95">
+            ⌂ Start Over
+          </button>
+          <button onClick={onForceRefresh}
+                  className="h-14 rounded-[12px] bg-cream border-2 border-line text-ink text-[16px] font-extrabold active:scale-95">
+            ↻ Force Refresh
+          </button>
+          {!confirmExit ? (
+            <button onClick={() => setConfirmExit(true)}
+                    className="h-14 rounded-[12px] bg-clay text-paper text-[16px] font-extrabold active:scale-95">
+              ⎋ Exit Kiosk Mode
+            </button>
+          ) : (
+            <button onClick={onExitKiosk}
+                    className="h-14 rounded-[12px] bg-clay text-paper text-[16px] font-extrabold active:scale-95 animate-pulse">
+              Tap again to confirm
+            </button>
+          )}
+        </div>
+
+        <div className="mt-6 text-[13px] text-muted">
+          Force Refresh clears the app cache and reloads. Use it if the kiosk feels stuck.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatusTile({ label, value, tone }: { label: string; value: string; tone?: 'ok' | 'warn' }) {
+  const bar = tone === 'warn' ? 'bg-clay' : tone === 'ok' ? 'bg-forest' : 'bg-muted';
+  return (
+    <div className="rounded-[14px] border-2 border-line bg-cream/60 p-3 flex flex-col">
+      <div className="flex items-center gap-2">
+        <span className={cxKiosk('inline-block h-2 w-2 rounded-full', bar)} />
+        <span className="text-[12px] uppercase tracking-[.1em] text-muted font-extrabold">{label}</span>
+      </div>
+      <div className="text-[16px] font-bold text-ink mt-1 break-words">{value}</div>
+    </div>
+  );
+}
+
+function cxKiosk(...cls: (string | false | null | undefined)[]) { return cls.filter(Boolean).join(' '); }
 
 function HelpStep({ n, title, children }: { n: string; title: string; children?: React.ReactNode }) {
   return (
@@ -174,22 +528,9 @@ function HelpStep({ n, title, children }: { n: string; title: string; children?:
 // ---------------- Screens ----------------
 
 function Welcome({ onStart }: { onStart: () => void }) {
-  // 5-tap escape: five taps on the "Kiosk mode" footer within 3s clears the
-  // device flag and reloads to the normal portal. Hidden from drivers on
-  // purpose — it looks like a plain text label.
-  const tapsRef = useRef<number[]>([]);
-  function onEscapeTap() {
-    const now = Date.now();
-    tapsRef.current = tapsRef.current.filter((t) => now - t < 3000).concat(now);
-    if (tapsRef.current.length >= 5) {
-      kioskDevice.clear();
-      // Reset to root — App.tsx will render the normal login/portal now
-      // that localStorage is clear. Use hard reload to drop any in-flight
-      // state (queries, session storage, sw registrations for the kiosk).
-      window.location.href = window.location.origin + (import.meta.env.BASE_URL || '/');
-    }
-  }
-
+  // Aug 13 client redesign: the hidden 5-tap "Kiosk mode" escape is GONE.
+  // Admin access is now the single Admin button inside the Help (?) popup
+  // — one entry point, PIN-gated, opens the Admin Panel (not an immediate exit).
   return (
     <Center>
       <div className="text-[64px] font-extrabold text-forest leading-tight text-center">Zeh L'Zeh</div>
@@ -198,17 +539,13 @@ function Welcome({ onStart }: { onStart: () => void }) {
         Welcome back. Tap Start to sign in your pickup.
       </div>
       <PrimaryButton onClick={onStart} className="mt-10">Start sign-in</PrimaryButton>
-      <button onClick={onEscapeTap}
-              className="fixed bottom-4 right-4 text-[11px] text-muted/50 tracking-wide select-none">
-        Kiosk mode
-      </button>
     </Center>
   );
 }
 
 function Signin({ secret, onSigned, onAdminPick, onNamePick, onWalkIn }: {
   secret: string;
-  onSigned: (d: { dropoffId: number; volunteerName: string; stores: KioskStore[] }) => void;
+  onSigned: (d: { dropoffId: number; volunteerName: string; stores: KioskStore[]; recentCompleted?: import('./kiosk-api').KioskRecentCompleted[] }) => void;
   onAdminPick: (p: { adminName: string; adminUsername: string; adminPassword: string; drivers: PickerDriver[] }) => void;
   onNamePick: (code: string, candidates: NameCandidate[]) => void;
   onWalkIn: (w: { dropoffId: number; volunteerName: string; greeting: string; allSuppliers: VendorOption[] }) => void;
@@ -288,6 +625,31 @@ function Signin({ secret, onSigned, onAdminPick, onNamePick, onWalkIn }: {
   }
   function backspace() { setErr(null); setCode((p) => p.slice(0, -1)); }
 
+  // Item 1: Bluetooth keyboard support on the 4-digit PIN screen. Number keys 0-9,
+  // Backspace, and Enter (submits current code if 4 digits). Active only on the
+  // numeric-pad screen — not guestMode / pwMode which have their own inputs.
+  useEffect(() => {
+    if (guestMode || pwMode) return;
+    function onKey(e: KeyboardEvent) {
+      if (busy) return;
+      if ((e as any).isComposing) return;
+      // Skip if the user is typing in an input (shouldn't happen on the PIN screen
+      // — no <input> is rendered — but future-proof).
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || (t as any).isContentEditable)) return;
+      if (/^[0-9]$/.test(e.key)) { e.preventDefault(); addDigit(e.key); return; }
+      if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); backspace(); return; }
+      if (e.key === 'Enter') {
+        if (code.length === 4) { e.preventDefault(); void submitCode(code); }
+        return;
+      }
+      if (e.key === 'Escape') { e.preventDefault(); setCode(''); setErr(null); return; }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [guestMode, pwMode, busy, code]);
+
   if (guestMode) {
     return (
       <Center>
@@ -337,14 +699,19 @@ function Signin({ secret, onSigned, onAdminPick, onNamePick, onWalkIn }: {
     );
   }
 
+  // Item 2: PIN screen laid out top-anchored (justify-start + pt-16) instead of
+  // vertically centered — on ~1024x768 landscape tablets the heading was clipped
+  // under the top-right "?" pill when centered. This guarantees the heading is
+  // always visible below the top pills. Whole column also scrolls if needed.
   return (
-    <Center>
+    <div className="h-full w-full flex flex-col items-center pt-16 pb-6 px-6 overflow-y-auto">
       <Big>Enter your 4-digit code</Big>
       <div className="text-[19px] text-muted mt-3 text-center max-w-[540px]">
         The last 4 digits of the phone number we have on file.
+        <span className="hidden sm:inline"> Bluetooth keyboards work — just start typing.</span>
       </div>
       {/* Code display */}
-      <div className="mt-8 flex gap-4">
+      <div className="mt-6 flex gap-4">
         {[0, 1, 2, 3].map((i) => (
           <div key={i}
                className={`w-16 h-20 rounded-[14px] border-[2px] flex items-center justify-center text-[38px] font-extrabold ${code[i] ? 'bg-sage/50 border-forest text-forest' : 'bg-paper border-line text-muted'}`}>
@@ -352,10 +719,10 @@ function Signin({ secret, onSigned, onAdminPick, onNamePick, onWalkIn }: {
           </div>
         ))}
       </div>
-      {err && <div className="text-clay text-[18px] font-bold text-center bg-clay/10 rounded-[16px] py-3 px-4 mt-6 max-w-[540px]">{err}</div>}
+      {err && <div className="text-clay text-[18px] font-bold text-center bg-clay/10 rounded-[16px] py-3 px-4 mt-4 max-w-[540px]">{err}</div>}
 
       {/* Number pad */}
-      <div className="mt-8 grid grid-cols-3 gap-3 w-full max-w-[400px]">
+      <div className="mt-6 grid grid-cols-3 gap-3 w-full max-w-[400px]">
         {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => (
           <KeyBtn key={n} onClick={() => addDigit(String(n))}>{n}</KeyBtn>
         ))}
@@ -364,7 +731,7 @@ function Signin({ secret, onSigned, onAdminPick, onNamePick, onWalkIn }: {
         <KeyBtn onClick={() => setCode('')} muted>clear</KeyBtn>
       </div>
 
-      <div className="mt-10 flex flex-col items-center gap-2">
+      <div className="mt-6 flex flex-col items-center gap-2">
         <button onClick={() => { setGuestMode(true); setErr(null); }}
                 className="text-[16px] font-extrabold text-forest underline underline-offset-2 py-2">
           Continue as guest →
@@ -374,7 +741,7 @@ function Signin({ secret, onSigned, onAdminPick, onNamePick, onWalkIn }: {
           Sign in with email &amp; password instead
         </button>
       </div>
-    </Center>
+    </div>
   );
 }
 
@@ -391,7 +758,7 @@ function NamePicker({ secret, screen, onCancel, onSigned, onWalkIn }: {
   secret: string;
   screen: Extract<Screen, { kind: 'namePicker' }>;
   onCancel: () => void;
-  onSigned: (d: { dropoffId: number; volunteerName: string; stores: KioskStore[] }) => void;
+  onSigned: (d: { dropoffId: number; volunteerName: string; stores: KioskStore[]; recentCompleted?: import('./kiosk-api').KioskRecentCompleted[] }) => void;
   onWalkIn: (w: { dropoffId: number; volunteerName: string; greeting: string; allSuppliers: VendorOption[] }) => void;
 }) {
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -491,16 +858,23 @@ function ManualVendor({ secret, screen: _screen, onCreated, onCancel }: {
   onCreated: (store: KioskStore) => void;
   onCancel: () => void;
 }) {
-  const [name, setName]       = useState('');
-  const [address, setAddress] = useState('');
-  const [busy, setBusy]       = useState(false);
-  const [err, setErr]         = useState<string | null>(null);
+  const [name, setName]         = useState('');
+  const [address, setAddress]   = useState('');
+  const [hashgacha, setHashgacha] = useState('');
+  const [catering, setCatering]   = useState('');
+  const [busy, setBusy]         = useState(false);
+  const [err, setErr]           = useState<string | null>(null);
 
   async function submit() {
     if (!name.trim()) { setErr('Please enter the store or supplier name.'); return; }
     setBusy(true); setErr(null);
     try {
-      const r = await kiosk.manualVendor(secret, { name: name.trim(), address: address.trim() });
+      const r = await kiosk.manualVendor(secret, {
+        name: name.trim(),
+        address: address.trim(),
+        hashgacha: hashgacha.trim(),
+        catering_company: catering.trim(),
+      });
       onCreated({
         supplierId:    r.data.supplierId,
         supplierName:  r.data.supplierName,
@@ -513,7 +887,7 @@ function ManualVendor({ secret, screen: _screen, onCreated, onCancel }: {
   }
 
   return (
-    <div className="h-full w-full grid grid-rows-[auto_1fr_auto] gap-4 p-8">
+    <div className="h-full w-full grid grid-rows-[auto_1fr_auto] gap-4 p-8 pt-16 overflow-y-auto">
       <div>
         <div className="text-[32px] font-extrabold text-forest">Add a new pickup location</div>
         <div className="text-[18px] text-muted mt-2">
@@ -524,7 +898,7 @@ function ManualVendor({ secret, screen: _screen, onCreated, onCancel }: {
         <div>
           <div className="text-[15px] font-extrabold uppercase tracking-[.08em] text-muted mb-2">Store / supplier name</div>
           <input value={name} onChange={(e) => setName(e.target.value)} autoFocus
-                 placeholder='e.g. "Costco Monsey"'
+                 placeholder='e.g. "Costco Monsey" or hall / venue name'
                  className="w-full rounded-[16px] border-[2px] border-line bg-paper px-5 py-4 text-[22px] outline-none focus:border-forest" />
         </div>
         <div>
@@ -533,8 +907,28 @@ function ManualVendor({ secret, screen: _screen, onCreated, onCancel }: {
             value={address}
             onChange={setAddress}
             placeholder="Start typing an address…"
+            className="w-full rounded-[16px] border-[2px] border-line bg-paper px-5 py-4 text-[22px] outline-none focus:border-forest"
           />
           <div className="text-[13px] text-muted mt-1">Suggestions from Google Maps.</div>
+        </div>
+        {/* Item 5: optional event-pickup fields. Hashgacha helps us tag kashrus;
+            Catering, if filled, overrides the label supplier name to the catering company. */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <div className="text-[15px] font-extrabold uppercase tracking-[.08em] text-muted mb-2">Hashgacha (optional)</div>
+            <input value={hashgacha} onChange={(e) => setHashgacha(e.target.value)}
+                   placeholder='e.g. "OU", "Vaad Monsey"'
+                   className="w-full rounded-[16px] border-[2px] border-line bg-paper px-5 py-3 text-[19px] outline-none focus:border-forest" />
+          </div>
+          <div>
+            <div className="text-[15px] font-extrabold uppercase tracking-[.08em] text-muted mb-2">Catering company (optional)</div>
+            <input value={catering} onChange={(e) => setCatering(e.target.value)}
+                   placeholder='e.g. "Prestige Caterers"'
+                   className="w-full rounded-[16px] border-[2px] border-line bg-paper px-5 py-3 text-[19px] outline-none focus:border-forest" />
+            {catering.trim() && (
+              <div className="text-[12px] text-forest font-bold mt-1">↑ Labels will print with this as the supplier.</div>
+            )}
+          </div>
         </div>
         {err && <div className="text-clay text-[17px] font-bold bg-clay/10 rounded-[12px] py-2 px-3">{err}</div>}
       </div>
@@ -555,7 +949,7 @@ function ManualVendor({ secret, screen: _screen, onCreated, onCancel }: {
 function DriverPicker({ secret, screen, onSigned, onCancel }: {
   secret: string;
   screen: Extract<Screen, { kind: 'picker' }>;
-  onSigned: (d: { dropoffId: number; volunteerName: string; stores: KioskStore[] }) => void;
+  onSigned: (d: { dropoffId: number; volunteerName: string; stores: KioskStore[]; recentCompleted?: import('./kiosk-api').KioskRecentCompleted[] }) => void;
   onCancel: () => void;
 }) {
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -671,6 +1065,34 @@ function Stores({ secret, screen, onPickStore, onLabels, onBack }:
           );
         })}
       </div>
+      {/* C5 Aug 13 — recently-completed drop-offs from the last 14 days
+          so a driver can identify a pickup they need reprinted labels for.
+          Reprint action lives at the office for now (they can look up ref#). */}
+      {screen.recentCompleted && screen.recentCompleted.length > 0 && (
+        <div className="mt-10 w-full max-w-[720px]">
+          <div className="text-[15px] uppercase tracking-[.15em] font-extrabold text-muted mb-2">Recently completed</div>
+          <div className="space-y-2">
+            {screen.recentCompleted.map((rc) => (
+              <div key={rc.pickupId}
+                   className="w-full flex items-center gap-4 rounded-[16px] border border-line bg-cream/60 px-5 py-3 text-left">
+                <span className="text-[15px] font-extrabold tracking-widest bg-paper border border-line text-forest px-2.5 py-0.5 rounded-full">
+                  #{rc.refNumber ?? rc.pickupId}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[19px] font-extrabold text-ink truncate">{rc.supplierName}</div>
+                  <div className="text-[14px] text-muted mt-0.5">
+                    {rc.completedAt
+                      ? new Date(rc.completedAt).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit', hour12:true })
+                      : String(rc.scheduledDate).slice(0, 10)}
+                    {' · '}
+                    {rc.labelsPrinted ? <span className="text-forest font-bold">Labels printed</span> : <span className="text-clay font-bold">No labels yet</span>}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {err && <div className="text-clay text-[19px] font-bold text-center bg-clay/10 rounded-[16px] py-3 px-4 mt-6 max-w-[560px]">{err}</div>}
       <PrimaryButton onClick={finish} disabled={!allStoresHaveLines || finishing} className="mt-10">
         {finishing
