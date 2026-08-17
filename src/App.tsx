@@ -53,14 +53,21 @@ function UpdateGate({ children }: { children: React.ReactNode }) {
   const [dismissed, setDismissed] = useState<boolean>(() => {
     try { return sessionStorage.getItem('zlz_update_banner_dismissed') === '1'; } catch { return false; }
   });
-  const isNative = (() => {
-    const cap = (window as any).Capacitor;
-    return cap?.isNativePlatform?.() === true;
-  })();
+  const cap = (window as any).Capacitor;
+  const isNative = cap?.isNativePlatform?.() === true;
+  // abc868 (Aug 17): the C12 update-gate compares __APP_VERSION_CODE__
+  // (baked from Android's build.gradle versionCode) against the Android
+  // minSupportedVersionCode returned by /app-version. That mapping is
+  // Android-only — an iOS build carries the same baked versionCode but
+  // its own separate release track, so on iOS the compare is meaningless
+  // AND the "Open Play Store" CTA is wrong. TestFlight / App Store
+  // already prompt iOS users to update, so skip the gate on iOS entirely.
+  const isIOS = cap?.getPlatform?.() === 'ios';
+  const isAndroidNative = isNative && !isIOS;
   const q = useQuery({
     queryKey: ['app-version'],
     queryFn: appVersion.get,
-    enabled: isNative,
+    enabled: isAndroidNative,
     staleTime: 5 * 60_000,
     retry: 0,
   });
@@ -69,8 +76,8 @@ function UpdateGate({ children }: { children: React.ReactNode }) {
   const minSup    = q.data?.data.android.minSupportedVersionCode ?? null;
   const playUrl   = q.data?.data.android.playStoreUrl ?? 'https://play.google.com/store';
 
-  const mustUpdate = isNative && minSup != null && installed > 0 && installed < minSup;
-  const wantUpdate = isNative && latest != null && installed > 0 && installed < latest;
+  const mustUpdate = isAndroidNative && minSup != null && installed > 0 && installed < minSup;
+  const wantUpdate = isAndroidNative && latest != null && installed > 0 && installed < latest;
 
   if (mustUpdate) {
     return (
