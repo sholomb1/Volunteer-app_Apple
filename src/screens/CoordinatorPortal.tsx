@@ -14,11 +14,12 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import L from 'leaflet';
 import { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { LayoutGrid, Calendar, Users, Store, BarChart3, LogOut, MessageSquare, Repeat, ClipboardList, Settings, MapPin, ShieldCheck, X } from 'lucide-react';
-import { api, broadcast, canWrite, dm, getUser, location as locationApi, smsInbox, type SignupRow } from '../api';
+import { api, broadcast, canWrite, dm, getUser, location as locationApi, smsInbox, smsThreads, onDuty, sse, upcomingSms, type SignupRow } from '../api';
 import { SlotAvatars, SlotLabel, cx } from '../design';
 import { ChatThread } from '../chat-thread';
-import { SuppliersPanel, VolunteersPanel, SteadyPickupsPanel, SignInPanel, SettingsPanel, NeighborhoodsPanel, CoveragePanel, QuickPickupModal, ChangePasswordPanel, BroadcastPanel, SmsComposerPanel, SmsGroupsPanel, SmsThreadsPanel, SmsDispatchersPanel, DispatchersPanel, SupplierForm, SteadyForm, ShiftsPanel, CenterHelpStandalonePanel } from '../portal-sections';
+import { SuppliersPanel, VolunteersPanel, SteadyPickupsPanel, AppUsagePanel, KioskActivityPanel, SettingsPanel, NeighborhoodsPanel, CoveragePanel, QuickPickupModal, ChangePasswordPanel, BroadcastPanel, SmsComposerPanel, SmsGroupsPanel, SmsThreadsPanel, SmsDispatchersPanel, DispatchersPanel, DispatchersRosterPanel, SupplierForm, SteadyForm, ShiftsPanel, CenterHelpStandalonePanel, UpcomingSmsPanel, WhatsappAdminPanel } from '../portal-sections';
 // Tabbed wrapper components consolidating the "Chat" and "Admin" sub-items
 // (batch abc820 Aug 11 · nav consolidation). Defined below in this file.
 import { ProspectsPanel, NeedsConfirmationSection } from '../prospects-and-confirmation';
@@ -28,8 +29,9 @@ import { PortalSearchBar } from '../portal-search';
 import { CalendarPanel } from './CalendarPanel';
 import { AdminPickupDetail } from './AdminPickupDetail';
 import { Plus, KeyRound, UserPlus2 } from 'lucide-react';
+import { nyToday } from '../time-format';
 
-type TabKey = 'calendar' | 'live' | 'pickups' | 'volunteers' | 'suppliers' | 'reports' | 'chat-stores' | 'chat-volunteers' | 'sms-combo' | 'dispatchers-combo' | 'steady' | 'shifts' | 'center-help' | 'signin' | 'settings' | 'neighborhoods' | 'coverage' | 'change-password' | 'recruiting' | 'prospects';
+type TabKey = 'calendar' | 'live' | 'pickups' | 'volunteers' | 'suppliers' | 'reports' | 'chat-stores' | 'chat-volunteers' | 'sms-combo' | 'dispatchers-combo' | 'steady' | 'shifts' | 'center-help' | 'settings' | 'neighborhoods' | 'coverage' | 'change-password' | 'recruiting' | 'prospects' | 'app-usage' | 'kiosk-activity';
 
 const NAV_ITEMS: { key: TabKey; label: string; icon: any; section?: 'top' | 'chat' | 'admin' }[] = [
   // client Aug 13 (C6) — Live Board is the default landing again; Calendar
@@ -53,7 +55,10 @@ const NAV_ITEMS: { key: TabKey; label: string; icon: any; section?: 'top' | 'cha
   { key: 'sms-combo',      label: 'SMS Composer & Broadcast', icon: MessageSquare, section: 'chat' },
   // Admin section — Dispatchers combines "Manage dispatchers" + "Driver-reply SMS".
   { key: 'dispatchers-combo', label: 'Dispatchers',   icon: ShieldCheck,   section: 'admin' },
-  { key: 'signin',         label: 'Office Sign-In', icon: ClipboardList, section: 'admin' },
+  // Aug 23 client fix 4: Office Sign-In removed from nav. Legacy tool the
+  // client no longer uses; Kiosk Activity replaces it.
+  { key: 'kiosk-activity', label: 'Kiosk Activity', icon: ClipboardList, section: 'admin' },
+  { key: 'app-usage',      label: 'App Usage',      icon: BarChart3,     section: 'admin' },
   { key: 'neighborhoods',  label: 'Neighborhoods',  icon: MapPin,        section: 'admin' },
   { key: 'settings',       label: 'Settings',       icon: Settings,      section: 'admin' },
   { key: 'change-password',label: 'Change password',icon: KeyRound,      section: 'admin' },
@@ -68,6 +73,11 @@ type PiRow = {
   contact_name: string | null; contact_phone: string | null;
   pickup_address: string | null;
   is_one_time?: boolean;
+  // xyz122 test-mode flag: TRUE = coordinator created this as a dry-run.
+  // Backend hides it from every driver-facing surface; the Live Board shows
+  // a small TEST badge next to the label so the office can spot it.
+  is_test?: boolean;
+  ref_number?: string | null;
   posted_via_supplier?: boolean;
   must_pickup_by?: string | null;
   notes: string | null; food_description: string | null; slots_capacity: number;
@@ -121,12 +131,20 @@ export function CoordinatorPortal() {
   // Pickups feed range: today through +7d for the live board is fine on its
   // own, but the Pickups tab's Completed/History sub-tabs need up to 60 days
   // back. Widen the shared fetch so both surfaces work off one cache entry.
-  const today    = new Date().toISOString().slice(0, 10);
+  // NY-anchored — toISOString().slice(0,10) reports UTC and rolls the day
+  // over at 8 PM NY (EDT), hiding evening pickups from tonight's board.
+  const today    = nyToday();
   const fromDate = new Date(Date.now() - 60 * 86400e3).toISOString().slice(0, 10);
   const inAMonth = new Date(Date.now() + 30 * 86400e3).toISOString().slice(0, 10);
   const pickups = useQuery({
     queryKey: ['admin-pickups', today],
     queryFn:  () => api<{ data: PiRow[] }>(`/api/pickup-instances?from=${fromDate}&to=${inAMonth}`),
+    // abc881 (Aug 19): admin was seeing claimed pickups still bucketed under
+    // "Looking for a driver" because the query only refreshed on manual
+    // reload. Poll every 30s so an SMS-claim / app-claim from another surface
+    // shows up in the admin's Live Board within a normal glance.
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
   });
   const suppliers = useQuery({
     queryKey: ['admin-suppliers'],
@@ -137,8 +155,81 @@ export function CoordinatorPortal() {
     queryFn:  () => api<{ data: any[] }>('/api/volunteers?limit=500'),
   });
 
+  // abc882 (Aug 19): real-time push. Opens a Server-Sent Events connection to
+  // /api/pickup-events/stream so claim/release/assign/reschedule/dismiss/
+  // broadcast events invalidate ['admin-pickups'] the instant the DB commits
+  // instead of waiting for the 30s poll. Poll stays as fallback in case the
+  // stream is torn down for a long time.
+  //
+  // Reconnect: EventSource has native reconnect, but on hard failures (401 for
+  // an expired nonce, network death) we manually re-open with exponential
+  // backoff capped at 30s. `liveOpen` drives the little green/grey dot next
+  // to the Live Board title so dispatch knows the wire is warm.
+  const [liveOpen, setLiveOpen] = useState(false);
+  useEffect(() => {
+    const staff = canWrite(user?.role) || user?.role === 'viewer';
+    if (!staff) return;
+    let es: EventSource | null = null;
+    let cancelled = false;
+    let backoff = 1000;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    // Tier-2 fix #9: the dot used to flip grey on the first error event and
+    // strobe every time EventSource wobbled — even though its own reconnect
+    // was still winning. Only flip grey after N consecutive failures so
+    // normal transient noise (a single reconnect blip) stays green.
+    const ERROR_STREAK_TO_GREY = 3;
+    let errorStreak = 0;
 
-  const supplierPlaces: Place[] = (suppliers.data?.data ?? []).slice(0, 14).map((s: any) => ({
+    const connect = async () => {
+      if (cancelled) return;
+      try {
+        es = await sse.connectPickupEvents();
+        es.addEventListener('open', () => {
+          backoff = 1000;
+          errorStreak = 0;
+          setLiveOpen(true);
+        });
+        es.addEventListener('pickup-changed', () => {
+          // Any real event = the wire is warm. Reset the failure streak so a
+          // burst of activity doesn't leave stale error credit lying around.
+          errorStreak = 0;
+          setLiveOpen(true);
+          qc.invalidateQueries({ queryKey: ['admin-pickups'] });
+        });
+        es.addEventListener('error', () => {
+          errorStreak++;
+          if (errorStreak >= ERROR_STREAK_TO_GREY) setLiveOpen(false);
+          // EventSource will try its own reconnect first — only escalate to a
+          // manual re-open if the socket has closed permanently.
+          if (es && es.readyState === EventSource.CLOSED) {
+            try { es.close(); } catch { /* already closed */ }
+            es = null;
+            const delay = backoff;
+            backoff = Math.min(backoff * 2, 30_000);
+            retryTimer = setTimeout(connect, delay);
+          }
+        });
+      } catch {
+        errorStreak++;
+        if (errorStreak >= ERROR_STREAK_TO_GREY) setLiveOpen(false);
+        const delay = backoff;
+        backoff = Math.min(backoff * 2, 30_000);
+        retryTimer = setTimeout(connect, delay);
+      }
+    };
+    void connect();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      if (es) { try { es.close(); } catch { /* ignore */ } }
+      setLiveOpen(false);
+    };
+    // qc + user role are stable for the tab's lifetime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const supplierPlaces: Place[] = (suppliers.data?.data ?? []).slice(0, 200).map((s: any) => ({
     id: s.id, name: s.name, status: s.status ?? 'active',
   }));
 
@@ -148,9 +239,11 @@ export function CoordinatorPortal() {
   const showSuppliers  = tab === 'live' || tab === 'suppliers';
   const showVolunteers = tab === 'live' || tab === 'volunteers';
 
-  // The map only belongs on geographic / dispatch tabs. Admin, chat, settings,
-  // reports, etc. get the full right pane width — no map underneath.
-  const mapTabs: TabKey[] = ['live', 'pickups', 'volunteers', 'suppliers', 'coverage'];
+  // Consolidated brief #8 (Aug 18): the map only belongs on the Live Board.
+  // On Volunteers / Suppliers / Pickups management screens the person or
+  // location details are what the user actually scans; the previous map
+  // squeezed those into a narrow column and added no operational value.
+  const mapTabs: TabKey[] = ['live', 'coverage'];
   const showMap = mapTabs.includes(tab);
 
   // Right-pane feed: Live Board shows the REST OF TODAY (from now onward
@@ -174,116 +267,93 @@ export function CoordinatorPortal() {
   const DONE_STATUSES = ['completed', 'delivered', 'cancelled', 'missed'];
   const livePickups = allPickups.filter((p) => {
     const status = String(p.status || '').toLowerCase();
+    // abc884 (Aug 19 AM): cancelled/completed/delivered/missed must be
+    // excluded from the Live Board — Bobov Yeshiva stayed on "Rest of Today"
+    // even after the steady-cancel cascade because this filter only checked
+    // DONE_STATUSES for the overdue branch, not for the in-window branch.
+    if (DONE_STATUSES.includes(status)) return false;
     const when = new Date(p.scheduled_date.slice(0,10) + 'T' + (p.scheduled_time || '00:00:00')).getTime();
     const inWindow = when >= (nowMs2 - 30 * 60_000) && when <= endOfTodayMs;
-    // Overdue-and-unresolved override — always keep visible.
-    const isOverdueUnresolved = when < nowMs2 && !DONE_STATUSES.includes(status);
+    const isOverdueUnresolved = when < nowMs2;
     return inWindow || isOverdueUnresolved;
   });
-  // §1: Live Board keeps its 6-hour rolling window (unchanged). The Pickups
-  // tab now respects the office-status chip filter + date focus + the new
-  // sub-tab (Needs attention / Upcoming / Completed / History).
-  const feedPickups = useMemo(() => {
-    if (tab === 'live') {
-      // Live Board only sees "today from now onward" (livePickups pre-filtered).
-      if (showCoveredOnLive) return livePickups;
-      // Hide fully-covered pickups from default Live Board (Issue #17).
-      return livePickups.filter((p) => {
-        const need = Number((p as any).slots_capacity ?? 1) || 1;
-        const filled = ((p as any).signups ?? []).length;
-        return filled < need;
-      });
-    }
-    if (tab !== 'pickups') {
-      // No other tab drives this feed anymore — return raw list for safety.
-      return allPickups;
-    }
-    // ── Pickups tab: sub-tab drives the filter. ───────────────────────────
+  // §1: Live Board keeps its 6-hour rolling window (unchanged).
+  // Aug 24 client fix (count/list mismatch on Needs attention): the sub-tab
+  // count and the sub-tab list must be derived from the SAME evaluation so
+  // "1 in badge → 0 in list" (or vice-versa) cannot happen. Prior code had
+  // two independent useMemos (feedPickups + pickupsSubCounts) with different
+  // deps; if a driver signup landed between their reruns, only one saw it.
+  // Fix: compute each sub-tab's list ONCE, then derive count = length.
+  const attentionList = useMemo(() => {
+    const nowMs3 = Date.now();
+    return allPickups.filter((p) => {
+      const status = String(p.status || '').toLowerCase();
+      if (DONE_STATUSES.includes(status)) return false;
+      if ((p as any).posted_via_supplier) return false;
+      const activeSignups = ((p as any).signups ?? [])
+        .filter((s: any) => !s.released_at).length;
+      if (activeSignups > 0) return false;
+      const startMs = new Date(p.scheduled_date.slice(0,10) + 'T' + (p.scheduled_time || '00:00:00')).getTime();
+      const windowEndMs = (p as any).must_pickup_by
+        ? new Date((p as any).must_pickup_by).getTime()
+        : startMs + 60 * 60_000;
+      return windowEndMs < nowMs3;
+    });
+  }, [allPickups]);
+  const upcomingList = useMemo(() => {
     const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
     const todayStartMs = todayStart.getTime();
-    const nowMs3 = Date.now();
-    const sixtyDaysAgo = nowMs3 - 60 * 86400e3;
-    if (pickupsSubTab === 'attention') {
-      // abc820 (Aug 11): "Needs attention" = the same rule the section header
-      // uses ("Looking for a driver · N pending") — not closed, no driver
-      // signed up, not supplier-posted, window has passed. This lines the
-      // tab count up with what dispatch actually needs to act on.
-      return allPickups.filter((p) => {
+    return allPickups
+      .filter((p) => {
         const status = String(p.status || '').toLowerCase();
         if (DONE_STATUSES.includes(status)) return false;
-        if ((p as any).posted_via_supplier) return false;
-        const activeSignups = ((p as any).signups ?? [])
-          .filter((s: any) => !s.released_at).length;
-        if (activeSignups > 0) return false;
-        const startMs = new Date(p.scheduled_date.slice(0,10) + 'T' + (p.scheduled_time || '00:00:00')).getTime();
-        const windowEndMs = (p as any).must_pickup_by
-          ? new Date((p as any).must_pickup_by).getTime()
-          : startMs + 60 * 60_000;
-        return windowEndMs < nowMs3;
-      });
-    }
-    if (pickupsSubTab === 'upcoming') {
-      return allPickups
-        .filter((p) => {
-          const status = String(p.status || '').toLowerCase();
-          if (DONE_STATUSES.includes(status)) return false;
-          const dayMs = new Date(p.scheduled_date.slice(0,10) + 'T00:00:00').getTime();
-          return dayMs >= todayStartMs;
-        })
-        .sort((a, b) => (a.scheduled_date + a.scheduled_time).localeCompare(b.scheduled_date + b.scheduled_time));
-    }
-    if (pickupsSubTab === 'completed') {
-      return allPickups
-        .filter((p) => {
-          const status = String(p.status || '').toLowerCase();
-          return status === 'completed' || status === 'delivered';
-        })
-        .sort((a, b) => (b.scheduled_date + b.scheduled_time).localeCompare(a.scheduled_date + a.scheduled_time));
-    }
-    // history — everything in the last 60 days, most recent first.
+        const dayMs = new Date(p.scheduled_date.slice(0,10) + 'T00:00:00').getTime();
+        return dayMs >= todayStartMs;
+      })
+      .sort((a, b) => (a.scheduled_date + a.scheduled_time).localeCompare(b.scheduled_date + b.scheduled_time));
+  }, [allPickups]);
+  const completedList = useMemo(() => {
+    return allPickups
+      .filter((p) => {
+        const status = String(p.status || '').toLowerCase();
+        return status === 'completed' || status === 'delivered';
+      })
+      .sort((a, b) => (b.scheduled_date + b.scheduled_time).localeCompare(a.scheduled_date + a.scheduled_time));
+  }, [allPickups]);
+  const historyList = useMemo(() => {
+    const sixtyDaysAgo = Date.now() - 60 * 86400e3;
     return allPickups
       .filter((p) => {
         const dayMs = new Date(p.scheduled_date.slice(0,10) + 'T00:00:00').getTime();
         return dayMs >= sixtyDaysAgo;
       })
       .sort((a, b) => (b.scheduled_date + b.scheduled_time).localeCompare(a.scheduled_date + a.scheduled_time));
-  }, [tab, livePickups, allPickups, showCoveredOnLive, pickupsSubTab]);
-
-  // Counts per sub-tab, driven off allPickups so the strip always shows
-  // accurate badges (even when the current sub-tab is empty).
-  const pickupsSubCounts = useMemo(() => {
-    const nowMs3 = Date.now();
-    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-    const todayStartMs = todayStart.getTime();
-    const sixtyDaysAgo = nowMs3 - 60 * 86400e3;
-    // abc820 (Aug 11): attention count uses the same "Looking for a driver ·
-    // N pending" rule as the section header — not closed, no active signup,
-    // not supplier-posted, past window.
-    let attention = 0, upcoming = 0, completed = 0, history = 0;
-    for (const p of allPickups) {
-      const status = String(p.status || '').toLowerCase();
-      const isDone = DONE_STATUSES.includes(status);
-      if (!isDone && !(p as any).posted_via_supplier) {
-        const activeSignups = ((p as any).signups ?? [])
-          .filter((s: any) => !s.released_at).length;
-        if (activeSignups === 0) {
-          const startMs = new Date(p.scheduled_date.slice(0,10) + 'T' + (p.scheduled_time || '00:00:00')).getTime();
-          const windowEndMs = (p as any).must_pickup_by
-            ? new Date((p as any).must_pickup_by).getTime()
-            : startMs + 60 * 60_000;
-          if (windowEndMs < nowMs3) attention++;
-        }
-      }
-      if (!isDone) {
-        const dayMs = new Date(p.scheduled_date.slice(0,10) + 'T00:00:00').getTime();
-        if (dayMs >= todayStartMs) upcoming++;
-      }
-      if (status === 'completed' || status === 'delivered') completed++;
-      const dayMs = new Date(p.scheduled_date.slice(0,10) + 'T00:00:00').getTime();
-      if (dayMs >= sixtyDaysAgo) history++;
-    }
-    return { attention, upcoming, completed, history };
   }, [allPickups]);
+
+  const feedPickups = useMemo(() => {
+    if (tab === 'live') {
+      if (showCoveredOnLive) return livePickups;
+      return livePickups.filter((p) => {
+        const need = Number((p as any).slots_capacity ?? 1) || 1;
+        const filled = ((p as any).signups ?? []).length;
+        return filled < need;
+      });
+    }
+    if (tab !== 'pickups') return allPickups;
+    if (pickupsSubTab === 'attention') return attentionList;
+    if (pickupsSubTab === 'upcoming') return upcomingList;
+    if (pickupsSubTab === 'completed') return completedList;
+    return historyList;
+  }, [tab, livePickups, allPickups, showCoveredOnLive, pickupsSubTab, attentionList, upcomingList, completedList, historyList]);
+
+  // Counts derive from the SAME arrays the feed uses — count and list can no
+  // longer disagree.
+  const pickupsSubCounts = useMemo(() => ({
+    attention: attentionList.length,
+    upcoming: upcomingList.length,
+    completed: completedList.length,
+    history: historyList.length,
+  }), [attentionList, upcomingList, completedList, historyList]);
 
   // Subtitle count = pickups NOT yet completed within the current feed scope
   // (§1.3 — Completed pickups must not remain in the upcoming count).
@@ -299,19 +369,43 @@ export function CoordinatorPortal() {
 
   // Operational counters for the Live Board tiles.
   const nowMs = Date.now();
+  // abc901 (Aug 21): "Waiting" chip must reconcile EXACTLY with the Pickups
+  // → attention sub-tab list it links to. Previously used a smaller closed-set
+  // (missing 'missed') and counted any signup row (including released ones),
+  // producing 68 vs. a list of 2. Now mirrors pickupsSubCounts.attention:
+  // DONE_STATUSES (incl. 'missed'), only ACTIVE signups block, past-window,
+  // and not supplier-posted.
   const overdueCount = allPickups.filter((p) => {
     const status = String(p.status || '').toLowerCase();
-    if (['completed', 'delivered', 'cancelled'].includes(status)) return false;
-    if ((p.signups?.length ?? 0) > 0) return false;
+    if (DONE_STATUSES.includes(status)) return false;
+    if ((p as any).cancelled_at) return false;
     // Supplier-posted pickups don't have a real end-of-window — just show
     // "open calls", never mark them overdue (client abc792).
     if (p.posted_via_supplier) return false;
+    // Tier-2 fix #10: xyz122 test/dry-run pickups leak into the operational
+    // "Waiting" chip — office was seeing a red count for rows that are hidden
+    // from every driver-facing surface.
+    if (p.is_test) return false;
+    const activeSignups = ((p as any).signups ?? [])
+      .filter((s: any) => !s.released_at).length;
+    if (activeSignups > 0) return false;
     const startMs = new Date(p.scheduled_date.slice(0, 10) + 'T' + (p.scheduled_time || '00:00:00')).getTime();
     const endMs   = p.must_pickup_by ? new Date(p.must_pickup_by).getTime() : startMs + 60 * 60_000;
     return endMs < nowMs;
   }).length;
+  // abc901 (Aug 21): "Unassigned · 7d" was including cancelled + missed +
+  // completed pickups because the filter only checked signup count. Add the
+  // same DONE_STATUSES + cancelled_at exclusion the upcoming list uses.
   const unassignedThisWeek = allPickups.filter((p) => {
-    if ((p.signups?.length ?? 0) > 0) return false;
+    const status = String(p.status || '').toLowerCase();
+    if (DONE_STATUSES.includes(status)) return false;
+    if ((p as any).cancelled_at) return false;
+    // Tier-2 fix #10: exclude test/dry-run pickups from the header count so
+    // the chip reflects real driver-facing work.
+    if (p.is_test) return false;
+    const activeSignups = ((p as any).signups ?? [])
+      .filter((s: any) => !s.released_at).length;
+    if (activeSignups > 0) return false;
     const startMs = new Date(p.scheduled_date.slice(0, 10) + 'T' + (p.scheduled_time || '00:00:00')).getTime();
     return startMs >= nowMs && startMs <= nowMs + 7 * 24 * 3600e3;
   }).length;
@@ -321,8 +415,15 @@ export function CoordinatorPortal() {
   // Live SMS-reply toaster. Polls /admin/sms-inbox every 20s; when the highest
   // seen id increases, pop a toast. First poll seeds the baseline so we don't
   // toast historical replies on page load.
+  //
+  // Tier-2 fix #8: the previous "first poll = seed and return" ate any reply
+  // that arrived between mount and first poll (up to 20 s window). Now we
+  // seed the baseline to the newest message whose created_at is <= mount time
+  // — anything newer than mount is treated as a real inbound and toasts even
+  // on the first poll.
   const [replyToast, setReplyToast] = useState<{ id: number; who: string; body: string } | null>(null);
   const seenSinceIdRef = useRef<number | null>(null);
+  const mountedAtRef = useRef<number>(Date.now());
   const inboxQ = useQuery({
     queryKey: ['sms-inbox-toast'],
     queryFn: () => smsInbox.list(),
@@ -332,7 +433,14 @@ export function CoordinatorPortal() {
     const rows = inboxQ.data?.data ?? [];
     const top = rows[0];
     if (!top) return;
-    if (seenSinceIdRef.current === null) { seenSinceIdRef.current = top.id; return; }
+    if (seenSinceIdRef.current === null) {
+      // Seed from the newest message that already existed at mount time.
+      // Anything newer than mount time falls through to the toast branch.
+      const preMount = rows.find(
+        (r) => new Date(r.created_at).getTime() <= mountedAtRef.current,
+      );
+      seenSinceIdRef.current = preMount ? preMount.id : 0;
+    }
     if (top.id > seenSinceIdRef.current) {
       seenSinceIdRef.current = top.id;
       const nm = `${top.first_name ?? ''} ${top.last_name ?? ''}`.trim();
@@ -368,7 +476,11 @@ export function CoordinatorPortal() {
                                   tab === it.key ? 'bg-paper/15 text-paper' : 'text-[#b8d3e0] hover:bg-paper/5')}>
               <it.icon size={20} />
               {it.label}
-              <UnreadBadge kind={it.key === 'chat-stores' ? 'stores' : 'volunteers'} />
+              {/* Consolidated brief #1 (Aug 18): SMS Composer's tab shows the
+                  global unread inbound-SMS count. Chat DMs keep their own. */}
+              {it.key === 'sms-combo'
+                ? <SmsUnreadBadge />
+                : <UnreadBadge kind={it.key === 'chat-stores' ? 'stores' : 'volunteers'} />}
             </button>
           ))}
 
@@ -408,8 +520,39 @@ export function CoordinatorPortal() {
         <div className="flex items-center justify-between px-6 py-4 border-b border-line bg-paper">
           <div className="flex items-baseline gap-4">
             <div>
-              <div className="font-display font-semibold text-[20px] tracking-[-0.01em]">{TAB_TITLE[tab]}</div>
-              <div className="text-[12.5px] text-muted">{TAB_SUB[tab]} · {upcomingCount} upcoming</div>
+              <div className="font-display font-semibold text-[20px] tracking-[-0.01em] flex items-center gap-2">
+                {TAB_TITLE[tab]}
+                {tab === 'live' && (
+                  <span
+                    aria-label={liveOpen ? 'Live updates connected' : 'Live updates disconnected — polling'}
+                    title={liveOpen ? 'Live updates: connected' : 'Live updates: disconnected (still polling every 30s)'}
+                    className={cx(
+                      'inline-block h-2.5 w-2.5 rounded-full',
+                      liveOpen
+                        ? 'bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.15)]'
+                        : 'bg-neutral-400/60',
+                    )}
+                  />
+                )}
+              </div>
+              <div className="text-[12.5px] text-muted">
+                {TAB_SUB[tab]}
+                {/* abc889 (Aug 20): the "N upcoming" trailer was a shifts-tab
+                    stat that leaked into every other page's header. Only
+                    surface it where it's contextually meaningful.
+                    xyz127 (Aug 23): on the Pickups tab specifically, using
+                    the current-tab-filtered `upcomingCount` produced a
+                    misleading "0 upcoming" whenever the visible sub-tab
+                    happened to be empty (e.g. Attention=0) even though 193
+                    pickups sat in the Upcoming sub-tab. Use the real
+                    unfiltered count from pickupsSubCounts on that tab. */}
+                {tab === 'pickups' && (
+                  <> · {pickupsSubCounts.upcoming} upcoming</>
+                )}
+                {(tab === 'live' || tab === 'shifts') && (
+                  <> · {upcomingCount} upcoming</>
+                )}
+              </div>
             </div>
             {tab === 'live' && (
               <div className="flex items-center gap-2">
@@ -422,7 +565,11 @@ export function CoordinatorPortal() {
                   </button>
                 )}
                 {unassignedThisWeek > 0 && (
-                  <button onClick={() => setTab('pickups')}
+                  // Tier-2 fix #6: chip counts FUTURE (next-7-day) unassigned
+                  // pickups. Landing on the default "Needs attention" sub-tab
+                  // (past-window only) showed a mismatched list. Route to the
+                  // "Upcoming" sub-tab so the list matches the chip's number.
+                  <button onClick={() => { setTab('pickups'); setPickupsSubTab('upcoming'); }}
                           className="haptic flex items-baseline gap-1.5 rounded-[10px] bg-amber-soft border border-amber/40 px-2.5 py-1">
                     <span className="font-display font-bold text-[15px] text-[#9a7415] leading-none">{unassignedThisWeek}</span>
                     <span className="text-[10.5px] font-extrabold uppercase tracking-[.06em] text-[#9a7415]">Unassigned · 7d</span>
@@ -505,10 +652,12 @@ export function CoordinatorPortal() {
             {/* Fork S · Aug 7 — occasional pickups awaiting dispatcher
                 confirm/decline. Only rendered on the Live Board; returns null
                 when nothing needs confirmation today. */}
-            {tab === 'live' && <NeedsConfirmationSection />}
+            {tab === 'live' && <OnDutyBanner setTab={setTab} setPickupsSubTab={setPickupsSubTab} />}
+            {tab === 'live' && <div id="needs-confirmation-anchor"><NeedsConfirmationSection /></div>}
             {tab === 'calendar' ? (
               <CalendarPanel onOpenScheduleDownload={() => setShowScheduleDownload(true)}
-                             onNavigateTab={(t, id) => { setTab(t as TabKey); if (id != null) setOpenPersonId(id); }} />
+                             onNavigateTab={(t, id) => { setTab(t as TabKey); if (id != null) setOpenPersonId(id); }}
+                             onOpenPickup={(id) => setModalPickupId(id)} />
             ) : tab === 'suppliers' ? (
               <SuppliersPanel rows={suppliers.data?.data ?? []} refetch={() => suppliers.refetch()}
                               openId={openPersonId} onOpenConsumed={() => setOpenPersonId(null)} />
@@ -521,8 +670,10 @@ export function CoordinatorPortal() {
               <ShiftsPanel />
             ) : tab === 'center-help' ? (
               <CenterHelpStandalonePanel />
-            ) : tab === 'signin' ? (
-              <SignInPanel />
+            ) : tab === 'app-usage' ? (
+              <AppUsagePanel />
+            ) : tab === 'kiosk-activity' ? (
+              <KioskActivityPanel />
             ) : tab === 'settings' ? (
               <SettingsPanel />
             ) : tab === 'neighborhoods' ? (
@@ -599,8 +750,14 @@ export function CoordinatorPortal() {
             ) : (
               <>
                 {tab === 'live' && (
-                  <div className="text-[11px] font-extrabold uppercase tracking-[.05em] text-clay mb-3">
-                    Showing the rest of today · {livePickups.length} of {allPickups.length}
+                  <div id="live-pickups-feed" className="text-[11px] font-extrabold uppercase tracking-[.05em] text-clay mb-3 scroll-mt-4">
+                    {/* Tier-2 fix #7: N was livePickups (pre-coverage filter),
+                        M was allPickups (whole 60-day+30-day range, unrelated
+                        to "rest of today"). Now: N = actually-shown feed rows,
+                        M = all rest-of-today active pickups. So "3 of 6" reads
+                        as "3 shown, 6 exist in scope" (the other 3 are covered
+                        and hidden by default). */}
+                    Showing the rest of today · {feedPickups.length} of {livePickups.length}
                   </div>
                 )}
                 {groups.map((g) => (
@@ -889,9 +1046,12 @@ export function DriverPickerModal({ pickup, volunteers, onClose, onChanged }: {
                       disabled={slotsMut.isPending || (pickup.slots_capacity ?? 1) <= 1}
                       className="grid h-6 w-6 place-items-center rounded-full text-muted hover:bg-paper disabled:opacity-40 haptic">−</button>
               <span className="font-display font-bold text-[14px] text-forest w-5 text-center">{pickup.slots_capacity ?? 1}</span>
+              {/* Tier-2 fix #12: Math.min(20, …) already clamped the value
+                  server-side, but the button itself stayed clickable at the
+                  cap. Disable at 20 so the UI reflects the real ceiling. */}
               <button onClick={() => slotsMut.mutate(Math.min(20, (pickup.slots_capacity ?? 1) + 1))}
-                      disabled={slotsMut.isPending}
-                      className="grid h-6 w-6 place-items-center rounded-full text-forest hover:bg-paper haptic">+</button>
+                      disabled={slotsMut.isPending || (pickup.slots_capacity ?? 1) >= 20}
+                      className="grid h-6 w-6 place-items-center rounded-full text-forest hover:bg-paper disabled:opacity-40 haptic">+</button>
             </div>
             {slotsMut.isPending && <span className="text-[11px] text-muted">saving…</span>}
           </div>
@@ -1023,7 +1183,7 @@ const TAB_TITLE: Record<string, string> = {
   live: 'Live Board', pickups: 'Pickups', volunteers: 'Volunteers',
   suppliers: 'Suppliers', reports: 'Reports',
   'chat-stores': 'Chat with Stores', 'chat-volunteers': 'Chat with Drivers',
-  steady: 'Steady Pickups', shifts: 'Dispatching Shifts', 'center-help': 'Center Help', signin: 'Office Sign-In', settings: 'Settings',
+  steady: 'Steady Pickups', shifts: 'Dispatching Shifts', 'center-help': 'Center Help', 'kiosk-activity': 'Kiosk Activity', 'app-usage': 'App Usage', settings: 'Settings',
   neighborhoods: 'Neighborhoods', coverage: 'Coverage',
   'change-password': 'Change password',
   recruiting: 'Recruiting',
@@ -1031,9 +1191,14 @@ const TAB_TITLE: Record<string, string> = {
   'dispatchers-combo': 'Dispatchers',
   prospects: 'Prospects',
 };
-const TAB_SUB: Record<string, string> = {
+// Tier-2 fix #2: `live` subtitle was baked at module init, so the weekday /
+// date string stayed frozen on the value the page had when the module first
+// loaded. Compute it lazily via a getter so every render sees today's date.
+const TAB_SUB: Record<string, string> & { live: string } = {
   calendar: 'Unified schedule — pickups, dispatcher shifts, center help',
-  live: 'Next 6 hours · ' + new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }),
+  get live() {
+    return 'Next 6 hours · ' + new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  },
   pickups: 'All upcoming pickups', volunteers: 'Roster & availability',
   suppliers: 'Donors & status', reports: 'Hours, miles, weight',
   'chat-stores': 'In-app direct messages',
@@ -1041,12 +1206,14 @@ const TAB_SUB: Record<string, string> = {
   steady: 'Recurring pickup templates',
   shifts: 'Dispatcher & driver shifts — 5-min-before reminders auto-fire',
   signin: 'Drop-off sign-in sheet',
+  'app-usage': 'Who is actually opening the mobile app — last seen, platform, version',
+  'kiosk-activity': 'Live feed of drop-off kiosk sign-ins — driver, unit, items, labels printed',
   neighborhoods: 'Wesley Hills, Pomona, Monsey Center, New Square, …',
   coverage: 'Volunteer coverage per neighborhood',
   'change-password': 'Update your own portal login',
   recruiting: 'Calls, texts & follow-ups with volunteers and suppliers',
   'sms-combo': 'Compose · threads · groups · broadcast — all SMS in one place',
-  'dispatchers-combo': 'Staff & roles · SMS access',
+  'dispatchers-combo': 'Roster (On Deck / Assigned) · SMS access · staff roles',
   settings: 'Admin · option lookups',
   prospects: 'Potential stores · pipeline · convert to supplier',
 };
@@ -1079,13 +1246,59 @@ function CoordMap({ rows, suppliers, showVolunteers, onOpen }: { rows: PiRow[]; 
     if (!m || !lyr) return;
     lyr.clearLayers();
 
+    // abc871 (Aug 17): the map used to plot every one of ~300 pickups in the
+    // dataset AND up to 30 suppliers, each at a Math.random() offset. Result
+    // was a wall of pins across Monsey that told the dispatcher nothing.
+    //
+    // Now: only actionable pickups (unresolved, today + tomorrow), and only
+    // suppliers that actually appear in that scoped set. Positions are hashed
+    // from the supplier name so pins are stable across re-renders and the
+    // same donor lands in the same spot every time.
+    const _hash = (s: string) => {
+      let h = 5381;
+      for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+      return h;
+    };
+    const _pinFor = (key: string): [number, number] => {
+      const h = _hash(key || 'x');
+      // Deterministic offset from Monsey center. Two independent axes from
+      // upper and lower halves of the 32-bit hash so lat/lng aren't correlated.
+      const rx = ((h >>> 0) % 10000) / 10000 - 0.5;
+      const ry = ((h >>> 16) % 10000) / 10000 - 0.5;
+      return [41.115 + rx * 0.06, -74.069 + ry * 0.10];
+    };
+    // Tier-3 fix: two suppliers (or two pickups) with the same name-derived
+    // key would land on identical coords — only one pin would appear on the
+    // map because Leaflet stacks them perfectly. Track claims and nudge each
+    // duplicate by a small lat epsilon so all pins stay clickable and visible.
+    const _used = new Map<string, number>();
+    const _uniquePinFor = (key: string): [number, number] => {
+      const [lat, lng] = _pinFor(key);
+      const bucket = `${lat.toFixed(5)},${lng.toFixed(5)}`;
+      const n = _used.get(bucket) ?? 0;
+      _used.set(bucket, n + 1);
+      // ~5.5m per 0.00005 lat — enough to separate markers visually without
+      // moving them off the donor's neighborhood.
+      return [lat + n * 0.00005, lng + n * 0.00005];
+    };
+    const _todayNY = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const _tomorrowNY = new Date(Date.now() + 86_400_000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const _actionable = rows.filter((p) => {
+      const d = String(p.scheduled_date ?? '').slice(0, 10);
+      if (d !== _todayNY && d !== _tomorrowNY) return false;
+      const s = String(p.status ?? '').toLowerCase();
+      if (['completed', 'delivered', 'cancelled', 'missed'].includes(s)) return false;
+      return true;
+    });
+    const _supplierNamesOnMap = new Set(_actionable.map((p) => p.suppliers).filter(Boolean));
+    const _suppliersInScope = suppliers.filter((s: any) => _supplierNamesOnMap.has(s.name));
+
     // Suppliers (donor sites) — small square markers, colored per supplier so
     // a single donor has one color identity across Places list, map, and feed.
-    suppliers.slice(0, 30).forEach((s: any) => {
+    _suppliersInScope.forEach((s: any) => {
       const color = supplierHue(s.name ?? String(s.id));
       const initial = String(s.name ?? 'S').trim().slice(0, 1).toUpperCase();
-      const lat = 41.115 + (Math.random() - 0.5) * 0.06;
-      const lng = -74.069 + (Math.random() - 0.5) * 0.10;
+      const [lat, lng] = _uniquePinFor('supplier:' + (s.name ?? String(s.id)));
       const html = `<div style="width:22px;height:22px;background:${color};border:2px solid #fff;border-radius:5px;display:grid;place-items:center;color:#fff;font-weight:800;font-size:11px;box-shadow:0 3px 6px rgba(0,0,0,.25)">${initial}</div>`;
       L.marker([lat, lng], { icon: L.divIcon({ html, className: '', iconSize: [22, 22], iconAnchor: [11, 11] }) }).addTo(lyr);
     });
@@ -1093,14 +1306,13 @@ function CoordMap({ rows, suppliers, showVolunteers, onOpen }: { rows: PiRow[]; 
     // Pickups — teardrop pins with a "P" label, color = supplier color so
     // each pickup carries its donor's color identity. Status shows on a
     // small indicator ring inside the pin.
-    rows.forEach((p) => {
+    _actionable.forEach((p) => {
       const color = p.suppliers ? supplierHue(p.suppliers) : '#2C5A3B';
       const html = `<div style="position:relative;width:30px;height:36px;filter:drop-shadow(0 4px 4px rgba(0,0,0,.28))">
         <svg width="30" height="36" viewBox="0 0 24 28" fill="${color}"><path d="M12 2C7.5 2 4 5.5 4 10c0 6 8 16 8 16s8-10 8-16c0-4.5-3.5-8-8-8z"/></svg>
         <span style="position:absolute;inset:2px 0 0 0;display:grid;place-items:center;color:#fff;font-weight:800;font-size:11px">P</span>
       </div>`;
-      const lat = 41.115 + (Math.random() - 0.5) * 0.06;
-      const lng = -74.069 + (Math.random() - 0.5) * 0.10;
+      const [lat, lng] = _uniquePinFor('pickup:' + (p.suppliers ?? String(p.id)));
       L.marker([lat, lng], { icon: L.divIcon({ html, className: '', iconSize: [30, 36], iconAnchor: [15, 36] }) })
         .on('click', () => onOpen(p.id))
         .addTo(lyr);
@@ -1155,6 +1367,26 @@ function CoordMap({ rows, suppliers, showVolunteers, onOpen }: { rows: PiRow[]; 
 function CoordRow({ p, onAssign, onOpen, onEdit }: { p: PiRow; onAssign: () => void; onOpen: () => void; onEdit?: () => void }) {
   const time = fmtTime(p.scheduled_time?.slice(0, 5) ?? '');
   const [showDismiss, setShowDismiss] = useState(false);
+  const qc = useQueryClient();
+  // upsms (Aug 20): per-pickup "Send now" broadcast. Only shows on Needs-a-
+  // Driver cards (no signups, not supplier-posted, not resolved). Confirms
+  // before firing so a mis-tap doesn't blast the group.
+  const sendNowMut = useMutation({
+    mutationFn: (dryRun: boolean) => upcomingSms.pickupSendNow(Number((p as any).id), dryRun),
+    onSuccess: (res, dryRun) => {
+      const d = res.data;
+      if (dryRun) {
+        alert(`Preview (dry run) — would go to ${d.wouldGoTo ?? 0} driver(s):\n\n${d.preview ?? '(no preview body)'}`);
+      } else if (d.reason && !d.sent) {
+        alert(`No SMS sent: ${d.reason}`);
+      } else {
+        alert(`Broadcast fired: ${d.sent ?? 0} of ${d.attempted ?? 0} sent${d.code ? ` (reply code: ${d.code})` : ''}.`);
+      }
+      qc.invalidateQueries({ queryKey: ['admin-pickups'] });
+      qc.invalidateQueries({ queryKey: ['upcoming-drop'] });
+    },
+    onError: (e: Error) => alert(`Send now failed: ${e.message}`),
+  });
   // Issue #13/14/15 Aug 10 — a pickup with no driver yet isn't "overdue",
   // it's "looking for a driver". Show wait time in a calm/warm chip.
   // Truly late (has an assigned driver but past window) keeps the red tone.
@@ -1239,14 +1471,18 @@ function CoordRow({ p, onAssign, onOpen, onEdit }: { p: PiRow; onAssign: () => v
       return start && end ? `${start} - ${end}` : null;
     } catch { return null; }
   })();
-  // Address for the card: supplier address + city, or the one-time pickup
-  // address. Always shown when known, per the PDF's "always display full
-  // address" rule.
+  // Address for the card: xyz126 (Aug 20) — a user-specified pickup_address
+  // ALWAYS wins over the supplier's stored address. Reason: for one-off
+  // events (e.g. a supplier-anchored hall booking a specific venue for one
+  // pickup), the coordinator picks a Google Places result that differs from
+  // the supplier's default address. Previously the render short-circuited on
+  // supplier_address and hid the manually-picked address entirely.
   const displayAddress = (() => {
+    if (p.pickup_address && p.pickup_address.trim()) return p.pickup_address;
     if (p.supplier_address) {
       return p.supplier_city ? `${p.supplier_address}, ${p.supplier_city}` : p.supplier_address;
     }
-    return p.pickup_address || null;
+    return null;
   })();
   const showAddress = displayAddress && displayAddress !== primaryLabel;
   return (
@@ -1277,6 +1513,17 @@ function CoordRow({ p, onAssign, onOpen, onEdit }: { p: PiRow; onAssign: () => v
               )}
               <span className="font-display font-bold text-[16px] text-ink truncate flex-1 min-w-0 leading-tight">
                 {primaryLabel}
+                {p.ref_number && (
+                  <span className="ml-1.5 align-middle text-[10.5px] font-extrabold tracking-wider bg-cream border border-line text-muted px-1.5 py-0.5 rounded-full">
+                    #{p.ref_number}
+                  </span>
+                )}
+                {p.is_test && (
+                  <span title="Test / dry-run pickup — no SMS was sent to drivers."
+                        className="ml-1.5 align-middle inline-flex items-center gap-1 text-[10.5px] font-extrabold tracking-wider bg-amber/20 border border-amber/60 text-forest-deep px-1.5 py-0.5 rounded-full">
+                    🧪 TEST
+                  </span>
+                )}
               </span>
               {isTrulyLate ? (
                 <span className="shrink-0 inline-flex items-center gap-1 bg-clay text-paper font-bold text-[10.5px] uppercase tracking-wide px-2 py-0.5 rounded-full">
@@ -1353,10 +1600,31 @@ function CoordRow({ p, onAssign, onOpen, onEdit }: { p: PiRow; onAssign: () => v
                   Edit
                 </button>
               )}
-              {/* Client Aug 12: Dismiss on still-open, unassigned Needs-a-Driver
-                  rows — closes broadcast codes + cancels with a reason we can see
-                  later in history. */}
-              {filled.length === 0 && !_resolved && (
+              {/* upsms Aug 20: per-pickup "Send now" broadcast. Same
+                  Needs-a-Driver gate as Dismiss (no signups, not supplier-posted,
+                  not resolved). Fires ONE pickup to the default group. */}
+              {filled.length === 0 && !_resolved && !(p as any).posted_via_supplier && (
+                <button onClick={(e) => {
+                          e.stopPropagation();
+                          const ref = (p as any).ref_number ? `#${(p as any).ref_number}` : `id ${(p as any).id}`;
+                          if (confirm(`Broadcast pickup ${ref} to drivers now?\n\nOK = send · Cancel = dry-run preview`)) {
+                            sendNowMut.mutate(false);
+                          } else {
+                            sendNowMut.mutate(true);
+                          }
+                        }}
+                        disabled={sendNowMut.isPending}
+                        className="text-[11.5px] font-bold border border-sky/40 px-2.5 py-1 rounded-[9px] haptic text-sky hover:bg-sky/10"
+                        title="Broadcast just this pickup to the default driver group">
+                  {sendNowMut.isPending ? '…' : '📤 Send now'}
+                </button>
+              )}
+              {/* Aug 23 client fix 2: Dismiss button was hidden whenever any
+                  signup existed, so a coord couldn't cancel a pickup that had
+                  a steady auto-assign or a placeholder driver. Widened to any
+                  non-resolved pickup — the modal already asks for a reason
+                  before doing anything destructive. */}
+              {!_resolved && (
                 <button onClick={(e) => { e.stopPropagation(); setShowDismiss(true); }}
                         className="text-[11.5px] font-bold border border-clay/40 px-2.5 py-1 rounded-[9px] haptic text-clay hover:bg-clay/10"
                         title="Close this pickup with a reason">
@@ -1367,8 +1635,9 @@ function CoordRow({ p, onAssign, onOpen, onEdit }: { p: PiRow; onAssign: () => v
           </div>
         </div>
       </div>
-      {showDismiss && (
-        <DismissPickupModal p={p} onClose={() => setShowDismiss(false)} />
+      {showDismiss && createPortal(
+        <DismissPickupModal p={p} onClose={() => setShowDismiss(false)} />,
+        document.body,
       )}
     </div>
   );
@@ -1452,30 +1721,45 @@ function SidebarContextList({
   livePickups: PiRow[];
   onPick: (t: TabKey) => void;
 }) {
+  // Tier-2 fix #11: the old code fell through to a "Places" header on every
+  // tab that didn't match a specific case (steady / shifts / center-help /
+  // coverage / signin / kiosk-activity / settings / etc.), which read as
+  // "suppliers panel is loading" even though nothing beneath it ever rendered.
+  // Only show the sidebar list block for tabs it actually belongs on.
+  const LIST_TABS: TabKey[] = [
+    'live', 'pickups', 'volunteers', 'suppliers',
+    'chat-stores', 'chat-volunteers', 'reports',
+  ];
+  if (!LIST_TABS.includes(tab)) return null;
+
   const head =
     tab === 'pickups'         ? 'Active pickups' :
     tab === 'volunteers'      ? 'Drivers' :
     tab === 'suppliers'       ? 'Donors' :
     tab === 'chat-stores'     ? 'Stores' :
     tab === 'chat-volunteers' ? 'Drivers' :
+    tab === 'reports'         ? 'Reports' :
     'Places';
 
   return (
     <>
       <div className="text-[10px] font-extrabold uppercase tracking-[.08em] text-[#7fa078] mt-5 mb-2 px-3">{head}</div>
 
-      {(tab === 'pickups' || tab === 'live') && (
-        <PickupSidebar pickups={livePickups} loading={false} />
-      )}
-      {(tab === 'volunteers' || tab === 'chat-volunteers') && (
-        <PeopleSidebar people={volunteers} loading={volunteersLoading} kind="volunteer" />
-      )}
-      {(tab === 'suppliers' || tab === 'chat-stores') && (
-        <PeopleSidebar people={[]} loading={false} kind="supplier" suppliers={suppliers} suppliersLoading={suppliersLoading} />
-      )}
-      {tab === 'reports' && (
-        <div className="text-[11.5px] text-[#7fa078] px-3">Coming soon</div>
-      )}
+      {/* Tier-3: scroll instead of 14-row silent cap. */}
+      <div className="max-h-[42vh] overflow-y-auto">
+        {(tab === 'pickups' || tab === 'live') && (
+          <PickupSidebar pickups={livePickups} loading={false} />
+        )}
+        {(tab === 'volunteers' || tab === 'chat-volunteers') && (
+          <PeopleSidebar people={volunteers} loading={volunteersLoading} kind="volunteer" />
+        )}
+        {(tab === 'suppliers' || tab === 'chat-stores') && (
+          <PeopleSidebar people={[]} loading={false} kind="supplier" suppliers={suppliers} suppliersLoading={suppliersLoading} />
+        )}
+        {tab === 'reports' && (
+          <div className="text-[11.5px] text-[#7fa078] px-3">Coming soon</div>
+        )}
+      </div>
     </>
   );
 }
@@ -1483,7 +1767,7 @@ function SidebarContextList({
 function PickupSidebar({ pickups, loading }: { pickups: PiRow[]; loading: boolean }) {
   if (loading) return <div className="text-[11.5px] text-[#7fa078] px-3">Loading…</div>;
   if (pickups.length === 0) return <div className="text-[11.5px] text-[#7fa078] px-3">No active pickups</div>;
-  return <>{pickups.slice(0, 14).map((p) => {
+  return <>{pickups.slice(0, 200).map((p) => {
     const color = p.suppliers ? supplierHue(p.suppliers) : '#C7CEC2';
     return (
       <div key={p.id} className="flex items-center gap-2 px-3 py-1.5 text-[12.5px]">
@@ -1543,6 +1827,76 @@ function PeopleSidebar({ people, loading, kind, suppliers, suppliersLoading }: {
  * provided we filter to that contact list's peers; without kind it shows the
  * total. Returns null when there's nothing unread.
  */
+// Consolidated brief #15 (Aug 18): dispatcher-on-duty action summary at the
+// top of the Live Board. Answers "what requires my attention right now?" —
+// uncovered pickups, pickups within 30 min, unread SMS, pending
+// confirmations. Only shows when there's actually something to act on.
+function OnDutyBanner({ setTab, setPickupsSubTab }: { setTab: (t: TabKey) => void; setPickupsSubTab: (t: PickupsSubTab) => void }) {
+  const q = useQuery({
+    queryKey: ['on-duty-summary'],
+    queryFn: () => onDuty.summary(),
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+  });
+  const s = q.data?.data;
+  if (!s) return null;
+  const total = Number(s.pickups_need_driver) + Number(s.unread_sms) + Number(s.pickups_within_30m) + Number(s.pending_confirmation);
+  if (total === 0) return null;
+  // abc900 (Aug 20): each chip is a button that jumps to the relevant surface.
+  // Prior version was a plain <span> — clicking it did nothing.
+  // abc901 (Aug 21): the "within 30 min" chip was pointed at the confirmation
+  // anchor, which is unrelated — it should scroll to the Live Board's
+  // "rest of today" pickup list where imminent pickups actually appear.
+  const scrollToConfirm = () => {
+    document.getElementById('needs-confirmation-anchor')
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  const scrollToLiveFeed = () => {
+    document.getElementById('live-pickups-feed')
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  const chips: Array<[string, number, string, () => void]> = [
+    ['🚨 within 30 min',    Number(s.pickups_within_30m),  'bg-clay text-paper',                                  scrollToLiveFeed],
+    // Aug 23 xyz127: the "need driver" chip counts TODAY's uncovered pickups
+    // (server-side, includes future-today slots). Landing on the default
+    // Attention sub-tab (past-window only) showed "0" because a 6pm pickup
+    // hasn't hit its window yet — chip pointed to nothing. Route to Upcoming
+    // where the count matches what the sub-tab actually renders.
+    ['🔴 need driver',      Number(s.pickups_need_driver), 'bg-clay/10 text-clay border border-clay/30',          () => { setTab('pickups'); setPickupsSubTab('upcoming'); }],
+    ['✉️ unread SMS',       Number(s.unread_sms),          'bg-amber/15 text-forest-deep border border-amber/40', () => setTab('sms-combo')],
+    ['❓ pending confirm',  Number(s.pending_confirmation),'bg-sky/10 text-sky border border-sky/30',             scrollToConfirm],
+  ];
+  return (
+    <div className="mb-3 rounded-[14px] border border-clay/30 bg-clay/5 px-4 py-3">
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className="text-[11px] font-extrabold uppercase tracking-[.08em] text-clay">Needs attention</span>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {chips.filter(([, n]) => n > 0).map(([label, n, cls, onClick]) => (
+          <button key={label} type="button" onClick={onClick}
+                  className={cx('px-2.5 py-1 rounded-full text-[12px] font-bold cursor-pointer transition hover:brightness-95 active:scale-[0.98]', cls)}>
+            <span className="font-extrabold">{n}</span> {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Consolidated brief #1 (Aug 18): SMS Threads unread count for the sidebar
+// SMS Composer tab. Polls every 30s.
+function SmsUnreadBadge() {
+  const q = useQuery({
+    queryKey: ['sms-unread-count'],
+    queryFn: () => smsThreads.unreadCount(),
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+  });
+  const total = q.data?.data?.total ?? 0;
+  if (!total) return null;
+  return <span className="ml-auto inline-grid place-items-center min-w-[20px] h-[20px] px-1.5 rounded-full bg-red-500 text-paper text-[11px] font-extrabold">{total > 99 ? '99+' : total}</span>;
+}
+
 function UnreadBadge({ kind, peerUserId }: { kind?: 'stores' | 'volunteers'; peerUserId?: number }) {
   const unread = useQuery<{ data: { total: number; byPeer: Array<{ peerUserId: number; unread: number }> } }>({
     queryKey: ['dm-unread'],
@@ -1872,14 +2226,20 @@ function fmtTime(t: string) {
  *   Compose | Threads | Groups | Broadcast
  * Each tab renders the existing panel component unchanged (no rewrite).
  */
-type SmsSubTab = 'compose' | 'threads' | 'groups' | 'broadcast';
+type SmsSubTab = 'upcoming' | 'compose' | 'threads' | 'groups' | 'broadcast' | 'whatsapp';
 function SmsComboPanel() {
-  const [sub, setSub] = useState<SmsSubTab>('compose');
+  // upsms (Aug 20): "Upcoming" surfaces the next scheduled consolidated drop
+  // and the four controls (Send Now / Cancel / Send Earlier / Send Later).
+  // It's the first tab so coordinators land on the pending broadcast state
+  // rather than the compose textarea.
+  const [sub, setSub] = useState<SmsSubTab>('upcoming');
   const tabs: { key: SmsSubTab; label: string }[] = [
+    { key: 'upcoming',  label: 'Upcoming' },
     { key: 'compose',   label: 'Compose' },
     { key: 'threads',   label: 'Threads' },
     { key: 'groups',    label: 'Groups' },
     { key: 'broadcast', label: 'Broadcast (push)' },
+    { key: 'whatsapp',  label: 'WhatsApp' },
   ];
   return (
     <div className="space-y-3">
@@ -1895,26 +2255,35 @@ function SmsComboPanel() {
         ))}
       </div>
       <div>
+        {sub === 'upcoming'  && <UpcomingSmsPanel />}
         {sub === 'compose'   && <SmsComposerPanel />}
         {sub === 'threads'   && <SmsThreadsPanel />}
         {sub === 'groups'    && <SmsGroupsPanel />}
         {sub === 'broadcast' && <BroadcastPanel />}
+        {sub === 'whatsapp'  && <WhatsappAdminPanel />}
       </div>
     </div>
   );
 }
 
 /**
- * DispatchersComboPanel — one nav entry ("Dispatchers") with two tabs:
- *   Staff & roles  →  DispatchersPanel (roster + role + disable)
- *   SMS access     →  SmsDispatchersPanel (*NN reply-access list)
+ * DispatchersComboPanel — one nav entry ("Dispatchers").
+ *
+ * Restructured Aug 20 per client spec: the top-of-panel view is now the
+ * *dispatcher roster* — a person-first list you can add to independent of
+ * any shift. Below the roster we keep the Driver-reply SMS access list.
+ * The old "Staff & roles" grid (role changes, disable) is preserved as a
+ * secondary tab; it manages login accounts, which is a distinct concern.
+ *
+ *   Roster & SMS  →  DispatchersRosterPanel  +  SmsDispatchersPanel
+ *   Staff & roles →  DispatchersPanel        (login-account admin)
  */
-type DispSubTab = 'staff' | 'sms';
+type DispSubTab = 'roster' | 'staff';
 function DispatchersComboPanel() {
-  const [sub, setSub] = useState<DispSubTab>('staff');
+  const [sub, setSub] = useState<DispSubTab>('roster');
   const tabs: { key: DispSubTab; label: string }[] = [
-    { key: 'staff', label: 'Staff & roles' },
-    { key: 'sms',   label: 'SMS access (*NN)' },
+    { key: 'roster', label: 'Roster & SMS' },
+    { key: 'staff',  label: 'Staff & roles' },
   ];
   return (
     <div className="space-y-3">
@@ -1929,10 +2298,21 @@ function DispatchersComboPanel() {
           </button>
         ))}
       </div>
-      <div>
-        {sub === 'staff' && <DispatchersPanel />}
-        {sub === 'sms'   && <SmsDispatchersPanel />}
-      </div>
+      {sub === 'roster' && (
+        <div className="space-y-6">
+          <DispatchersRosterPanel />
+          <div className="pt-4 border-t border-line">
+            <div className="mb-2">
+              <h3 className="font-display font-bold text-[15px] text-ink">Driver-reply SMS access</h3>
+              <div className="text-[11.5px] text-muted">
+                Phones that receive driver replies and can respond privately via <code>*NN &lt;msg&gt;</code>.
+              </div>
+            </div>
+            <SmsDispatchersPanel />
+          </div>
+        </div>
+      )}
+      {sub === 'staff' && <DispatchersPanel />}
     </div>
   );
 }

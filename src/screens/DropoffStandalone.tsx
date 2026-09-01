@@ -11,6 +11,7 @@ import { Routes, Route, useNavigate, useParams, Navigate } from 'react-router-do
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { api, getUser, setAuth, login as apiLogin, type AuthUser } from '../api';
 import { Printer, Plus, Trash2, Check } from 'lucide-react';
+import { buildLabelTspl } from '../kiosk/label-print';
 
 const FALLBACK_CATS = ['Dairy', 'Deli', 'Bakery', 'Produce', 'Prepared', 'Dry goods', 'Other'];
 const CONTAINER_OPTIONS = ['Boxes', 'Trays', 'Bags', 'Crates', 'Other'];
@@ -303,13 +304,52 @@ function LabelPreview() {
 
   const labels = q.data?.data?.labels ?? [];
 
-  const print = () => {
-    window.print();
-    void api(`/api/dropoff/signin/${signinId}/printed`, { method: 'POST' }).catch(() => {});
+  // Aug 24 client fix (#6 "Remote label printing is opening the PDF/print
+  // screen again instead of printing directly"). Build TSPL client-side (same
+  // buildLabelTspl the kiosk uses) and POST to the backend direct-print relay
+  // → LAN print bridge → physical Zebra printer at 3 Regina. window.print()
+  // only fires if the relay call fails (offline, bridge unreachable) — no
+  // more PDF dialog under normal conditions.
+  const arrayBufferToBase64 = (bytes: Uint8Array): string => {
+    let bin = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      bin += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
+    }
+    return btoa(bin);
+  };
+
+  const print = async () => {
+    if (!labels.length) return;
+    try {
+      const combined = labels.map((L) => buildLabelTspl({
+        supplierName: L.supplierName,
+        category:     L.category,
+        description:  L.description ?? '',
+        unit:         L.container ?? '',
+        date:         new Date(L.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+        index:        L.index,
+        total:        L.of,
+      } as any));
+      const total = combined.reduce((n, c) => n + c.length, 0);
+      const buf = new Uint8Array(total);
+      let off = 0;
+      for (const c of combined) { buf.set(c, off); off += c.length; }
+      const b64 = arrayBufferToBase64(buf);
+      await api(`/api/dropoff/signin/${signinId}/direct-print`, {
+        method: 'POST',
+        body:   JSON.stringify({ tspl: b64 }),
+      });
+    } catch {
+      // Legacy fallback — only when the direct relay failed. Browser PDF
+      // dialog opens so the driver isn't stranded.
+      window.print();
+      void api(`/api/dropoff/signin/${signinId}/printed`, { method: 'POST' }).catch(() => {});
+    }
   };
 
   useEffect(() => {
-    // Auto-open the print dialog on first paint (drivers don't have to hunt for the button).
+    // Auto-print on first paint (drivers don't have to hunt for the button).
     if (labels.length) {
       const t = setTimeout(print, 400);
       return () => clearTimeout(t);

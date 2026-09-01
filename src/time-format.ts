@@ -68,3 +68,10 @@ export function fmtDateTimeFull(iso: string | Date | null | undefined): string {
     hour12: true, timeZone: TZ,
   });
 }
+
+/** Today's date (YYYY-MM-DD) anchored to New York. Use this instead of
+ *  `new Date().toISOString().slice(0, 10)` — that reports UTC, which rolls
+ *  the day over at 8 PM NY (EDT) / 7 PM NY (EST). */
+export function nyToday(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date());
+}

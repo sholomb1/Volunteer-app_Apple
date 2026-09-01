@@ -6,7 +6,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
  */
 const config: CapacitorConfig = {
   appId: 'org.zehlzeh.volunteer',
-  appName: "Zeh L'Zeh Rescue",
+  appName: 'Zeh Lzeh',
   webDir: 'dist-cap',
   android: {
     // Staging API is plain HTTP on :7200 until TLS is in front of it.

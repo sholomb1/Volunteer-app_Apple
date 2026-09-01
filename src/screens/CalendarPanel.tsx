@@ -138,6 +138,10 @@ function statusColors(s: ScheduleEvent['status']) {
     case 'completed':
       return { pill: 'bg-forest/15 text-forest-deep border border-forest/40', bar: 'border-forest-deep' };
     case 'available':
+      // Consolidated brief #7 (Aug 18): "available" was showing as a neutral
+      // grey chip which read as covered/informational — but a pickup with no
+      // driver is really "Needs driver". Merge the visual with needs_driver.
+      return { pill: 'bg-amber/15 text-forest-deep border border-amber/50', bar: 'border-amber' };
     default:
       return { pill: 'bg-cream text-muted border border-line', bar: 'border-line' };
   }
@@ -151,7 +155,9 @@ function statusLabel(s: ScheduleEvent['status']): string {
     case 'empty':        return 'Needs coverage';
     case 'missed':       return 'Missed';
     case 'completed':    return '✓ Completed';
-    case 'available':    return 'Available';
+    // Consolidated brief #7 (Aug 18): never render "Available" — it read as
+    // "covered". A pickup with no assigned driver is always "Needs driver".
+    case 'available':    return 'Needs driver';
     default:             return String(s);
   }
 }
@@ -159,9 +165,14 @@ function statusLabel(s: ScheduleEvent['status']): string {
 type Props = {
   onOpenScheduleDownload: () => void;
   onNavigateTab?: (tabKey: string, openId?: number) => void;
+  // Tier-2 fix (deferred): row click for pickups should open the same in-place
+  // AdminPickupDetail modal the Live Board uses, not navigate to /admin/pickup/:id.
+  // When provided, we call this instead of `nav(...)`; fallback preserves the
+  // old route-based behavior for callers that don't wire it.
+  onOpenPickup?: (id: number) => void;
 };
 
-export function CalendarPanel({ onOpenScheduleDownload, onNavigateTab }: Props) {
+export function CalendarPanel({ onOpenScheduleDownload, onNavigateTab, onOpenPickup }: Props) {
   const nav = useNavigate();
   const qc = useQueryClient();
   const [view, setView] = useState<ViewKind>('week');
@@ -294,6 +305,7 @@ export function CalendarPanel({ onOpenScheduleDownload, onNavigateTab }: Props) 
   // Click-through routing per kind.
   function openEvent(e: ScheduleEvent) {
     if (e.kind === 'pickup') {
+      if (onOpenPickup) { onOpenPickup(e.detailId); return; }
       nav(`/admin/pickup/${e.detailId}`);
       return;
     }

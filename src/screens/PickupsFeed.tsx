@@ -6,7 +6,7 @@ import { useMemo } from 'react';
 import { fmtTime } from '../time-format';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { volunteer, type OpenPickup, type MyPickup } from '../api';
+import { volunteer, getUser, type OpenPickup, type MyPickup } from '../api';
 import { AppBar, Avatar, ChatButton, Card, Skeleton, SlotAvatars, SlotLabel, StatusPill, cx } from '../design';
 
 export function PickupsFeed() {
@@ -26,6 +26,16 @@ export function PickupsFeed() {
     mutationFn: (id: number) => volunteer.signup(id),
     onSuccess: () => { qc.invalidateQueries(); setParams({ tab: 'mine' }); },
   });
+  // Tier-2 fix: single-slot "Claim" flows through /open-pickups/:id/claim,
+  // which has the race guard, backup-role fallback, and rich SMS thank-you.
+  // Multi-slot "Sign up" continues to hit /pickups/:id/signup.
+  const claim = useMutation({
+    mutationFn: (id: number) => volunteer.claim(id),
+    onSuccess: () => { qc.invalidateQueries(); setParams({ tab: 'mine' }); },
+  });
+
+  const me = getUser();
+  const initials = ((me?.firstName?.[0] ?? '') + (me?.lastName?.[0] ?? '')) || '·';
 
   // batch abc810 Aug 10 — Available Pickups shows TODAY only (NY local).
   // Future-dated pickups stay off this screen; coordinator Live Board still
@@ -40,7 +50,7 @@ export function PickupsFeed() {
 
   return (
     <div className="min-h-screen pb-[80px]">
-      <AppBar title={tab === 'available' ? 'Available Pickups' : 'My Pickups'} right={<Avatar initials="DG" />} />
+      <AppBar title={tab === 'available' ? 'Available Pickups' : 'My Pickups'} right={<Avatar initials={initials} />} />
 
       {/* Tabs */}
       <div className="mx-5 mt-1 bg-[#F3EFE4] border border-line rounded-[11px] p-[3px] flex">
@@ -65,7 +75,12 @@ export function PickupsFeed() {
                   <PickupRow key={p.pickup_instance_id} p={p}
                     onOpen={() => nav(`/pickup/open/${p.pickup_instance_id}`)}
                     cta={<button className="bg-forest text-paper font-bold text-[12px] px-3.5 py-2 rounded-[10px] haptic"
-                                 onClick={(e) => { e.stopPropagation(); signup.mutate(Number(p.pickup_instance_id)); }}>
+                                 onClick={(e) => {
+                                   e.stopPropagation();
+                                   const id = Number(p.pickup_instance_id);
+                                   if (p.slots_capacity > 1) signup.mutate(id);
+                                   else claim.mutate(id);
+                                 }}>
                           {p.slots_capacity > 1 ? 'Sign up' : 'Claim'}
                         </button>}
                   />
@@ -107,7 +122,7 @@ function PickupRow({ p, onOpen, pill, cta }: {
 }) {
   const store = p.suppliers || (p.is_one_time ? 'One-time donor' : 'Pickup');
   const desc  = p.food_description || p.notes || '';
-  const time  = p.scheduled_time?.slice(0, 5) ?? '—';
+  const time  = fmtTime(p.scheduled_time?.slice(0, 5)) || '—';
   // abc837 Aug 13 — client wants the pickup address on the card too so drivers
   // can size up distance/route at a glance without opening the detail page.
   const address = shortAddress(p.supplier_address);

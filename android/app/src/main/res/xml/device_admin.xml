@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Aug 14 (task #176): device-admin policies our KioskDeviceAdminReceiver
+     asks for when set as device owner via adb (see APK ship notes). Minimal
+     set — we only need lock-task authority + user restriction management. -->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <force-lock />
+        <disable-keyguard-features />
+        <watch-login />
+        <set-global-proxy />
+    </uses-policies>
+</device-admin>

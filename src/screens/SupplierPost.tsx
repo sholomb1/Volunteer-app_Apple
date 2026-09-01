@@ -14,7 +14,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Camera } from 'lucide-react';
-import { supplier, type AuthUser } from '../api';
+import { supplier, supplierSelf, type AuthUser } from '../api';
 import { AppBar, Avatar, StickyCTA, cx } from '../design';
 
 const FOOD_TYPES = ['Produce', 'Bakery', 'Dairy', 'Prepared', 'Dry goods', 'Other'];
@@ -31,6 +31,12 @@ export function SupplierPost({ user }: { user: AuthUser }) {
 function SupplierCreate({ user }: { user: AuthUser }) {
   const nav = useNavigate();
   const qc = useQueryClient();
+
+  // Tier-2 fix: header was hardcoded to "Rockland Kosher Market" for every
+  // donor. Pull the signed-in supplier's real name from the self-profile
+  // endpoint and fall back to a neutral label while it's loading / missing.
+  const profileQ = useQuery({ queryKey: ['supplier-self'], queryFn: supplierSelf.get });
+  const storeName = profileQ.data?.data?.name || `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || 'Your donor account';
 
   // Both as Sets so users can pick more than one.
   const [foodTypes, setFoodTypes] = useState<Set<string>>(new Set(['Prepared']));
@@ -110,7 +116,7 @@ function SupplierCreate({ user }: { user: AuthUser }) {
       <AppBar title="New Pickup" leftMark="ז" altMark right={null} />
 
       <main className="px-5 flex-1 pb-2">
-        <div className="text-[11px] font-bold text-muted">Rockland Kosher Market</div>
+        <div className="text-[11px] font-bold text-muted">{storeName}</div>
         <h1 className="font-display font-semibold text-[25px] leading-[1.05] mt-0.5">What's ready?</h1>
 
         {/* Food type chips (multi-select) */}
@@ -373,7 +379,17 @@ function Field({ label, children }: { label: React.ReactNode; children: React.Re
 }
 
 function defaultTime(offsetMinutes: number) {
-  const d = new Date();
-  d.setMinutes(d.getMinutes() + offsetMinutes);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  // Tier-2 fix: previously used the device's local HH:MM, which is wrong
+  // whenever a driver/donor is not physically on NY time (or when the app
+  // runs in a webview that reports UTC). Format in America/New_York so the
+  // ready-from / ready-till defaults match the ops window regardless of tz.
+  const d = new Date(Date.now() + offsetMinutes * 60_000);
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'America/New_York',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(d);
+  const hh = parts.find((p) => p.type === 'hour')?.value ?? '00';
+  const mm = parts.find((p) => p.type === 'minute')?.value ?? '00';
+  // Intl in some engines returns "24" at the top of the hour; normalize it.
+  return `${hh === '24' ? '00' : hh}:${mm}`;
 }

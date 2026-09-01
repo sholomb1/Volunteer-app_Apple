@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { getUser, kioskDevice, appVersion, type AuthUser } from './api';
+import { getUser, kioskDevice, appVersion, volunteer as volunteerApi, type AuthUser } from './api';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ensureNativePushRegistered } from './native-push-client';
 import { ensureWebPushSubscribed } from './web-push-client';
@@ -19,6 +19,7 @@ import { Chat } from './screens/Chat';
 import { Activity } from './screens/Activity';
 import { CoordinatorPortal } from './screens/CoordinatorPortal';
 import { AdminPickupDetail } from './screens/AdminPickupDetail';
+import { TestBroadcastsPage } from './portal-sections';
 import { VolunteerRegistration } from './screens/VolunteerRegistration';
 import { SupplierRegistration } from './screens/SupplierRegistration';
 import { OneTimePickupRegistration } from './screens/OneTimePickupRegistration';
@@ -168,6 +169,46 @@ function AuthedApp() {
     })();
   }, [user]);
 
+  // Client Aug 18: mobile-app usage tracking. Ping on every foreground so
+  // the office sees who is actually using the app (vs. only SMS). Best-effort.
+  //
+  // Aug 23 abc908 fix: on Capacitor (native Android/iOS) the DOM
+  // `visibilitychange` event does NOT fire reliably when the app returns
+  // from background — only web browsers dispatch it consistently. Every
+  // real driver on the native APK was silently reporting "Never opened"
+  // in the App Usage panel because their pings only fired once (at first
+  // launch after login) and never again on subsequent foregrounds. Add a
+  // parallel Capacitor `App.addListener('appStateChange', ...)` so native
+  // resumes get counted too.
+  useEffect(() => {
+    if (!user) return;
+    const cap = (window as any).Capacitor;
+    const isNative = cap?.isNativePlatform?.() === true;
+    const platform: string = cap?.getPlatform?.() ?? (typeof navigator !== 'undefined' ? 'web' : 'unknown');
+    const version = String((globalThis as any).__APP_VERSION_NAME__ ?? '');
+    const ping = () => { void volunteerApi.ping(platform, version).catch(() => {}); };
+    ping();
+    const onVis = () => { if (document.visibilityState === 'visible') ping(); };
+    document.addEventListener('visibilitychange', onVis);
+    let handle: any = null;
+    if (isNative) {
+      // Access via Capacitor.Plugins.App at runtime — avoids a hard type
+      // dependency on @capacitor/app for the web-only build path.
+      try {
+        const AppPlugin = (window as any).Capacitor?.Plugins?.App;
+        if (AppPlugin?.addListener) {
+          handle = AppPlugin.addListener('appStateChange', (state: any) => {
+            if (state?.isActive) ping();
+          });
+        }
+      } catch {}
+    }
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      try { handle?.remove?.(); } catch {}
+    };
+  }, [user]);
+
   if (!user) return <Login onAuthed={setUser} />;
 
   // Admins / coordinators land in the dispatch portal on desktop.
@@ -176,6 +217,8 @@ function AuthedApp() {
       <Routes>
         <Route path="/"                 element={<CoordinatorPortal />} />
         <Route path="/admin/pickup/:id" element={<AdminPickupDetail />} />
+        {/* xyz122: read-only list of the last 20 simulated broadcasts */}
+        <Route path="/admin/test-broadcasts" element={<TestBroadcastsPage />} />
         <Route path="/pickup/:mode/:id" element={<PickupDetail />} />
         <Route path="*"                 element={<Navigate to="/" replace />} />
       </Routes>

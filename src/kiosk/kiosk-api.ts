@@ -44,12 +44,27 @@ export type KioskRecentCompleted = {
   labelsPrinted: boolean;
 };
 
+// Aug 26 client rule: when a driver has multiple accepted pickups still in
+// their queue (accepted within the last 12 hours), the kiosk shows a picker
+// so they can select one, some, or none of them before proceeding. Each
+// option is a supplier plus the pickup ids at that supplier.
+export type KioskPickupOption = {
+  supplierId: number;
+  supplierName: string;
+  pickupIds: number[];
+  scheduledDate: string;
+  scheduledTime: string | null;
+};
+
 export type KioskSigninResp = {
   data:
     | { needsDriverPick: true; adminName: string; drivers: Array<{ volunteerId: number; name: string; pendingPickups: number }> }
     | { needsVolunteerPick: true; code: string; candidates: Array<{ volunteerId: number; name: string }> }
+    | { needsPickupSelection: true; volunteerId: number; volunteerName: string; greeting: string; options: KioskPickupOption[]; allSuppliers: Array<{ supplierId: number; supplierName: string; city: string }> }
     | { needsVendorPick: true; dropoffId: number; volunteerId: number; volunteerName: string; greeting: string; allSuppliers: Array<{ supplierId: number; supplierName: string; city: string }> }
-    | { dropoffId: number; volunteerId: number; volunteerName: string; stores: KioskStore[]; recentCompleted?: KioskRecentCompleted[]; needsDriverPick?: false; needsVolunteerPick?: false; needsVendorPick?: false };
+    // Aug 19 client bug 1: assigned-driver signin now also returns allSuppliers
+    // so the kiosk's Stores screen can offer a "Choose a different store" option.
+    | { dropoffId: number; volunteerId: number; volunteerName: string; stores: KioskStore[]; recentCompleted?: KioskRecentCompleted[]; allSuppliers?: Array<{ supplierId: number; supplierName: string; city: string }>; needsDriverPick?: false; needsVolunteerPick?: false; needsVendorPick?: false; needsPickupSelection?: false };
 };
 
 export type KioskLine = {
@@ -83,6 +98,15 @@ export const kiosk = {
     guestName?: string;
     guestPhone?: string;
   }) => ksh<KioskSigninResp>(secret, '/signin', { method: 'POST', body: JSON.stringify(body) }),
+
+  // Aug 26 client rule: resolve the pickup-selection screen. `pickupIds`
+  // is the subset the driver ticked; `skipAll` sends them to the walk-in
+  // vendor picker instead. Server responds with the same shape as signin.
+  resolvePickups: (secret: string, body: {
+    volunteerId: number;
+    pickupIds: number[];
+    skipAll?: boolean;
+  }) => ksh<KioskSigninResp>(secret, '/signin/resolve-pickups', { method: 'POST', body: JSON.stringify(body) }),
 
   // Auto-create a supplier from a manually-typed name + address.
   manualVendor: (secret: string, body: {

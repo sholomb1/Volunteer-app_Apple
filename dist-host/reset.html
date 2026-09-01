@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+<meta http-equiv="Pragma" content="no-cache" />
+<meta http-equiv="Expires" content="0" />
+<title>Zeh L'Zeh — Refreshing…</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #FAF5EC; color: #1C2A21;
+               font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { min-height: 100%; display: flex; flex-direction: column; align-items: center;
+         justify-content: center; padding: 32px; text-align: center; }
+  h1 { font-size: 22px; margin: 0 0 6px; color: #2C5A3B; font-weight: 700; }
+  p  { font-size: 15px; color: #6E7C70; margin: 0 0 22px; max-width: 460px; line-height: 1.4; }
+  .spin { width: 40px; height: 40px; border: 4px solid #E5EEE2; border-top-color: #2C5A3B;
+          border-radius: 50%; animation: r 1s linear infinite; margin: 26px 0 20px; }
+  @keyframes r { to { transform: rotate(360deg); } }
+  .card { background: #FFFFFF; border: 1px solid #EAE3D4; border-radius: 14px;
+          padding: 18px 20px; max-width: 460px; width: 100%; box-sizing: border-box; }
+  .check { display: flex; align-items: center; gap: 10px; font-size: 15px;
+           padding: 6px 0; color: #1C2A21; }
+  .check .m { width: 22px; height: 22px; border-radius: 50%; background: #2C5A3B;
+              color: #FFFFFF; display: inline-flex; align-items: center;
+              justify-content: center; font-weight: 800; font-size: 13px; flex-shrink: 0; }
+  .check.pending .m { background: #E5EEE2; color: #E5EEE2; }
+  .card h2 { font-size: 15px; font-weight: 800; color: #2C5A3B; margin: 0 0 10px;
+             text-transform: uppercase; letter-spacing: .06em; }
+  button { margin-top: 22px; background: #2C5A3B; color: #FAF5EC; border: 0;
+           border-radius: 12px; padding: 14px 26px; font-size: 16px; font-weight: 700;
+           cursor: pointer; -webkit-tap-highlight-color: transparent; min-width: 220px; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  .countdown { font-size: 12px; color: #6E7C70; margin-top: 10px; }
+</style>
+</head>
+<body>
+<main>
+  <div id="stage">
+    <h1>Refreshing the portal</h1>
+    <div class="spin"></div>
+    <p>Clearing this device's saved copy so you see the latest version…</p>
+  </div>
+
+  <div id="done" style="display:none">
+    <h1 style="color:#2C5A3B">All caches cleared ✓</h1>
+    <p>This device is ready to load the latest portal.</p>
+    <div class="card">
+      <h2>What was cleared</h2>
+      <div id="c1" class="check pending"><span class="m">✓</span> Service worker unregistered</div>
+      <div id="c2" class="check pending"><span class="m">✓</span> Saved files (cache storage) cleared</div>
+      <div id="c3" class="check pending"><span class="m">✓</span> Refresh marker reset</div>
+    </div>
+    <button id="go">Open the portal</button>
+    <div id="cd" class="countdown"></div>
+  </div>
+</main>
+<script>
+(async function() {
+  var status = { sw: false, caches: false, marker: false };
+
+  try {
+    if ('serviceWorker' in navigator) {
+      var regs = await navigator.serviceWorker.getRegistrations();
+      for (var i = 0; i < regs.length; i++) { await regs[i].unregister(); }
+    }
+    status.sw = true;
+  } catch (e) {}
+
+  try {
+    if ('caches' in window) {
+      var keys = await caches.keys();
+      for (var j = 0; j < keys.length; j++) { await caches.delete(keys[j]); }
+    }
+    status.caches = true;
+  } catch (e) {}
+
+  try { localStorage.removeItem('zlz_portal_reload_seen'); status.marker = true; } catch (e) {}
+
+  function mark(id, ok) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.classList.remove('pending');
+    if (!ok) {
+      el.querySelector('.m').textContent = '!';
+      el.querySelector('.m').style.background = '#B04A2A';
+    }
+  }
+  mark('c1', status.sw);
+  mark('c2', status.caches);
+  mark('c3', status.marker);
+
+  document.getElementById('stage').style.display = 'none';
+  document.getElementById('done').style.display  = 'block';
+
+  var target = '/rescue/?v=' + Date.now();
+  var btn = document.getElementById('go');
+  var cd = document.getElementById('cd');
+  var secs = 5;
+  cd.textContent = 'Opening automatically in ' + secs + '…';
+  btn.addEventListener('click', function() { window.location.replace(target); });
+  var t = setInterval(function() {
+    secs--;
+    if (secs <= 0) { clearInterval(t); window.location.replace(target); }
+    else { cd.textContent = 'Opening automatically in ' + secs + '…'; }
+  }, 1000);
+})();
+</script>
+</body>
+</html>

@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Check, Route, Store as StoreIcon, Clock } from 'lucide-react';
-import { volunteer } from '../api';
+import { volunteer, getUser } from '../api';
 import { Avatar, StickyCTA, cx } from '../design';
 
 export function TripCapture() {
@@ -24,10 +24,17 @@ export function TripCapture() {
 
   useEffect(() => {
     if (!pickup) return;
-    // Initial seed — auto-pull would use geolocation between accept→complete
-    // for real GPS. For now we seed with a plausible distance/duration.
-    if (miles === '')   setMiles((Math.random() * 8 + 2).toFixed(1));
-    if (minutes === '') setMinutes(String(Math.floor(Math.random() * 30 + 30)));
+    // Tier-1 fix (Aug 21): we used to seed miles/minutes with Math.random(),
+    // which shipped fabricated numbers straight to /api/me/activity-log if
+    // the driver didn't edit them. That poisoned the four-metric tracker.
+    //
+    // Until proper GPS trip-capture is wired (start-on-depart via Capacitor
+    // Geolocation → stop-on-delivery, then diff distance/duration), seed
+    // empty defaults so the "auto-with-edit" pattern still works — the
+    // driver types real numbers before Save. Anything they leave blank is
+    // sent as `undefined` in the mutation body and skipped by the backend.
+    if (miles === '')   setMiles('');
+    if (minutes === '') setMinutes('');
   }, [pickup, miles, minutes]);
 
   const save = useMutation({
@@ -48,7 +55,7 @@ export function TripCapture() {
     <div className="min-h-screen flex flex-col">
       <div className="px-5 pt-3 pb-2 flex items-center justify-between">
         <button onClick={() => nav(-1)} className="haptic grid h-9 w-9 place-items-center rounded-full bg-paper border border-line"><ArrowLeft size={18} /></button>
-        <Avatar initials="DG" />
+        <Avatar initials={((getUser()?.firstName?.[0] ?? '') + (getUser()?.lastName?.[0] ?? '')) || '·'} />
       </div>
 
       <main className="flex-1 px-5 pb-4">
@@ -81,7 +88,7 @@ export function TripCapture() {
                         onBlur={() => setEditing(null)} onKeyDown={(e) => e.key === 'Enter' && setEditing(null)}
                         className="font-display font-bold text-[16px] text-right bg-cream/70 px-2 py-1 rounded-md w-20" />
                ) : (
-                 <button onClick={() => setEditing('miles')} className="font-display font-bold text-[16px] text-clay-soft-foreground">{miles} <span className="text-[11px] text-muted font-semibold">mi</span></button>
+                 <button onClick={() => setEditing('miles')} className="font-display font-bold text-[16px] text-clay-soft-foreground">{miles || '—'} <span className="text-[11px] text-muted font-semibold">mi</span></button>
                )} />
           <Row icon={<StoreIcon size={15} />} iconBg="bg-clay-soft" iconFg="text-clay" k="Store" v={<span className="text-[13px] font-bold truncate max-w-[160px]">{store}</span>} />
           <Row icon={<Clock size={15} />} iconBg="bg-amber-soft" iconFg="text-amber" k="Time spent"
@@ -90,7 +97,7 @@ export function TripCapture() {
                         onBlur={() => setEditing(null)} onKeyDown={(e) => e.key === 'Enter' && setEditing(null)}
                         className="font-display font-bold text-[16px] text-right bg-cream/70 px-2 py-1 rounded-md w-20" />
                ) : (
-                 <button onClick={() => setEditing('minutes')} className="font-display font-bold text-[16px]">{fmtMinutes(Number(minutes) || 0)}</button>
+                 <button onClick={() => setEditing('minutes')} className="font-display font-bold text-[16px]">{minutes ? fmtMinutes(Number(minutes) || 0) : '—'}</button>
                )} />
         </div>
         <div className="text-center text-[11.5px] text-muted mt-3 font-semibold">Tap any value to adjust before saving</div>

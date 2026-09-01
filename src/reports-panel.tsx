@@ -2,6 +2,20 @@
  * Reports panel — filterable pickup history with CSV export and quick stats.
  * Hits the existing /api/reports/pickups endpoint (staff-only, already wired
  * on the backend). Lives in the Coordinator Portal under the Reports tab.
+ *
+ * Tier-2 fixes (2026-08-21):
+ *  1. `delivered` now counts toward Completed (was silently in Scheduled)
+ *  2. Total-pickups tile shows only completed/delivered/picked_up (grant reality)
+ *  3. Distinct stores/drivers come from server-side DISTINCT on join tables
+ *     (no more "Chai Lifeline, Inc." splitting into two on the comma)
+ *  4. New tiles: total miles + total hours (SUM from activity_logs)
+ *  5. Date-range preset buttons (this week / this month / last month / YTD / all)
+ *  6. Filter dropdowns include inactive suppliers + soft-deleted volunteers,
+ *     tagged "(inactive)" so historical rows stay filterable
+ *  7. CSV first column = pickup ID
+ *  8. CSV column order matches the on-screen table
+ *  9. CSV export fetches uncapped dataset; banner appears when the on-screen
+ *     table is truncated
  */
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -20,22 +34,51 @@ type ReportRow = {
   items_collected: any;
 };
 
+type ReportTotals = {
+  allRows: number;
+  totalPickups: number;
+  completed: number;
+  missedCancelled: number;
+  scheduled: number;
+  distinctSuppliers: number;
+  distinctVolunteers: number;
+  miles: number;
+  hours: number;
+};
+
+type SupplierPick   = { id: number; name: string; isActive: boolean };
+type VolunteerPick  = { id: number; firstName: string; lastName: string; unitNumber: number | null; inactive: boolean };
+
 function fmtQty(items: any) {
   if (!items || typeof items !== 'object') return '';
   return items.quantity ? String(items.quantity) : '';
 }
 
+// Local ISO date (YYYY-MM-DD) — using toISOString() would shift into UTC and
+// hide same-day rows near midnight local time (per zlz_ny_date_defaults rule).
+function isoLocal(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 export function ReportsPanel() {
   const today = new Date();
   const lastMonth = new Date(); lastMonth.setMonth(lastMonth.getMonth() - 1);
-  const [from, setFrom] = useState<string>(lastMonth.toISOString().slice(0, 10));
-  const [to,   setTo]   = useState<string>(today.toISOString().slice(0, 10));
+  const [from, setFrom] = useState<string>(isoLocal(lastMonth));
+  const [to,   setTo]   = useState<string>(isoLocal(today));
   const [status, setStatus]           = useState<string>('');
   const [supplierId, setSupplierId]   = useState<string>('');
   const [volunteerId, setVolunteerId] = useState<string>('');
+  const [exportBusy, setExportBusy]   = useState(false);
 
-  const suppliers  = useQuery({ queryKey: ['admin-suppliers'],  queryFn: () => api<{ data: any[] }>('/api/suppliers?limit=500') });
-  const volunteers = useQuery({ queryKey: ['admin-volunteers'], queryFn: () => api<{ data: any[] }>('/api/volunteers?limit=500') });
+  // Reports-specific picklists — include inactive/soft-deleted parties so
+  // historical rows tied to since-removed stores/drivers are filterable.
+  const suppliers  = useQuery({ queryKey: ['reports-suppliers-picklist'],
+    queryFn: () => api<{ data: SupplierPick[] }>('/api/reports/suppliers-picklist') });
+  const volunteers = useQuery({ queryKey: ['reports-volunteers-picklist'],
+    queryFn: () => api<{ data: VolunteerPick[] }>('/api/reports/volunteers-picklist') });
 
   const qs = new URLSearchParams();
   if (from)        qs.set('from', from);
@@ -45,65 +88,104 @@ export function ReportsPanel() {
   if (volunteerId) qs.set('volunteerId', volunteerId);
   const report = useQuery({
     queryKey: ['reports-pickups', qs.toString()],
-    queryFn:  () => api<{ data: ReportRow[] }>(`/api/reports/pickups${qs.toString() ? `?${qs}` : ''}`),
+    queryFn:  () => api<{ data: ReportRow[]; totals: ReportTotals; truncated: boolean; limit: number }>(
+      `/api/reports/pickups${qs.toString() ? `?${qs}` : ''}`),
   });
   const rows = report.data?.data ?? [];
+  const totals: ReportTotals = report.data?.totals ?? {
+    allRows: 0, totalPickups: 0, completed: 0, missedCancelled: 0, scheduled: 0,
+    distinctSuppliers: 0, distinctVolunteers: 0, miles: 0, hours: 0,
+  };
+  const truncated = !!report.data?.truncated;
 
-  const stats = (() => {
-    const total = rows.length;
-    let completed = 0, missed = 0, scheduled = 0;
-    const stores = new Set<string>();
-    const drivers = new Set<string>();
-    rows.forEach((r) => {
-      if (r.status === 'completed') completed++;
-      else if (r.status === 'missed' || r.status === 'cancelled') missed++;
-      else scheduled++;
-      if (r.supplier)  r.supplier.split(',').forEach((s) => stores.add(s.trim()));
-      if (r.volunteer) r.volunteer.split(',').forEach((v) => drivers.add(v.trim()));
-    });
-    return { total, completed, missed, scheduled, stores: stores.size, drivers: drivers.size };
-  })();
+  async function exportCsv() {
+    setExportBusy(true);
+    try {
+      // Always pull the uncapped dataset for CSV so the office file is complete
+      // even when the on-screen table shows only the first 1000 rows.
+      const exportQs = new URLSearchParams(qs);
+      exportQs.set('limit', '0');
+      const full = await api<{ data: ReportRow[] }>(`/api/reports/pickups?${exportQs}`);
+      const allRows = full.data ?? [];
 
-  function exportCsv() {
-    const head = ['Date', 'Time', 'Supplier / Donor', 'Volunteer(s)', 'Type', 'Status', 'Quantity'];
-    const lines = rows.map((r) => [
-      String(r.scheduled_date ?? '').slice(0, 10),
-      String(r.scheduled_time ?? '').slice(0, 5),
-      r.supplier ?? '',
-      r.volunteer ?? '',
-      r.pickup_type ?? '',
-      r.status ?? '',
-      fmtQty(r.items_collected),
-    ].map((c) => `"${String(c).replace(/"/g, '""')}"`).join(','));
-    const csv = [head.join(','), ...lines].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = `zlz-pickups-${from}_${to}.csv`; a.click();
-    URL.revokeObjectURL(url);
+      // Column order MATCHES the on-screen table (ID injected first).
+      const head = ['ID', 'Date', 'Time', 'Supplier', 'Volunteer(s)', 'Type', 'Qty', 'Status'];
+      const lines = allRows.map((r) => [
+        r.id ?? '',
+        String(r.scheduled_date ?? '').slice(0, 10),
+        String(r.scheduled_time ?? '').slice(0, 5),
+        r.supplier ?? '',
+        r.volunteer ?? '',
+        r.pickup_type ?? '',
+        fmtQty(r.items_collected),
+        r.status ?? '',
+      ].map((c) => `"${String(c).replace(/"/g, '""')}"`).join(','));
+      const csv = [head.join(','), ...lines].join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `zlz-pickups-${from}_${to}.csv`; a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExportBusy(false);
+    }
   }
 
   function clearFilters() {
     setStatus(''); setSupplierId(''); setVolunteerId('');
-    setFrom(lastMonth.toISOString().slice(0, 10));
-    setTo(today.toISOString().slice(0, 10));
+    setFrom(isoLocal(lastMonth));
+    setTo(isoLocal(today));
+  }
+
+  // Date-range presets (fix #5). All resolve to local NY-style ISO strings.
+  function applyPreset(kind: 'week' | 'month' | 'last-month' | 'ytd' | 'all') {
+    const now = new Date();
+    if (kind === 'week') {
+      const day = now.getDay(); // 0 = Sun; grant reporters generally mean Sun→today
+      const start = new Date(now); start.setDate(now.getDate() - day);
+      setFrom(isoLocal(start)); setTo(isoLocal(now));
+    } else if (kind === 'month') {
+      setFrom(isoLocal(new Date(now.getFullYear(), now.getMonth(), 1)));
+      setTo(isoLocal(now));
+    } else if (kind === 'last-month') {
+      const first = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const last  = new Date(now.getFullYear(), now.getMonth(), 0);
+      setFrom(isoLocal(first)); setTo(isoLocal(last));
+    } else if (kind === 'ytd') {
+      setFrom(isoLocal(new Date(now.getFullYear(), 0, 1)));
+      setTo(isoLocal(now));
+    } else if (kind === 'all') {
+      setFrom('2020-01-01'); setTo(isoLocal(now));
+    }
   }
 
   const filterInput = 'rounded-[10px] border-[1.4px] border-line bg-paper px-3 py-2 text-[14px] outline-none focus:border-forest';
+  const presetBtn   = 'haptic text-[12.5px] font-bold text-forest bg-sage/60 hover:bg-sage rounded-full px-3 py-1';
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2">
-        <StatTile label="Total pickups"      value={stats.total}      tone="forest" />
-        <StatTile label="Completed"          value={stats.completed}  tone="forest" />
-        <StatTile label="Scheduled"          value={stats.scheduled}  tone="amber" />
-        <StatTile label="Missed / cancelled" value={stats.missed}     tone="clay" />
-        <StatTile label="Distinct stores"    value={stats.stores}     tone="sky" />
-        <StatTile label="Distinct drivers"   value={stats.drivers}    tone="sky" />
+      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2">
+        <StatTile label="Total pickups"       value={totals.totalPickups}          tone="forest" />
+        <StatTile label="Completed"           value={totals.completed}             tone="forest" />
+        <StatTile label="Scheduled"           value={totals.scheduled}             tone="amber" />
+        <StatTile label="Missed / cancelled"  value={totals.missedCancelled}       tone="clay" />
+        <StatTile label="Distinct stores"     value={totals.distinctSuppliers}     tone="sky" />
+        <StatTile label="Distinct drivers"    value={totals.distinctVolunteers}    tone="sky" />
+        <StatTile label="Total miles"         value={Math.round(totals.miles * 10) / 10}  tone="forest" />
+        <StatTile label="Total hours"         value={Math.round(totals.hours * 10) / 10}  tone="forest" />
       </div>
 
       <div className="bg-paper border border-line rounded-[14px] p-4">
-        <div className="text-[13px] font-extrabold uppercase tracking-[.06em] text-muted mb-3">Filters</div>
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-[13px] font-extrabold uppercase tracking-[.06em] text-muted">Filters</div>
+          <div className="flex flex-wrap gap-1.5">
+            <button onClick={() => applyPreset('week')}       className={presetBtn}>This week</button>
+            <button onClick={() => applyPreset('month')}      className={presetBtn}>This month</button>
+            <button onClick={() => applyPreset('last-month')} className={presetBtn}>Last month</button>
+            <button onClick={() => applyPreset('ytd')}        className={presetBtn}>This year</button>
+            <button onClick={() => applyPreset('all')}        className={presetBtn}>All time</button>
+          </div>
+        </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
           <label className="block">
             <span className="text-[11.5px] font-extrabold uppercase tracking-[.06em] text-muted">From</span>
@@ -121,6 +203,7 @@ export function ReportsPanel() {
               <option value="confirmed">Confirmed</option>
               <option value="in_progress">In progress</option>
               <option value="picked_up">Picked up</option>
+              <option value="delivered">Delivered</option>
               <option value="completed">Completed</option>
               <option value="missed">Missed</option>
               <option value="cancelled">Cancelled</option>
@@ -130,30 +213,45 @@ export function ReportsPanel() {
             <span className="text-[11.5px] font-extrabold uppercase tracking-[.06em] text-muted">Supplier</span>
             <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} className={cx(filterInput, 'mt-1 w-full')}>
               <option value="">All</option>
-              {(suppliers.data?.data ?? []).map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              {(suppliers.data?.data ?? []).map((s) => (
+                <option key={s.id} value={s.id}>{s.name}{s.isActive === false ? ' (inactive)' : ''}</option>
+              ))}
             </select>
           </label>
           <label className="block">
             <span className="text-[11.5px] font-extrabold uppercase tracking-[.06em] text-muted">Volunteer</span>
             <select value={volunteerId} onChange={(e) => setVolunteerId(e.target.value)} className={cx(filterInput, 'mt-1 w-full')}>
               <option value="">All</option>
-              {(volunteers.data?.data ?? []).map((v: any) => <option key={v.id} value={v.id}>{v.firstName} {v.lastName}{v.unitNumber != null ? ` · #${v.unitNumber}` : ''}</option>)}
+              {(volunteers.data?.data ?? []).map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.firstName} {v.lastName}
+                  {v.unitNumber != null ? ` · #${v.unitNumber}` : ''}
+                  {v.inactive ? ' (inactive)' : ''}
+                </option>
+              ))}
             </select>
           </label>
           <div className="flex items-end gap-2">
             <button onClick={clearFilters} className="haptic text-[13px] font-bold text-muted px-3 py-2 rounded-[10px] hover:bg-cream">Clear</button>
-            <button onClick={exportCsv} disabled={rows.length === 0}
+            <button onClick={exportCsv} disabled={rows.length === 0 || exportBusy}
                     className="haptic flex-1 bg-forest text-paper font-bold text-[13px] rounded-[10px] px-3 py-2 disabled:opacity-40">
-              ⬇ Export CSV
+              {exportBusy ? 'Exporting…' : '⬇ Export CSV'}
             </button>
           </div>
         </div>
       </div>
 
+      {truncated && (
+        <div className="bg-amber-soft border border-amber/40 text-[#8a6011] text-[13px] font-semibold rounded-[10px] px-3 py-2">
+          Showing first {rows.length} of {totals.allRows} rows.
+          The <b>Export CSV</b> button downloads the complete dataset.
+        </div>
+      )}
+
       <div className="bg-paper border border-line rounded-[14px] overflow-hidden">
         <div className="px-4 py-2.5 border-b border-line flex items-center justify-between">
           <div className="text-[13px] font-extrabold uppercase tracking-[.06em] text-muted">
-            {report.isLoading ? 'Loading…' : `${rows.length} pickup${rows.length === 1 ? '' : 's'}`}
+            {report.isLoading ? 'Loading…' : `${totals.allRows} pickup${totals.allRows === 1 ? '' : 's'}`}
           </div>
           {report.error && <div className="text-[12.5px] text-clay">{(report.error as Error).message}</div>}
         </div>
@@ -186,7 +284,7 @@ export function ReportsPanel() {
                     <td className="px-3 py-2 text-ink">{fmtQty(r.items_collected)}</td>
                     <td className="px-3 py-2">
                       <span className={cx('inline-block text-[11.5px] font-bold py-1 px-2.5 rounded-full',
-                        r.status === 'completed' ? 'bg-sage text-forest' :
+                        r.status === 'completed' || r.status === 'delivered' ? 'bg-sage text-forest' :
                         r.status === 'missed' || r.status === 'cancelled' ? 'bg-clay-soft text-clay' :
                         r.status === 'in_progress' || r.status === 'picked_up' ? 'bg-amber-soft text-[#8a6011]' :
                         'bg-line text-muted')}>

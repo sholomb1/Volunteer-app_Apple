@@ -35,6 +35,24 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
+
+        <!-- Task #176 (Aug 14): device-admin receiver used for Lock Task Mode.
+             Set as device owner one time on the kiosk tablet with:
+               adb shell dpm set-device-owner \
+                 org.zehlzeh.volunteer/.KioskDeviceAdminReceiver
+             Requires a factory-reset tablet or provisioned via QR-code /
+             NFC per Android Enterprise. -->
+        <receiver
+            android:name=".KioskDeviceAdminReceiver"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            android:exported="true">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
     </application>
 
     <!-- Permissions -->

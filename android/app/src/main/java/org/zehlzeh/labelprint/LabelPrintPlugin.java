@@ -53,10 +53,31 @@ public class LabelPrintPlugin extends Plugin {
                 sock.connect(new InetSocketAddress(host, port), 5000);
                 sock.setSoTimeout(5000);
                 OutputStream out = sock.getOutputStream();
-                out.write(payload);
-                out.flush();
-                // Give the printer a beat to buffer before closing.
-                try { Thread.sleep(120); } catch (InterruptedException ignored) {}
+                // Chunked write with per-chunk drain — writing a big
+                // multi-label payload in one shot fills the TSC's TCP
+                // receive buffer and the printer silently drops the tail.
+                // 8KB chunks + a small sleep between chunks lets the
+                // printer feed each label out before the next chunk lands.
+                // TSC TDP-244 at speed 4 feeds a ~3" label in ~700ms; each
+                // label bitmap is ~45KB → ~6 chunks per label × 60ms = ~360ms
+                // of inter-chunk pauses per label, well under the actual
+                // feed time so we never starve the printer.
+                // Chunk larger and pause less — printer at SPEED 6 (6"/sec)
+                // eats bytes faster than we can generate them, so we don't
+                // need the earlier long pauses. 16KB chunks + 20ms pauses
+                // keeps the TCP receive buffer trickled without stalling.
+                final int CHUNK = 16 * 1024;
+                for (int i = 0; i < payload.length; i += CHUNK) {
+                    int end = Math.min(i + CHUNK, payload.length);
+                    out.write(payload, i, end - i);
+                    out.flush();
+                    if (end < payload.length) {
+                        try { Thread.sleep(20); } catch (InterruptedException ignored) {}
+                    }
+                }
+                // Final drain — kept short (200ms) so the socket-close
+                // doesn't sit around after the last chunk landed.
+                try { Thread.sleep(200); } catch (InterruptedException ignored) {}
                 out.close();
                 sock.close();
                 JSObject res = new JSObject();

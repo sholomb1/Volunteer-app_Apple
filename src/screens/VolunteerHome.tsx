@@ -9,8 +9,10 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowRight, Truck, Calendar, Check, MapPin } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { volunteer, centerHelp, CENTER_HELP_TASK_LABELS, type CenterHelpInstance, type AuthUser } from '../api';
-import { AppBar, Avatar, FadeUp, Skeleton, cx } from '../design';
+import { AppBar, Avatar, FadeUp, Skeleton, Toast, cx } from '../design';
+import { AnimatePresence } from 'framer-motion';
 import { useLocationReporting, getTrackingEnabled, setTrackingEnabled, reportNow } from '../location-reporter';
+import { nyToday } from '../time-format';
 
 export function VolunteerHome({ user }: { user: AuthUser }) {
   const nav = useNavigate();
@@ -47,8 +49,27 @@ export function VolunteerHome({ user }: { user: AuthUser }) {
   // them as claimable.
   const qc = useQueryClient();
   const avail = useQuery({ queryKey: ['availability'], queryFn: volunteer.availability });
+  // abc-tier1 (Aug 21): endpoint used to 404 silently; add optimistic UI +
+  // toast on error so the driver actually sees when a toggle failed.
+  const [availToast, setAvailToast] = useState<string | null>(null);
   const setAvail = useMutation({
     mutationFn: (next: boolean) => volunteer.setAvailability(next),
+    onMutate: async (next: boolean) => {
+      await qc.cancelQueries({ queryKey: ['availability'] });
+      const previous = qc.getQueryData<{ data: { isAvailable: boolean; unavailableUntil: string | null } }>(['availability']);
+      // Optimistic: paint the new state immediately so the toggle feels snappy.
+      qc.setQueryData(['availability'], (old: any) => ({
+        data: { isAvailable: next, unavailableUntil: old?.data?.unavailableUntil ?? null },
+      }));
+      return { previous };
+    },
+    onError: (_err, _next, ctx) => {
+      // Roll the UI back to the last known-good value and surface the failure.
+      if (ctx?.previous) qc.setQueryData(['availability'], ctx.previous);
+      else qc.invalidateQueries({ queryKey: ['availability'] });
+      setAvailToast('Couldn’t save availability, try again');
+      window.setTimeout(() => setAvailToast(null), 3500);
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['availability'] }),
   });
   const isAvailable = avail.data?.data?.isAvailable ?? true;
@@ -195,12 +216,68 @@ export function VolunteerHome({ user }: { user: AuthUser }) {
                     icon={<Check size={22} strokeWidth={2.5} />} />
         </FadeUp>
 
+        {/* abc873 (Aug 18): read-only recap of what the driver actually
+            covered in the last 24 hours. Sourced from the same completed-
+            history endpoint so it also picks up SMS-completed and
+            dispatcher-marked-completed pickups (per brief item #11). */}
+        <FadeUp delay={0.13}>
+          <RecentlyCoveredSection />
+        </FadeUp>
+
         {/* batch abc801 Aug 9 — Center Help schedule: simple listing of the
             next 7 days of instances. Volunteer can sign up / cancel here. */}
         <FadeUp delay={0.14}>
           <CenterHelpSectionForVolunteer />
         </FadeUp>
       </main>
+
+      {/* Availability-toggle failure toast (Tier-1 fix — no more silent 404). */}
+      <AnimatePresence>
+        {availToast && <Toast kind="err" msg={availToast} />}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// abc873 (Aug 18): "Covered in the last 24 hours" — read-only recap. Uses
+// the same /me/history endpoint so it counts SMS/backend/steady completions,
+// not only app-completed trips.
+function RecentlyCoveredSection() {
+  const q = useQuery({ queryKey: ['history'], queryFn: volunteer.history, refetchInterval: 60_000 });
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  const recent = (q.data?.data ?? []).filter((r: any) => {
+    const t = r.actual_end_at ?? r.scheduled_date ?? null;
+    if (!t) return false;
+    const ms = new Date(String(t)).getTime();
+    return Number.isFinite(ms) && ms >= cutoff;
+  }).slice(0, 20);
+  if (q.isLoading) return null;
+  return (
+    <div className="mt-4 rounded-[14px] border border-line bg-paper overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-line bg-cream/40 flex items-center justify-between">
+        <div className="text-[13px] font-extrabold text-ink">Covered in the last 24 hours</div>
+        <span className="text-[11px] text-muted font-semibold">{recent.length}</span>
+      </div>
+      {recent.length === 0 ? (
+        <div className="px-4 py-4 text-[12.5px] text-muted italic">Nothing in the last 24 hours. Recent pickups will show up here after they're delivered.</div>
+      ) : (
+        <ul className="divide-y divide-line/70">
+          {recent.map((r: any) => {
+            const when = r.actual_end_at ? new Date(r.actual_end_at) : (r.scheduled_date ? new Date(String(r.scheduled_date) + 'T00:00:00') : null);
+            const label = r.suppliers || 'Pickup';
+            return (
+              <li key={r.pickup_instance_id} className="px-4 py-2.5">
+                <div className="flex items-baseline justify-between gap-2">
+                  <div className="text-[13px] font-bold text-ink truncate">{label}</div>
+                  <div className="text-[11px] text-muted whitespace-nowrap">{when ? when.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' }) : ''}</div>
+                </div>
+                {r.supplier_address && <div className="text-[11.5px] text-muted truncate">{r.supplier_address}</div>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <div className="px-4 py-2 border-t border-line text-[10.5px] text-muted italic">Read-only — this list reflects what you covered across the app and SMS.</div>
     </div>
   );
 }
@@ -209,8 +286,8 @@ export function VolunteerHome({ user }: { user: AuthUser }) {
 // for the volunteer. Sign up or cancel inline. Nothing fancy.
 function CenterHelpSectionForVolunteer() {
   const qc = useQueryClient();
-  const to  = new Date(Date.now() + 7 * 86400e3).toISOString().slice(0, 10);
-  const from = new Date().toISOString().slice(0, 10);
+  const from = nyToday();
+  const to  = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(Date.now() + 7 * 86400e3));
   const q = useQuery({
     queryKey: ['ch-vol-instances', from, to],
     queryFn:  () => centerHelp.instances(from, to),

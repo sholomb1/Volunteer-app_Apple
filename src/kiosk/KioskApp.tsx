@@ -10,8 +10,8 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { kiosk, type KioskLine, type KioskStore, type KioskLabel } from './kiosk-api';
-import { kioskDevice } from '../api';
+import { kiosk, type KioskLine, type KioskStore, type KioskLabel, type KioskPickupOption } from './kiosk-api';
+import { kioskDevice, API_BASE } from '../api';
 import { printLabels, labelPrinter } from './label-print';
 import { AddressAutocomplete } from '../address-autocomplete';
 
@@ -25,12 +25,19 @@ type Screen =
   | { kind: 'namePicker'; code: string; candidates: NameCandidate[] }
   // Staff / admin: pick which driver to simulate.
   | { kind: 'picker'; adminName: string; adminUsername: string; adminPassword: string; drivers: PickerDriver[] }
+  // Aug 26 client rule: driver has 2+ accepted pickups still in their
+  // queue (within 12h of acceptance). Show a picker so they can choose
+  // which one(s) to process now, or skip all and add a supplier manually.
+  | { kind: 'pickupPicker'; volunteerId: number; volunteerName: string; greeting: string; options: KioskPickupOption[]; allSuppliers: VendorOption[] }
   // Walk-in: driver has no assigned pickup — pick vendor from master list.
   | { kind: 'vendorPicker'; dropoffId: number; volunteerName: string; greeting: string; allSuppliers: VendorOption[] }
   // Manual entry — driver couldn't find the store in the list. Type name + address.
-  | { kind: 'manualVendor'; dropoffId: number; volunteerName: string }
-  | { kind: 'stores'; dropoffId: number; volunteerName: string; stores: KioskStore[]; lines: KioskLine[]; recentCompleted?: import('./kiosk-api').KioskRecentCompleted[] }
-  | { kind: 'entry';  dropoffId: number; volunteerName: string; stores: KioskStore[]; lines: KioskLine[]; store: KioskStore }
+  | { kind: 'manualVendor'; dropoffId: number; volunteerName: string; allSuppliers?: VendorOption[] }
+  // Aug 19 client bug 1: `allSuppliers` carried on the stores/entry screens too
+  // so drivers with an assigned pickup can still open the vendor picker and
+  // switch to a different supplier if their real pickup differs.
+  | { kind: 'stores'; dropoffId: number; volunteerName: string; stores: KioskStore[]; lines: KioskLine[]; recentCompleted?: import('./kiosk-api').KioskRecentCompleted[]; allSuppliers?: VendorOption[] }
+  | { kind: 'entry';  dropoffId: number; volunteerName: string; stores: KioskStore[]; lines: KioskLine[]; store: KioskStore; allSuppliers?: VendorOption[] }
   | { kind: 'labels';  labels: KioskLabel[]; volunteerName: string };
 
 const CATEGORIES = ['Dairy', 'Produce', 'Bakery', 'Prepared', 'Frozen', 'Grocery / Dry', 'Meat / Fish', 'Other'];
@@ -38,6 +45,19 @@ const UNITS      = ['box', 'tray', 'container', 'bag'];
 
 // Item 3: 2-minute idle → auto-return to welcome. Any pointer/key/touch resets.
 const IDLE_MS = 2 * 60 * 1000;
+
+// Tier-2 fix #2 (Aug 21): best-effort DELETE of an orphaned kiosk dropoff
+// shell. Called when the driver backs out of the flow without completing.
+// Uses navigator.sendBeacon when leaving the app entirely, plain fetch when
+// navigating between screens. Silent on error — the sweeper in kiosk.ts
+// will pick up anything that slipped through.
+async function abandonDropoff(secret: string, dropoffId: number | null | undefined): Promise<void> {
+  if (!secret || !dropoffId) return;
+  try {
+    const url = API_BASE.replace(/\/$/, '') + `/api/kiosk/${encodeURIComponent(secret)}/dropoff/${dropoffId}/abandon`;
+    await fetch(url, { method: 'DELETE', keepalive: true });
+  } catch { /* silent — sweeper cleans up */ }
+}
 
 export function KioskApp() {
   const { secret = '' } = useParams<{ secret: string }>();
@@ -48,6 +68,10 @@ export function KioskApp() {
   // dismissible via a Cancel/Close action so a curious driver can back out.
   const [showAdminPin, setShowAdminPin]     = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
+  // Tier-2 fix #4 (Aug 21): if the browser refuses to re-acquire the Screen
+  // Wake Lock (e.g. after backgrounding), show a small banner so the office
+  // knows the tablet's screen may sleep and can wake it manually.
+  const [wakeLockWarn, setWakeLockWarn] = useState(false);
 
   // Kiosk-mode CSS on the root html: hide scroll, lock font, disable text-select
   useEffect(() => {
@@ -68,8 +92,22 @@ export function KioskApp() {
         const nav = navigator as any;
         if (nav.wakeLock?.request) {
           wl = await nav.wakeLock.request('screen');
+          // Aug 21 tier-2 #4: sentinels can be released by the OS mid-flight
+          // (backgrounding, low-power). React to that so the banner appears
+          // and we try again on next visibilitychange.
+          try { wl.addEventListener?.('release', () => {
+            console.warn('[kiosk] wake lock released by OS');
+            setWakeLockWarn(true);
+          }); } catch { /* ignore */ }
+          setWakeLockWarn(false);
         }
-      } catch { /* user gesture may be required first — best-effort */ }
+      } catch (err) {
+        // Aug 21 tier-2 #4: on some browsers .request() rejects (user gesture
+        // required, permission denied, or the tab is background-throttled).
+        // Log it and surface a UI hint so the tablet doesn't silently sleep.
+        console.warn('[kiosk] wake lock request rejected', err);
+        setWakeLockWarn(true);
+      }
     }
     void acquire();
     function onVis() { if (document.visibilityState === 'visible') void acquire(); }
@@ -95,6 +133,15 @@ export function KioskApp() {
     })();
   }, []);
 
+  // Tier-2 fix #2 (Aug 21): mirror of the current screen's dropoffId (if any)
+  // so idle-timeout / start-over / admin-exit paths can abandon the shell
+  // without needing screen in their deps.
+  const currentDropoffIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    const cur: any = screen;
+    currentDropoffIdRef.current = typeof cur?.dropoffId === 'number' ? cur.dropoffId : null;
+  }, [screen]);
+
   // Item 3: idle auto-return to welcome. Any pointer/key/touch/scroll resets
   // the countdown. Skipped when already on welcome.
   useEffect(() => {
@@ -106,6 +153,8 @@ export function KioskApp() {
         // Aug 15 audit: also close any admin surfaces so a coordinator who
         // walked away doesn't leave a PIN prompt / Admin Panel modal on top
         // of the fresh Welcome screen.
+        // Tier-2 fix #2 (Aug 21): also abandon any orphan dropoff shell.
+        void abandonDropoff(secret, currentDropoffIdRef.current);
         setScreen({ kind: 'welcome' });
         setShowHelp(false);
         setShowAdminPin(false);
@@ -119,7 +168,7 @@ export function KioskApp() {
       if (t) clearTimeout(t);
       events.forEach((e) => window.removeEventListener(e, reset));
     };
-  }, [screen.kind]);
+  }, [screen.kind, secret]);
 
   // ?dropoffId=<N> — jump straight to the Labels/Print screen for an
   // existing drop-off. Skips the sign-in dance entirely; the URL is the
@@ -163,32 +212,65 @@ export function KioskApp() {
           ?dropoffId= jump failed: {dropoffJumpErr}
         </div>
       )}
+      {/* Tier-2 fix #4 (Aug 21): if the browser refused / released the Screen
+          Wake Lock, warn the office that the tablet may sleep. Sits below any
+          jump error so both can coexist. */}
+      {wakeLockWarn && (
+        <div className="fixed top-14 left-4 right-4 z-[8500] rounded-[10px] bg-amber/90 text-ink px-4 py-2 text-[13px] font-bold text-center">
+          Screen may sleep — the tablet's wake-lock was refused. Tap the screen every few minutes to keep it awake.
+        </div>
+      )}
       {screen.kind === 'welcome'  && <Welcome onStart={() => setScreen({ kind: 'signin' })} />}
       {screen.kind === 'signin'   && <Signin  secret={secret}
-        onSigned={(d) => setScreen({ kind: 'stores', dropoffId: d.dropoffId, volunteerName: d.volunteerName, stores: d.stores, lines: [], recentCompleted: d.recentCompleted })}
+        onSigned={(d) => setScreen({ kind: 'stores', dropoffId: d.dropoffId, volunteerName: d.volunteerName, stores: d.stores, lines: [], recentCompleted: d.recentCompleted, allSuppliers: d.allSuppliers })}
         onAdminPick={(p) => setScreen({ kind: 'picker', ...p })}
         onNamePick={(code, cs) => setScreen({ kind: 'namePicker', code, candidates: cs })}
+        onPickupPick={(p) => setScreen({ kind: 'pickupPicker', ...p })}
         onWalkIn={(w) => setScreen({ kind: 'vendorPicker', ...w })} />}
       {screen.kind === 'namePicker' && <NamePicker secret={secret} screen={screen}
         onCancel={() => setScreen({ kind: 'signin' })}
-        onSigned={(d) => setScreen({ kind: 'stores', dropoffId: d.dropoffId, volunteerName: d.volunteerName, stores: d.stores, lines: [], recentCompleted: d.recentCompleted })}
+        onSigned={(d) => setScreen({ kind: 'stores', dropoffId: d.dropoffId, volunteerName: d.volunteerName, stores: d.stores, lines: [], recentCompleted: d.recentCompleted, allSuppliers: d.allSuppliers })}
+        onPickupPick={(p) => setScreen({ kind: 'pickupPicker', ...p })}
+        onWalkIn={(w) => setScreen({ kind: 'vendorPicker', ...w })} />}
+      {screen.kind === 'pickupPicker' && <PickupPicker secret={secret} screen={screen}
+        onCancel={() => setScreen({ kind: 'signin' })}
+        onSigned={(d) => setScreen({ kind: 'stores', dropoffId: d.dropoffId, volunteerName: d.volunteerName, stores: d.stores, lines: [], recentCompleted: d.recentCompleted, allSuppliers: d.allSuppliers })}
         onWalkIn={(w) => setScreen({ kind: 'vendorPicker', ...w })} />}
       {screen.kind === 'picker'   && <DriverPicker secret={secret} screen={screen}
         onCancel={() => setScreen({ kind: 'signin' })}
-        onSigned={(d) => setScreen({ kind: 'stores', dropoffId: d.dropoffId, volunteerName: d.volunteerName, stores: d.stores, lines: [], recentCompleted: d.recentCompleted })} />}
+        onPickupPick={(p) => setScreen({ kind: 'pickupPicker', ...p })}
+        onSigned={(d) => setScreen({ kind: 'stores', dropoffId: d.dropoffId, volunteerName: d.volunteerName, stores: d.stores, lines: [], recentCompleted: d.recentCompleted, allSuppliers: d.allSuppliers })} />}
       {screen.kind === 'vendorPicker' && <VendorPicker screen={screen}
-        onPick={(store) => setScreen({ kind: 'stores', dropoffId: screen.dropoffId, volunteerName: screen.volunteerName, stores: [store], lines: [] })}
-        onManualEntry={() => setScreen({ kind: 'manualVendor', dropoffId: screen.dropoffId, volunteerName: screen.volunteerName })}
-        onCancel={() => setScreen({ kind: 'signin' })} />}
+        onPick={(store) => setScreen({ kind: 'stores', dropoffId: screen.dropoffId, volunteerName: screen.volunteerName, stores: [store], lines: [], allSuppliers: screen.allSuppliers })}
+        onManualEntry={() => setScreen({ kind: 'manualVendor', dropoffId: screen.dropoffId, volunteerName: screen.volunteerName, allSuppliers: screen.allSuppliers })}
+        onCancel={() => { void abandonDropoff(secret, screen.dropoffId); setScreen({ kind: 'signin' }); }} />}
       {screen.kind === 'manualVendor' && <ManualVendor secret={secret} screen={screen}
-        onCreated={(store) => setScreen({ kind: 'stores', dropoffId: screen.dropoffId, volunteerName: screen.volunteerName, stores: [store], lines: [] })}
-        onCancel={() => setScreen({ kind: 'signin' })} />}
+        onCreated={(store) => setScreen({ kind: 'stores', dropoffId: screen.dropoffId, volunteerName: screen.volunteerName, stores: [store], lines: [], allSuppliers: screen.allSuppliers })}
+        onCancel={() => setScreen({
+          kind: 'vendorPicker',
+          dropoffId: screen.dropoffId,
+          volunteerName: screen.volunteerName,
+          greeting: `Hi, ${screen.volunteerName.split(' ')[0]}!`,
+          allSuppliers: screen.allSuppliers ?? [],
+        })} />}
       {screen.kind === 'stores'   && <Stores  secret={secret} screen={screen}
         onPickStore={(s) => setScreen({ ...screen, kind: 'entry', store: s })}
         onLabels={(labels) => setScreen({ kind: 'labels', labels, volunteerName: screen.volunteerName })}
-        onBack={() => setScreen({ kind: 'signin' })} />}
+        onChangeStore={() => setScreen({
+          kind: 'vendorPicker',
+          dropoffId: screen.dropoffId,
+          volunteerName: screen.volunteerName,
+          greeting: `Hi, ${screen.volunteerName.split(' ')[0]}!`,
+          allSuppliers: screen.allSuppliers ?? [],
+        })}
+        onBack={() => {
+          // Tier-2 fix #2 (Aug 21): back out without completing → delete the
+          // shell so office_dropoffs doesn't accumulate no-line ghost rows.
+          void abandonDropoff(secret, screen.dropoffId);
+          setScreen({ kind: 'signin' });
+        }} />}
       {screen.kind === 'entry'    && <StoreEntry secret={secret} screen={screen}
-        onDone={(newLines) => setScreen({ kind: 'stores', dropoffId: screen.dropoffId, volunteerName: screen.volunteerName, stores: screen.stores, lines: newLines })} />}
+        onDone={(newLines) => setScreen({ kind: 'stores', dropoffId: screen.dropoffId, volunteerName: screen.volunteerName, stores: screen.stores, lines: newLines, allSuppliers: screen.allSuppliers })} />}
       {screen.kind === 'labels'   && <Labels  labels={screen.labels} volunteerName={screen.volunteerName}
         kioskSecret={secret}
         onFinish={() => setScreen({ kind: 'welcome' })} />}
@@ -203,7 +285,12 @@ export function KioskApp() {
       {showHelp && (
         <HelpOverlay
           onClose={() => setShowHelp(false)}
-          onStartOver={() => { setShowHelp(false); setScreen({ kind: 'welcome' }); }}
+          onStartOver={() => {
+            // Tier-2 fix #2 (Aug 21): abandon shell before jumping to welcome.
+            void abandonDropoff(secret, currentDropoffIdRef.current);
+            setShowHelp(false);
+            setScreen({ kind: 'welcome' });
+          }}
           onAdmin={() => { setShowHelp(false); setShowAdminPin(true); }}
         />
       )}
@@ -217,7 +304,12 @@ export function KioskApp() {
       {showAdminPanel && (
         <AdminPanel
           onClose={() => setShowAdminPanel(false)}
-          onStartOver={() => { setShowAdminPanel(false); setScreen({ kind: 'welcome' }); }}
+          onStartOver={() => {
+            // Tier-2 fix #2 (Aug 21): abandon shell before jumping to welcome.
+            void abandonDropoff(secret, currentDropoffIdRef.current);
+            setShowAdminPanel(false);
+            setScreen({ kind: 'welcome' });
+          }}
           onForceRefresh={async () => {
             // Nuke the SW + all caches, then hard-reload. Belt + suspenders so a
             // wedged bundle unwedges without the tech coming on-site.
@@ -543,11 +635,12 @@ function Welcome({ onStart }: { onStart: () => void }) {
   );
 }
 
-function Signin({ secret, onSigned, onAdminPick, onNamePick, onWalkIn }: {
+function Signin({ secret, onSigned, onAdminPick, onNamePick, onPickupPick, onWalkIn }: {
   secret: string;
-  onSigned: (d: { dropoffId: number; volunteerName: string; stores: KioskStore[]; recentCompleted?: import('./kiosk-api').KioskRecentCompleted[] }) => void;
+  onSigned: (d: { dropoffId: number; volunteerName: string; stores: KioskStore[]; recentCompleted?: import('./kiosk-api').KioskRecentCompleted[]; allSuppliers?: VendorOption[] }) => void;
   onAdminPick: (p: { adminName: string; adminUsername: string; adminPassword: string; drivers: PickerDriver[] }) => void;
   onNamePick: (code: string, candidates: NameCandidate[]) => void;
+  onPickupPick: (p: { volunteerId: number; volunteerName: string; greeting: string; options: KioskPickupOption[]; allSuppliers: VendorOption[] }) => void;
   onWalkIn: (w: { dropoffId: number; volunteerName: string; greeting: string; allSuppliers: VendorOption[] }) => void;
 }) {
   const [code, setCode]     = useState('');
@@ -568,8 +661,9 @@ function Signin({ secret, onSigned, onAdminPick, onNamePick, onWalkIn }: {
     try {
       const r = await kiosk.signin(secret, { code: c });
       const d = r.data as any;
-      if (d.needsVolunteerPick) { onNamePick(d.code, d.candidates); return; }
-      if (d.needsVendorPick)    { onWalkIn({ dropoffId: d.dropoffId, volunteerName: d.volunteerName, greeting: d.greeting, allSuppliers: d.allSuppliers }); return; }
+      if (d.needsVolunteerPick)   { onNamePick(d.code, d.candidates); return; }
+      if (d.needsPickupSelection) { onPickupPick({ volunteerId: d.volunteerId, volunteerName: d.volunteerName, greeting: d.greeting, options: d.options, allSuppliers: d.allSuppliers }); return; }
+      if (d.needsVendorPick)      { onWalkIn({ dropoffId: d.dropoffId, volunteerName: d.volunteerName, greeting: d.greeting, allSuppliers: d.allSuppliers }); return; }
       onSigned(d as { dropoffId: number; volunteerName: string; stores: KioskStore[] });
     } catch (e: any) {
       // Unknown code = offer guest sign-in instead of erroring out.
@@ -607,6 +701,7 @@ function Signin({ secret, onSigned, onAdminPick, onNamePick, onWalkIn }: {
         onAdminPick({ adminName: d.adminName, adminUsername: username.trim(), adminPassword: password, drivers: d.drivers });
         return;
       }
+      if (d.needsPickupSelection) { onPickupPick({ volunteerId: d.volunteerId, volunteerName: d.volunteerName, greeting: d.greeting, options: d.options, allSuppliers: d.allSuppliers }); return; }
       if (d.needsVendorPick) { onWalkIn({ dropoffId: d.dropoffId, volunteerName: d.volunteerName, greeting: d.greeting, allSuppliers: d.allSuppliers }); return; }
       onSigned(d as { dropoffId: number; volunteerName: string; stores: KioskStore[] });
     } catch (e: any) {
@@ -754,11 +849,12 @@ function KeyBtn({ onClick, children, muted }: { onClick: () => void; children: R
   );
 }
 
-function NamePicker({ secret, screen, onCancel, onSigned, onWalkIn }: {
+function NamePicker({ secret, screen, onCancel, onSigned, onPickupPick, onWalkIn }: {
   secret: string;
   screen: Extract<Screen, { kind: 'namePicker' }>;
   onCancel: () => void;
-  onSigned: (d: { dropoffId: number; volunteerName: string; stores: KioskStore[]; recentCompleted?: import('./kiosk-api').KioskRecentCompleted[] }) => void;
+  onSigned: (d: { dropoffId: number; volunteerName: string; stores: KioskStore[]; recentCompleted?: import('./kiosk-api').KioskRecentCompleted[]; allSuppliers?: VendorOption[] }) => void;
+  onPickupPick: (p: { volunteerId: number; volunteerName: string; greeting: string; options: KioskPickupOption[]; allSuppliers: VendorOption[] }) => void;
   onWalkIn: (w: { dropoffId: number; volunteerName: string; greeting: string; allSuppliers: VendorOption[] }) => void;
 }) {
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -768,6 +864,7 @@ function NamePicker({ secret, screen, onCancel, onSigned, onWalkIn }: {
     try {
       const r = await kiosk.signin(secret, { code: screen.code, resolveVolunteerId: c.volunteerId });
       const d = r.data as any;
+      if (d.needsPickupSelection) { onPickupPick({ volunteerId: d.volunteerId, volunteerName: d.volunteerName, greeting: d.greeting, options: d.options, allSuppliers: d.allSuppliers }); return; }
       if (d.needsVendorPick) { onWalkIn({ dropoffId: d.dropoffId, volunteerName: d.volunteerName, greeting: d.greeting, allSuppliers: d.allSuppliers }); return; }
       onSigned(d as { dropoffId: number; volunteerName: string; stores: KioskStore[] });
     } catch (e: any) { setErr(e?.message || 'Could not continue.'); }
@@ -793,6 +890,113 @@ function NamePicker({ secret, screen, onCancel, onSigned, onWalkIn }: {
         </button>
       </div>
     </Center>
+  );
+}
+
+// Aug 26 client rule: driver has 2+ accepted pickups still in their queue.
+// Checkbox list — they can process one, some, or none. "Skip these" falls
+// through to the walk-in vendor picker (they came in for a different store).
+function PickupPicker({ secret, screen, onCancel, onSigned, onWalkIn }: {
+  secret: string;
+  screen: Extract<Screen, { kind: 'pickupPicker' }>;
+  onCancel: () => void;
+  onSigned: (d: { dropoffId: number; volunteerName: string; stores: KioskStore[]; recentCompleted?: import('./kiosk-api').KioskRecentCompleted[]; allSuppliers?: VendorOption[] }) => void;
+  onWalkIn: (w: { dropoffId: number; volunteerName: string; greeting: string; allSuppliers: VendorOption[] }) => void;
+}) {
+  // Default to all-selected — a driver arriving with multiple pickups is
+  // usually processing all of them; unchecking is the outlier action.
+  const [selected, setSelected] = useState<Set<number>>(() => new Set(screen.options.map((o) => o.supplierId)));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  function toggle(sid: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(sid)) next.delete(sid); else next.add(sid);
+      return next;
+    });
+  }
+
+  async function submit(skipAll: boolean) {
+    setBusy(true); setErr(null);
+    try {
+      const pickupIds = skipAll
+        ? []
+        : screen.options.filter((o) => selected.has(o.supplierId)).flatMap((o) => o.pickupIds);
+      const r = await kiosk.resolvePickups(secret, {
+        volunteerId: screen.volunteerId,
+        pickupIds,
+        skipAll,
+      });
+      const d = r.data as any;
+      if (d.needsVendorPick) {
+        onWalkIn({ dropoffId: d.dropoffId, volunteerName: d.volunteerName, greeting: d.greeting, allSuppliers: d.allSuppliers });
+        return;
+      }
+      onSigned(d as { dropoffId: number; volunteerName: string; stores: KioskStore[]; allSuppliers?: VendorOption[] });
+    } catch (e: any) {
+      setErr(e?.message || 'Could not continue.');
+    } finally { setBusy(false); }
+  }
+
+  const anySelected = selected.size > 0;
+
+  function fmtDateTime(d: string, t: string | null): string {
+    // scheduledDate is 'YYYY-MM-DD'; scheduledTime is 'HH:MM:SS' or null.
+    if (!d) return '';
+    const parts = d.split('-');
+    const dateStr = parts.length === 3 ? `${parts[1]}/${parts[2]}` : d;
+    if (!t) return dateStr;
+    const [hh = '0', mm = '00'] = t.split(':');
+    const h = Number(hh);
+    const suffix = h >= 12 ? 'PM' : 'AM';
+    const h12 = ((h + 11) % 12) + 1;
+    return `${dateStr} · ${h12}:${mm} ${suffix}`;
+  }
+
+  return (
+    <div className="h-full w-full grid grid-rows-[auto_1fr_auto] gap-4 p-8">
+      <div>
+        <div className="text-[32px] font-extrabold text-forest">{screen.greeting}</div>
+        <div className="text-[18px] text-muted mt-2">
+          You have {screen.options.length} pickup{screen.options.length === 1 ? '' : 's'} in your queue. Tap the one{screen.options.length === 1 ? '' : 's'} you're dropping off now.
+        </div>
+      </div>
+      <div className="overflow-y-auto">
+        <div className="grid grid-cols-1 gap-3 max-w-[720px] mx-auto">
+          {screen.options.map((o) => {
+            const on = selected.has(o.supplierId);
+            return (
+              <button key={o.supplierId} onClick={() => toggle(o.supplierId)} disabled={busy}
+                      className={`w-full text-left rounded-[16px] border-[2px] px-6 py-5 transition flex items-start gap-4 ${on ? 'bg-sage/40 border-forest' : 'bg-paper border-line hover:border-forest'}`}>
+                <div className={`shrink-0 mt-1 w-8 h-8 rounded-[8px] border-[2px] flex items-center justify-center text-[20px] font-extrabold ${on ? 'bg-forest border-forest text-paper' : 'bg-paper border-line text-muted'}`}>
+                  {on ? '✓' : ''}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[22px] font-extrabold text-ink truncate">{o.supplierName}</div>
+                  <div className="text-[15px] text-muted mt-0.5">{fmtDateTime(o.scheduledDate, o.scheduledTime)}</div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        {err && <div className="mt-4 text-clay text-[17px] font-bold bg-clay/10 rounded-[12px] py-2 px-3 max-w-[720px] mx-auto">{err}</div>}
+      </div>
+      <div className="flex flex-col sm:flex-row gap-3 max-w-[720px] mx-auto w-full">
+        <button onClick={onCancel} disabled={busy}
+                className="sm:flex-[1] py-4 rounded-[16px] border-2 border-line bg-paper text-ink text-[18px] font-extrabold hover:border-forest disabled:opacity-40">
+          ← Back
+        </button>
+        <button onClick={() => submit(true)} disabled={busy}
+                className="sm:flex-[1] py-4 rounded-[16px] border-2 border-forest bg-paper text-forest text-[18px] font-extrabold hover:bg-sage/40 disabled:opacity-40">
+          Skip these — pick a different store
+        </button>
+        <button onClick={() => submit(false)} disabled={busy || !anySelected}
+                className="sm:flex-[2] py-4 rounded-[16px] bg-forest text-paper text-[20px] font-extrabold disabled:opacity-40">
+          {busy ? 'Loading…' : `Process ${selected.size} selected →`}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -864,17 +1068,28 @@ function ManualVendor({ secret, screen: _screen, onCreated, onCancel }: {
   const [catering, setCatering]   = useState('');
   const [busy, setBusy]         = useState(false);
   const [err, setErr]           = useState<string | null>(null);
+  // Tier-2 fix #1 (Aug 21): server may return { needsConfirmation, candidate }
+  // when the typed name looks similar to an existing supplier but not strong
+  // enough to auto-match. Operator picks "same store" or "create new anyway".
+  const [candidate, setCandidate] = useState<{ supplierId: number; supplierName: string; city: string; score: number } | null>(null);
 
-  async function submit() {
+  async function submit(confirmCreate = false) {
     if (!name.trim()) { setErr('Please enter the store or supplier name.'); return; }
     setBusy(true); setErr(null);
     try {
-      const r = await kiosk.manualVendor(secret, {
+      const r: any = await kiosk.manualVendor(secret, {
         name: name.trim(),
         address: address.trim(),
         hashgacha: hashgacha.trim(),
         catering_company: catering.trim(),
-      });
+        ...(confirmCreate ? { confirmCreate: true } : {}),
+      } as any);
+      // Tier-2 fix #1: mid-similarity match → ask operator instead of blindly creating.
+      if (r?.data?.needsConfirmation && r.data.candidate) {
+        setCandidate(r.data.candidate);
+        setBusy(false);
+        return;
+      }
       onCreated({
         supplierId:    r.data.supplierId,
         supplierName:  r.data.supplierName,
@@ -884,6 +1099,20 @@ function ManualVendor({ secret, screen: _screen, onCreated, onCancel }: {
     } catch (e: any) {
       setErr(e?.message || 'Could not save. Please try again.');
     } finally { setBusy(false); }
+  }
+
+  function useCandidate() {
+    if (!candidate) return;
+    onCreated({
+      supplierId:    candidate.supplierId,
+      supplierName:  candidate.supplierName,
+      pickupIds:     [],
+      scheduledDate: '',
+    });
+  }
+  function forceCreate() {
+    setCandidate(null);
+    void submit(true);
   }
 
   return (
@@ -931,13 +1160,34 @@ function ManualVendor({ secret, screen: _screen, onCreated, onCancel }: {
           </div>
         </div>
         {err && <div className="text-clay text-[17px] font-bold bg-clay/10 rounded-[12px] py-2 px-3">{err}</div>}
+        {/* Tier-2 fix #1 (Aug 21): possible-duplicate confirmation. Server
+            found something similar; operator picks same-store vs. new. */}
+        {candidate && (
+          <div className="rounded-[16px] border-2 border-amber bg-amber/10 px-5 py-4">
+            <div className="text-[16px] font-extrabold text-ink">Possible duplicate</div>
+            <div className="text-[15px] text-ink/80 mt-1">
+              We already have <b>{candidate.supplierName}</b>{candidate.city ? ` (${candidate.city})` : ''} on file.
+              Is that the same store?
+            </div>
+            <div className="flex flex-wrap gap-3 mt-3">
+              <button onClick={useCandidate}
+                      className="py-3 px-5 rounded-[14px] bg-forest text-paper text-[17px] font-extrabold active:scale-95">
+                Yes — use existing
+              </button>
+              <button onClick={forceCreate} disabled={busy}
+                      className="py-3 px-5 rounded-[14px] border-2 border-clay text-clay text-[17px] font-extrabold active:scale-95 disabled:opacity-40">
+                No — create as new
+              </button>
+            </div>
+          </div>
+        )}
       </div>
       <div className="flex gap-3">
         <button onClick={onCancel}
                 className="flex-1 py-4 rounded-[16px] border-2 border-line bg-paper text-ink text-[19px] font-extrabold hover:border-forest">
           ← Back
         </button>
-        <button onClick={submit} disabled={busy || !name.trim()}
+        <button onClick={() => submit(false)} disabled={busy || !name.trim() || !!candidate}
                 className="flex-[2] py-4 rounded-[16px] bg-forest text-paper text-[20px] font-extrabold disabled:opacity-40">
           {busy ? 'Saving…' : 'Continue →'}
         </button>
@@ -946,10 +1196,11 @@ function ManualVendor({ secret, screen: _screen, onCreated, onCancel }: {
   );
 }
 
-function DriverPicker({ secret, screen, onSigned, onCancel }: {
+function DriverPicker({ secret, screen, onSigned, onPickupPick, onCancel }: {
   secret: string;
   screen: Extract<Screen, { kind: 'picker' }>;
-  onSigned: (d: { dropoffId: number; volunteerName: string; stores: KioskStore[]; recentCompleted?: import('./kiosk-api').KioskRecentCompleted[] }) => void;
+  onSigned: (d: { dropoffId: number; volunteerName: string; stores: KioskStore[]; recentCompleted?: import('./kiosk-api').KioskRecentCompleted[]; allSuppliers?: VendorOption[] }) => void;
+  onPickupPick: (p: { volunteerId: number; volunteerName: string; greeting: string; options: KioskPickupOption[]; allSuppliers: VendorOption[] }) => void;
   onCancel: () => void;
 }) {
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -959,8 +1210,13 @@ function DriverPicker({ secret, screen, onSigned, onCancel }: {
     setBusyId(driver.volunteerId); setErr(null);
     try {
       const r = await kiosk.signin(secret, { username: screen.adminUsername, password: screen.adminPassword, simulateAsVolunteerId: driver.volunteerId });
-      if ('needsDriverPick' in r.data && r.data.needsDriverPick) {
+      const d = r.data as any;
+      if (d.needsDriverPick) {
         setErr('Server bounced back to picker unexpectedly.'); return;
+      }
+      if (d.needsPickupSelection) {
+        onPickupPick({ volunteerId: d.volunteerId, volunteerName: d.volunteerName, greeting: d.greeting, options: d.options, allSuppliers: d.allSuppliers });
+        return;
       }
       onSigned(r.data as { dropoffId: number; volunteerName: string; stores: KioskStore[] });
     } catch (e: any) {
@@ -1012,9 +1268,9 @@ function DriverPicker({ secret, screen, onSigned, onCancel }: {
   );
 }
 
-function Stores({ secret, screen, onPickStore, onLabels, onBack }:
+function Stores({ secret, screen, onPickStore, onLabels, onChangeStore, onBack }:
   { secret: string; screen: Extract<Screen, { kind: 'stores' }>; onPickStore: (s: KioskStore) => void;
-    onLabels: (labels: KioskLabel[]) => void; onBack: () => void }) {
+    onLabels: (labels: KioskLabel[]) => void; onChangeStore: () => void; onBack: () => void }) {
   const linesByStore = groupLinesBySupplier(screen.lines);
   const allStoresHaveLines = screen.stores.every((s) => (linesByStore.get(s.supplierId)?.length ?? 0) > 0);
   const [finishing, setFinishing] = useState(false);
@@ -1065,6 +1321,17 @@ function Stores({ secret, screen, onPickStore, onLabels, onBack }:
           );
         })}
       </div>
+      {/* Aug 19 client bug 1 — even with an assigned pickup, a driver can pick
+          a different supplier (their actual pickup may not match what was
+          scheduled). Opens the same all-suppliers picker walk-ins use, with
+          a manual-entry escape hatch. Hidden if we somehow have no supplier
+          list (older backend, or empty supplier table). */}
+      {screen.allSuppliers && screen.allSuppliers.length > 0 && (
+        <button onClick={onChangeStore}
+                className="mt-6 w-full max-w-[720px] py-4 rounded-[16px] border-2 border-forest bg-sage/40 text-forest text-[18px] font-extrabold hover:bg-sage/60 active:scale-95">
+          + Choose a different store
+        </button>
+      )}
       {/* C5 Aug 13 — recently-completed drop-offs from the last 14 days
           so a driver can identify a pickup they need reprinted labels for.
           Reprint action lives at the office for now (they can look up ref#). */}
@@ -1238,7 +1505,12 @@ function Labels({ labels, volunteerName, kioskSecret, onFinish }:
 
   async function doPrint() {
     setStatus('printing'); setErr(null);
-    await new Promise((r) => setTimeout(r, 200));
+    // Aug 19 client bug 2: previously slept 200ms here "to let the printing UI
+    // paint" before firing the print. That was a full fifth-of-a-second the
+    // driver stood watching. React will paint the 'printing' status in the
+    // very next frame regardless — no wait needed. Kick off the relay POST
+    // immediately so the printer starts warming as soon as possible after
+    // the driver taps "Done — finish + print labels".
     const res = await printLabels(labels, { kioskSecret });
     setTransport(res.transport);
     if (res.ok) setStatus('ok');

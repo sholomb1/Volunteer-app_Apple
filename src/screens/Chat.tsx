@@ -10,7 +10,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { MessageSquare, ArrowLeft } from 'lucide-react';
-import { volunteer, dm } from '../api';
+import { volunteer, dm, getUser } from '../api';
 import { AppBar, Avatar, Card, Skeleton, cx } from '../design';
 import { ChatThread } from '../chat-thread';
 import { fmtTime, fmtDateEastern } from '../time-format';
@@ -59,7 +59,7 @@ export function Chat() {
 
   return (
     <div className="min-h-screen pb-[80px]">
-      <AppBar title="Chat" right={<Avatar initials="DG" />} />
+      <AppBar title="Chat" right={<Avatar initials={((getUser()?.firstName?.[0] ?? '') + (getUser()?.lastName?.[0] ?? '')) || '·'} />} />
 
       <main className="px-5">
         <h1 className="font-display font-semibold text-[24px]">Your chats</h1>

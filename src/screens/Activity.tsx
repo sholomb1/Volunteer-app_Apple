@@ -27,7 +27,10 @@ export function Activity({ user }: { user: AuthUser }) {
       <main className="px-5">
         <FadeUp>
           <div className="font-display font-semibold text-[22px]">{user.firstName} {user.lastName}</div>
-          <div className="text-[12.5px] text-muted">Volunteer · Spring Valley</div>
+          {/* Tier-2 fix: was "Volunteer · Spring Valley" for every driver
+              regardless of where they live. We don't carry the neighborhood
+              on AuthUser, so drop the city half rather than lie about it. */}
+          <div className="text-[12.5px] text-muted">Volunteer</div>
         </FadeUp>
 
         <div className="mt-3 mb-4 bg-[#F3EFE4] border border-line rounded-[11px] p-[3px] flex">

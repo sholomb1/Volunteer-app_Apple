@@ -178,6 +178,25 @@ export const portalReload = {
   current: () => api<{ data: { reloadSince: number } }>('/api/portal-reload-since'),
 };
 
+/**
+ * Real-time pickup-changed stream (Server-Sent Events). Fetches a short-lived
+ * SSE-only JWT via /api/me/sse-token, then hands back an already-open
+ * EventSource pointed at /api/pickup-events/stream?token=…
+ *
+ * EventSource can't set an Authorization header, so we mint a 5-minute nonce
+ * from the caller's Bearer token and pass it in the query string. The stream
+ * endpoint accepts either form. Caller wires onmessage / addEventListener +
+ * onerror + close() as normal. Auto-reconnect handling lives in the caller.
+ */
+export const sse = {
+  async connectPickupEvents(): Promise<EventSource> {
+    const { token } = await api<{ token: string; expiresIn: number }>('/api/me/sse-token');
+    const base = API_BASE.replace(/\/$/, '');
+    const url = `${base}/api/pickup-events/stream?token=${encodeURIComponent(token)}`;
+    return new EventSource(url);
+  },
+};
+
 export async function login(username: string, password: string): Promise<AuthUser> {
   const res = await api<{ token: string; user: AuthUser }>('/api/auth/login', {
     method: 'POST',
@@ -218,10 +237,20 @@ export type ChatMsg = { id: number; body: string; created_at: string; author_use
 export type ActivityRow = { id: number; pickup_instance_id: number | null; store_id: number | null; miles: number | null; minutes: number | null; completed_at: string; notes: string | null; store_name: string | null };
 export type ActivityStats = { pickups: number; miles: number; minutes: number; stores: number };
 
+export const onDuty = {
+  // Consolidated brief #15 (Aug 18): action-summary counts for the
+  // dispatcher on-duty banner. Cheap query; safe to poll every 20s.
+  summary: () => api<{ data: { pickups_need_driver: number; pickups_within_30m: number; unread_sms: number; pending_confirmation: number } }>('/api/on-duty-summary'),
+};
+
 export const volunteer = {
   open:    () => api<{ data: OpenPickup[] }>('/api/me/open-pickups'),
   mine:    () => api<{ profile: { name: string }; data: MyPickup[] }>('/api/me/pickups'),
   history: () => api<{ profile: { name: string }; stats: HistoryStats; data: any[] }>('/api/me/history'),
+  // Client Aug 18: mobile-app usage tracking. Native app calls this on
+  // launch + on foreground so the office can see who actually opens the app.
+  ping:    (platform?: string, version?: string) =>
+    api<{ data: { ok: true } }>('/api/me/ping', { method: 'POST', body: JSON.stringify({ platform, version }) }),
   claim:   (id: number) => api(`/api/me/open-pickups/${id}/claim`, { method: 'POST' }),
   signup:  (id: number) => api<{ data: { pickupInstanceId: number; slot: number } }>(`/api/me/pickups/${id}/signup`, { method: 'POST' }),
   release: (id: number) => api(`/api/me/pickups/${id}/signup`, { method: 'DELETE' }),
@@ -366,6 +395,55 @@ export type AdminDispatcher = {
 };
 export const adminDispatchers = {
   list: () => api<{ data: AdminDispatcher[] }>('/api/admin/dispatchers'),
+};
+
+// ---------------------------------------------------------------------------
+// Dispatcher roster (client Aug 20 overhaul).
+// Person-first model: is_dispatcher flag on zlz.volunteers, independent of
+// any shift. Roster split into On Deck (no current+upcoming shift) vs
+// Assigned (currentShift OR nextShift within 24h). Assignment itself is
+// still created in the existing Shifts UI — nothing new here.
+export type DispatcherShiftInfo = {
+  id: number;
+  startsAt: string;
+  endsAt: string;
+  notes: string | null;
+  signedInAt?: string | null;
+  isRecurring?: boolean;
+};
+export type DispatcherRosterRow = {
+  id: number;
+  firstName: string;
+  lastName: string;
+  phone: string | null;
+  unitNumber: number | null;
+  email: string | null;
+  userId: number | null;
+  currentShift: DispatcherShiftInfo | null;
+  nextShift: DispatcherShiftInfo | null;
+};
+export type DispatcherCandidate = {
+  id: number;
+  firstName: string;
+  lastName: string;
+  phone: string | null;
+  unitNumber: number | null;
+  email: string | null;
+};
+export const dispatchers = {
+  list: () => api<{ data: DispatcherRosterRow[] }>('/api/dispatchers'),
+  candidates: (q: string) =>
+    api<{ data: DispatcherCandidate[] }>(
+      `/api/dispatchers/candidates${q ? `?q=${encodeURIComponent(q)}` : ''}`,
+    ),
+  add:    (volunteerId: number) =>
+    api<{ data: { id: number; isDispatcher: boolean; firstName: string; lastName: string } }>(
+      '/api/dispatchers', { method: 'POST', body: JSON.stringify({ volunteerId }) },
+    ),
+  remove: (volunteerId: number) =>
+    api<{ data: { id: number; isDispatcher: boolean } }>(
+      `/api/dispatchers/${volunteerId}`, { method: 'DELETE' },
+    ),
 };
 
 // Staff users for the "Spoke with" dropdown in CRM Log Interaction.
@@ -527,21 +605,78 @@ export const adminCRUD = {
   createSteady:  (body: any) => api<{ data: any }>('/api/steady-pickups', { method: 'POST', body: JSON.stringify(body) }),
   patchSteady:   (id: number, body: any) => api<{ data: any }>(`/api/steady-pickups/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteSteady:  (id: number) => api(`/api/steady-pickups/${id}`, { method: 'DELETE' }),
+  // Consolidated brief #2 (Aug 18): dedicated status toggle. Materializer
+  // only generates instances when template_status='active'.
+  setSteadyStatus: (id: number, status: 'active' | 'paused' | 'inactive') =>
+    api<{ data: { id: number; template_status: string; is_active: boolean } }>(
+      `/api/steady-pickups/${id}/status`,
+      { method: 'PATCH', body: JSON.stringify({ status }) },
+    ),
+  // Consolidated brief #13 (Aug 18): weekly recruiting/coverage grid data.
+  steadyWeeklyCoverage: () =>
+    api<{ data: Array<{
+      steady_pickup_id: number; name: string; pickup_time: string | null;
+      template_status: string; day_of_week: number; suppliers: string | null;
+      flat_driver_ids: number[]; today_dow_drivers: number[];
+      future_count: number; ending_soon_count: number; this_week_signups: number;
+      coverage_status: 'committed'|'ending_soon'|'future_scheduled'|'temporarily_covered'|'needs_steady_driver'|'paused';
+    }> }>('/api/weekly-coverage'),
 
   // Steady default drivers — per-day-of-week auto-assign (Fork J · Aug 4).
   // See steady-pickup-default-drivers table + steady-materializer for how
   // these get pre-inserted into pickup_instance_volunteers on materialize.
   steadyDefaultDrivers: {
+    // Consolidated brief #3 (Aug 18): each per-day assignment carries an
+    // optional effective_from / effective_to window; the materializer picks
+    // whichever row covers the instance's scheduled_date.
     list:    (steadyId: number) =>
-      api<{ data: Array<{ day_of_week: number; volunteer_id: number; first_name: string; last_name: string; unit_number: number | null }> }>(`/api/steady-pickups/${steadyId}/default-drivers`),
-    replace: (steadyId: number, assignments: Array<{ dayOfWeek: number; volunteerId: number }>) =>
+      api<{ data: Array<{ default_driver_id: number; day_of_week: number; volunteer_id: number; effective_from: string | null; effective_to: string | null; first_name: string; last_name: string; unit_number: number | null }> }>(`/api/steady-pickups/${steadyId}/default-drivers`),
+    replace: (steadyId: number, assignments: Array<{ dayOfWeek: number; volunteerId: number; effectiveFrom?: string | null; effectiveTo?: string | null }>) =>
       api<{ data: { ok: boolean; count: number } }>(`/api/steady-pickups/${steadyId}/default-drivers`,
         { method: 'PUT', body: JSON.stringify({ assignments }) }),
+  },
+
+  // Consolidated brief #10 (Aug 18): recommended drivers are suggestions the
+  // dispatcher can reach for when coverage is needed. Distinct from
+  // steady_pickup_default_drivers (auto-assigned) — no materializer wiring.
+  steadyRecommendedDrivers: {
+    list: (steadyId: number) =>
+      api<{ data: Array<{ recommendation_id: number; volunteer_id: number; note: string | null; first_name: string; last_name: string; unit_number: number | null; phone_primary: string | null }> }>(`/api/steady-pickups/${steadyId}/recommended-drivers`),
+    replace: (steadyId: number, volunteerIds: number[]) =>
+      api<{ data: { ok: boolean; count: number } }>(`/api/steady-pickups/${steadyId}/recommended-drivers`,
+        { method: 'PUT', body: JSON.stringify({ volunteerIds }) }),
   },
 
   // Office sign-ins
   signins:       () => api<{ data: any[] }>('/api/office-signins'),
   createSignin:  (body: any) => api<{ data: any }>('/api/office-signins', { method: 'POST', body: JSON.stringify(body) }),
+
+  // Kiosk activity — recent office_dropoffs (the real kiosk sign-ins), with
+  // aggregated line items per row. Distinct from the /office-signins legacy
+  // manual sheet. Auto-refreshed on the admin "Kiosk Activity" tab.
+  kioskActivity: (days = 30, limit = 200) => api<{
+    data: Array<{
+      id: number; volunteer_id: number | null; volunteer_name: string; unit_number: string | null;
+      started_at: string; completed_at: string | null; notes: string | null; time_issues: string | null;
+      v_first: string | null; v_last: string | null; v_unit: number | null;
+      line_count: number; supplier_count: number; item_qty_total: number;
+      lines: Array<{
+        id: number; category: string; description: string; quantity: number; unit: string;
+        labels_printed_at: string | null; supplier_id: number | null; supplier_name: string | null;
+        pickup_instance_id: number | null;
+      }>;
+    }>;
+    summary: { today: number; past_7d: number; past_30d: number; total: number };
+  }>(`/api/dropoff/activity?days=${days}&limit=${limit}`),
+
+  // App usage report — every volunteer's last-app-open + count + freshness bucket.
+  // Server bucket values: 'today' | 'week' | 'month' | 'stale' | 'never'.
+  appUsage:      () => api<{ data: Array<{
+    id: number; first_name: string; last_name: string; unit_number: number | null;
+    last_app_open_at: string | null; app_open_count: number | null;
+    last_app_platform: string | null; last_app_version: string | null;
+    bucket: 'today' | 'week' | 'month' | 'stale' | 'never';
+  }> }>('/api/reports/app-usage'),
 
   // Options (statuses, types, urgency levels)
   options:        (category?: string) => api<{ data: any[] }>(`/api/options${category ? `?category=${encodeURIComponent(category)}` : ''}`),
@@ -591,6 +726,16 @@ export const adminCRUD = {
   patchNeighborhood:  (id: number, body: Partial<Neighborhood>) =>
     api<{ data: Neighborhood }>(`/api/neighborhoods/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteNeighborhood: (id: number) => api(`/api/neighborhoods/${id}`, { method: 'DELETE' }),
+};
+
+// xyz122 test-mode: read the last 20 simulated (isTest=true) broadcasts.
+export type TestBroadcastRow = {
+  id: number; pickup_instance_id: number | null;
+  body: string; would_have_gone_to: number; created_at: string;
+  ref_number: string | null; donor_name: string | null; pickup_address: string | null;
+};
+export const testBroadcasts = {
+  list: () => api<{ data: TestBroadcastRow[] }>('/api/admin/test-broadcasts'),
 };
 
 export type Neighborhood = {
@@ -646,6 +791,93 @@ export const broadcast = {
   storeBroadcast: (body: { body: string; supplierIds: number[] }) =>
     api<{ data: { sent: number; failed: number; attempted: number } }>(
       `/api/sms/store-broadcast`, { method: 'POST', body: JSON.stringify(body) }),
+};
+
+// -------------------------------------------------------------------------
+// upsms (Aug 20) — "Upcoming SMS" coordinator controls.
+// Wraps the /api/sms/upcoming-drop family + the per-pickup send-now endpoint.
+// Every mutating call accepts { dryRun } → the backend returns preview text
+// and never sends. Use it to preview the message body before the real send.
+// -------------------------------------------------------------------------
+export type UpcomingDropKind = 'scheduled' | 'off-cycle' | 'override' | 'cancelled' | 'none';
+export type UpcomingDropPickup = {
+  id: number;
+  ref_number: string | null;
+  donor_name: string | null;
+  supplier_name: string | null;
+  address: string | null;
+  time: string | null;
+  scheduled_date: string | null;
+  already_broadcast: boolean;
+};
+export type LaterTodayGroup = {
+  dropHour: number | null;
+  dropLabel: string;
+  scheduledFor: string | null;
+  pickups: UpcomingDropPickup[];
+};
+export type UpcomingDropInfo = {
+  scheduledFor: string | null;
+  kind: UpcomingDropKind;
+  reason: string;
+  includedPickups: UpcomingDropPickup[];
+  // abc890 (Aug 20): rest of TODAY's open pickups the sweeper will drop LATER,
+  // grouped by which drop hour they'll go in. Empty groups (pre-seeded for
+  // every remaining slot) render so the panel shows "0 trips" placeholders.
+  laterTodayPickups: LaterTodayGroup[];
+  // abc890: the currently-active drop schedule (NY-local hours), sourced from
+  // portal_settings. Panel also re-fetches it separately via dropSchedule.get()
+  // to render the "⚙ Drop schedule" section.
+  dropHours: number[];
+  overrideAt: string | null;
+  cancelledUntil: string | null;
+  lastScheduledDropAt: string | null;
+  dryRunActive: boolean;
+};
+export const upcomingSms = {
+  get: () => api<{ data: UpcomingDropInfo }>(`/api/sms/upcoming-drop`),
+  sendNow: (dryRun = false) =>
+    api<{ data: { pickups: number; sent: number; skipped?: string; preview?: string; recipients?: number; dryRun: boolean } }>(
+      `/api/sms/upcoming-drop/send-now${dryRun ? '?dryRun=true' : ''}`,
+      { method: 'POST', body: JSON.stringify({}) },
+    ),
+  cancelNext: () =>
+    api<{ data: { cancelledUntil: string; cancelledSlot: string } }>(
+      `/api/sms/upcoming-drop/cancel-next`, { method: 'POST', body: JSON.stringify({}) }),
+  uncancel: () =>
+    api<{ data: { uncancelled: true } }>(
+      `/api/sms/upcoming-drop/uncancel`, { method: 'POST', body: JSON.stringify({}) }),
+  reschedule: (newTimeISO: string) =>
+    api<{ data: { overrideAt: string } }>(
+      `/api/sms/upcoming-drop/reschedule`, { method: 'POST', body: JSON.stringify({ newTime: newTimeISO }) }),
+  pickupSendNow: (id: number, dryRun = false) =>
+    api<{ data: { id: number; attempted?: number; sent?: number; failed?: number; skipped?: number; code?: number | null; reason?: string; dryRun?: boolean; preview?: string; wouldGoTo?: number } }>(
+      `/api/sms/pickup/${id}/send-now${dryRun ? '?dryRun=true' : ''}`, { method: 'POST', body: JSON.stringify({}) }),
+};
+
+// abc890 (Aug 20) — coordinator-configurable drop hours (NY-local integers,
+// 0-23). Backend endpoint validates 0-23, dedupes, sorts asc.
+export const dropSchedule = {
+  get: () => api<{ data: { hours: number[] } }>(`/api/sms/drop-schedule`),
+  put: (hours: number[]) =>
+    api<{ data: { hours: number[] } }>(`/api/sms/drop-schedule`, {
+      method: 'PUT', body: JSON.stringify({ hours }),
+    }),
+};
+
+// Aug 21 — Shabbos-safe daily thank-you controls. Backend computes the next
+// firing time (Fri 5pm / others 10pm NY); operator can override or clear.
+export const nextThankYou = {
+  get: () => api<{ data: { scheduledFor: string; isOverride: boolean; override: string | null } }>(`/api/sms/next-thank-you`),
+  put: (scheduledForISO: string | null) =>
+    api<{ data: { scheduledFor: string; isOverride: boolean; override: string | null } }>(
+      `/api/sms/next-thank-you`,
+      { method: 'PUT', body: JSON.stringify({ scheduledFor: scheduledForISO }) },
+    ),
+};
+// Shabbos indicator — for the amber "auto SMS paused" banner.
+export const shabbosStatus = {
+  get: () => api<{ data: { active: boolean; label: string } }>(`/api/sms/shabbos-status`),
 };
 
 export const shifts = {
@@ -749,6 +981,8 @@ export type SmsThreadRow = {
   phone: string; last_at: string; in_count: string | number; out_count: string | number; total: string | number;
   volunteer_id: string | null; first_name: string | null; last_name: string | null;
   unit_number: number | null; last_body: string | null;
+  // Consolidated brief #1 (Aug 18): per-thread unread count for badges.
+  unread_in_count?: string | number;
 };
 export type SmsThreadMessage = {
   id: string | number; direction: 'in' | 'out'; body: string; created_at: string;
@@ -761,6 +995,10 @@ export const smsThreads = {
     `/api/sms/threads/${encodeURIComponent(phone)}${opts.includeShop ? '?includeShop=1' : ''}`),
   send: (phone: string, body: string) => api<{ data: { sent: number } }>(
     '/api/sms/send-one', { method: 'POST', body: JSON.stringify({ phone, body }) }),
+  // Consolidated brief #1 (Aug 18): mark thread + global unread count.
+  markRead: (phone: string) => api<{ data: { marked: number } }>(
+    `/api/sms/threads/${encodeURIComponent(phone)}/read`, { method: 'POST' }),
+  unreadCount: () => api<{ data: { total: number } }>('/api/sms/unread-count'),
 };
 
 // Kiosk device flag lives in localStorage. When set, App.tsx routes every
@@ -845,4 +1083,24 @@ export const supplier = {
     scheduledDate?: string; scheduledTime?: string; mustPickupBy?: string | null;
     foodDescription?: string | null; estimatedQuantity?: string | null; notes?: string | null;
   }) => api<{ data: any }>(`/api/me/supplier-pickups/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+};
+
+// Aug 29 (WA parity): WhatsApp admin status endpoint feed.
+export const whatsappAdmin = {
+  addMember: (body: { kind: 'volunteer' | 'supplier'; id: number; both?: boolean }) =>
+    api<{ data: { id: number; contact_channel: string; whatsapp_opted_in_at: string | null } }>(
+      '/api/whatsapp/admin/add-member',
+      { method: 'POST', body: JSON.stringify(body) }),
+  status: () => api<{ data: {
+    env: { waba_id: string | null; phone_number_id: string | null; reengagement_template: string; enabled: boolean };
+    templates: any;
+    phone: any;
+    volunteers: Array<{ id: number; first_name: string; last_name: string; phone_primary: string | null;
+                        contact_channel: string; whatsapp_opted_in_at: string | null;
+                        whatsapp_last_inbound_at: string | null; window_open: boolean }>;
+    suppliers: Array<{ id: number; name: string; contact_name: string | null; contact_phone: string | null;
+                       contact_channel: string; whatsapp_opted_in_at: string | null;
+                       whatsapp_last_inbound_at: string | null; window_open: boolean }>;
+    pending_queue: { pending_count: number };
+  } }>('/api/whatsapp/admin/status'),
 };

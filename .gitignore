@@ -44,3 +44,7 @@ DerivedData/
 .idea/
 *.swp
 Thumbs.db
+
+# ---- local snapshots (never commit) ----
+_backups/
+backups/

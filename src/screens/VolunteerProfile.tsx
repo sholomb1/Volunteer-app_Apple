@@ -62,7 +62,13 @@ export function VolunteerProfile() {
 
   const save = useMutation({
     mutationFn: () => volunteerSelf.patch({
-      firstName, lastName,
+      // Tier-2 fix: server has firstName/lastName as string().min(1) when
+      // present, and the save used to blow up with a zod error the moment a
+      // driver blanked their last name. Omit the field entirely when empty
+      // so we don't paint a required-name over a truly optional edit; the
+      // Save button already guards against blanking the first name.
+      ...(firstName.trim() ? { firstName: firstName.trim() } : {}),
+      ...(lastName.trim()  ? { lastName:  lastName.trim()  } : {}),
       phonePrimary: phonePrimary || null,
       email: email || null,
       homeAddress: homeAddress || null,

@@ -14,7 +14,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Pencil, UserPlus, Trash2 } from 'lucide-react';
-import { adminCRUD, api } from '../api';
+import { adminCRUD, api, upcomingSms } from '../api';
 import { QuickPickupModal } from '../portal-sections';
 import { DriverPickerModal } from './CoordinatorPortal';
 
@@ -145,6 +145,23 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
       qc.invalidateQueries({ queryKey: ['admin-pickup-detail', pickupId] });
     },
   });
+  // upsms (Aug 20): per-pickup Send Now — same endpoint as the Live Board card.
+  const sendNowMut = useMutation({
+    mutationFn: (dryRun: boolean) => upcomingSms.pickupSendNow(pickupId, dryRun),
+    onSuccess: (res, dryRun) => {
+      const d = res.data;
+      if (dryRun) {
+        alert(`Preview (dry run) — would go to ${d.wouldGoTo ?? 0} driver(s):\n\n${d.preview ?? '(no preview body)'}`);
+      } else if (d.reason && !d.sent) {
+        alert(`No SMS sent: ${d.reason}`);
+      } else {
+        alert(`Broadcast fired: ${d.sent ?? 0} of ${d.attempted ?? 0} sent${d.code ? ` (reply code: ${d.code})` : ''}.`);
+      }
+      qc.invalidateQueries({ queryKey: ['admin-pickups'] });
+      qc.invalidateQueries({ queryKey: ['upcoming-drop'] });
+    },
+    onError: (e: Error) => alert(`Send now failed: ${e.message}`),
+  });
 
   function onCancelClick() {
     if (!row) return;
@@ -178,7 +195,10 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
 
   const st = statusLabel(row.status);
   const supplierName = row.suppliers?.trim() || row.steady_name?.trim() || '';
-  const address      = row.supplier_address?.trim() || row.pickup_address?.trim() || '';
+  // xyz126 (Aug 20): user's manually-picked pickup_address always wins over
+  // the supplier's stored default. Fall back to supplier_address only when
+  // pickup_address is empty.
+  const address      = row.pickup_address?.trim() || row.supplier_address?.trim() || '';
   const contactName  = row.supplier_contact_name?.trim() || row.contact_name?.trim() || '';
   const contactPhone = row.supplier_contact_phone?.trim() || row.contact_phone?.trim() || '';
   const contactEmail = row.contact_email?.trim() || '';
@@ -238,6 +258,24 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
               <button onClick={() => setAssigning(true)}
                       className="haptic inline-flex items-center gap-1.5 text-[12.5px] font-bold text-paper bg-forest px-3 py-2 rounded-[8px] shadow-ctag">
                 <UserPlus size={14} /> Assign Driver
+              </button>
+            )}
+            {/* upsms (Aug 20): "Send now" — Needs-a-Driver only. Fires this
+                one pickup to the default group. Mirrors the Live Board card
+                button so coordinators have the same control from either view. */}
+            {!_resolved && !_isFullyCovered && signups.length === 0 && !(row as any).posted_via_supplier && (
+              <button onClick={() => {
+                        const ref = (row as any).ref_number ? `#${(row as any).ref_number}` : `id ${row.id}`;
+                        if (confirm(`Broadcast pickup ${ref} to drivers now?\n\nOK = send · Cancel = dry-run preview`)) {
+                          sendNowMut.mutate(false);
+                        } else {
+                          sendNowMut.mutate(true);
+                        }
+                      }}
+                      disabled={sendNowMut.isPending}
+                      title="Broadcast just this pickup to the default driver group"
+                      className="haptic inline-flex items-center gap-1.5 text-[12.5px] font-bold text-sky bg-paper border border-sky/40 px-3 py-2 rounded-[8px] hover:bg-sky/10 disabled:opacity-50">
+                {sendNowMut.isPending ? 'Sending…' : '📤 Send now'}
               </button>
             )}
             {showReleaseBtn && (

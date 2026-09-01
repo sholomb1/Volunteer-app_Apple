@@ -120,7 +120,7 @@ export function PickupDetail() {
       {/* App bar with back */}
       <div className="px-5 pt-3 pb-2 flex items-center justify-between">
         <button onClick={() => nav(-1)} className="haptic grid h-9 w-9 place-items-center rounded-full bg-paper border border-line"><ArrowLeft size={18} /></button>
-        <Avatar initials="DG" />
+        <Avatar initials={((me?.firstName?.[0] ?? '') + (me?.lastName?.[0] ?? '')) || '·'} />
       </div>
 
       <main className="flex-1 px-5 pb-4">
@@ -175,14 +175,28 @@ export function PickupDetail() {
           );
         })()}
 
-        {/* Container chips */}
-        <ChipLabel>Container</ChipLabel>
-        <div className="flex flex-wrap gap-2">
-          <span className="chip on">Crates</span>
-          <span className="chip">Boxes</span>
-          <span className="chip">Bags</span>
-          <span className="chip">Trays</span>
-        </div>
+        {/* Container chips — Tier-2 fix: was hardcoded to always show
+            "Crates" selected regardless of what the supplier actually
+            posted. Parse the "containers: …" marker the supplier post form
+            bakes into notes; if nothing matches, no chip lights up. */}
+        {(() => {
+          const CONTAINERS = ['Crates', 'Boxes', 'Bags', 'Trays'] as const;
+          const source = ((pickup.notes ?? '') + ' ' + (pickup.food_description ?? '')).toLowerCase();
+          const m = source.match(/containers?:\s*([^·|;\n]*)/);
+          const scope = m ? m[1] : '';
+          const active = new Set<string>();
+          for (const c of CONTAINERS) if (scope.includes(c.toLowerCase())) active.add(c);
+          return (
+            <>
+              <ChipLabel>Container</ChipLabel>
+              <div className="flex flex-wrap gap-2">
+                {CONTAINERS.map((c) => (
+                  <span key={c} className={cx('chip', active.has(c) && 'on')}>{c}</span>
+                ))}
+              </div>
+            </>
+          );
+        })()}
 
         {/* Drivers needed — admin can adjust here directly. Volunteers see the
             slot avatars + "N of M needed" badge as before. */}

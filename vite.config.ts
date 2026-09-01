@@ -2,7 +2,27 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
+// C12 Aug 13 — expose the APK versionCode + versionName as build-time
+// constants. Read from android/app/build.gradle so bumping the Android
+// version file is the single source of truth. Falls back to 0/dev when the
+// gradle file isn't findable (e.g. running an isolated test build).
+import fs from 'node:fs';
+import path from 'node:path';
+function readGradleVersion() {
+  try {
+    const src = fs.readFileSync(path.resolve('android/app/build.gradle'), 'utf8');
+    const code = /versionCode\s+(\d+)/.exec(src)?.[1] ?? '0';
+    const name = /versionName\s+"([^"]+)"/.exec(src)?.[1] ?? 'dev';
+    return { code, name };
+  } catch { return { code: '0', name: 'dev' }; }
+}
+const APP_VERSION = readGradleVersion();
+
 export default defineConfig({
+  define: {
+    __APP_VERSION_CODE__: JSON.stringify(APP_VERSION.code),
+    __APP_VERSION_NAME__: JSON.stringify(APP_VERSION.name),
+  },
   plugins: [
     react(),
     VitePWA({
