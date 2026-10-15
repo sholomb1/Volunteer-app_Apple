@@ -88,15 +88,23 @@ function fmtRangeLabel(view: ViewKind, cursor: string): string {
     });
   }
   if (view === 'week') {
+    // Sep 8 client fix (#8): the previous formatter produced "Sep 6–2026
+    // (day: 12)" because toLocaleDateString with {day, year} but no month
+    // hits an ICU fallback pattern ("y (day: d)" in en-US CLDR). Build
+    // the range string directly so it always reads "September 6–12, 2026"
+    // (same month) or "August 30 – September 5, 2026" (crosses months).
     const s = weekStart(cursor);
     const e = addDays(s, 6);
     const sD = parseISO(s), eD = parseISO(e);
-    const sameMonth = sD.getUTCMonth() === eD.getUTCMonth();
-    const left = sD.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
-    const right = sameMonth
-      ? eD.toLocaleDateString('en-US', { day: 'numeric', year: 'numeric', timeZone: 'UTC' })
-      : eD.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
-    return `${left}–${right}`;
+    const sameMonth = sD.getUTCMonth() === eD.getUTCMonth() && sD.getUTCFullYear() === eD.getUTCFullYear();
+    const year = eD.getUTCFullYear();
+    if (sameMonth) {
+      const monthName = sD.toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' });
+      return `${monthName} ${sD.getUTCDate()}–${eD.getUTCDate()}, ${year}`;
+    }
+    const startMonth = sD.toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' });
+    const endMonth   = eD.toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' });
+    return `${startMonth} ${sD.getUTCDate()} – ${endMonth} ${eD.getUTCDate()}, ${year}`;
   }
   return fmtMonthLong(cursor);
 }
@@ -739,8 +747,8 @@ function EventTile({ e, compact, onOpen }: {
               ev.dataTransfer.setData('application/x-zlz-pickup', JSON.stringify(e));
             }}
             title={draggable
-              ? `${e.title} · ${statusLabel(e.status)} · Drag to a new day or hour to reschedule`
-              : `${e.title} · ${statusLabel(e.status)}`}
+              ? `${e.title} · ${(e as any).outcomeLabel ?? statusLabel(e.status)} · Drag to a new day or hour to reschedule`
+              : `${e.title} · ${(e as any).outcomeLabel ?? statusLabel(e.status)}`}
             className={cx('haptic block w-full text-left rounded-[10px] bg-paper hover:bg-cream/60',
                           'border border-line border-l-4', c.bar,
                           draggable ? 'cursor-grab active:cursor-grabbing' : '',
@@ -764,7 +772,7 @@ function EventTile({ e, compact, onOpen }: {
         <span className={cx('inline-block rounded-full px-1.5 py-0.5', c.pill,
                             compact ? 'text-[9.5px] font-extrabold uppercase tracking-[.05em]'
                                     : 'text-[10.5px] font-extrabold uppercase tracking-[.05em]')}>
-          {statusLabel(e.status)}
+          {(e as any).outcomeLabel ?? statusLabel(e.status)}
         </span>
         {showCounts && (
           <span className={cx('text-muted', compact ? 'text-[10.5px]' : 'text-[11.5px]')}>

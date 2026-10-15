@@ -1,12 +1,12 @@
 /**
- * Activity — the four-metric tracker, now backed by /api/me/activity-log.
+ * Activity — the four-metric tracker, now backed by /api/me/my-trips.
  * Toggle for This month vs All time, four colour-coded metric tiles in a
- * 2×2 grid, then a Recent log with Export CSV. **No badges, streaks, or
+ * 2×2 grid, then a Recent log. **No badges, streaks, or
  * gamification** per the spec.
  */
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Truck, Route, Store, Clock, Users2, UtensilsCrossed } from 'lucide-react';
+import { Truck, Route, Store, Clock } from 'lucide-react';
 import { volunteer, type ActivityRow, type AuthUser } from '../api';
 import { AppBar, Avatar, FadeUp, Skeleton, cx } from '../design';
 import { fmtDateTimeFull } from '../time-format';
@@ -17,7 +17,7 @@ export function Activity({ user }: { user: AuthUser }) {
   const [scope, setScope] = useState<Scope>('all');
   const q = useQuery({ queryKey: ['activity', scope], queryFn: () => volunteer.activity(scope) });
 
-  const stats = q.data?.stats ?? { pickups: 0, miles: 0, minutes: 0, stores: 0, families: 0, meals: 0 } as any;
+  const stats = q.data?.stats ?? { pickups: 0, miles: 0, minutes: 0, stores: 0 };
   const rows  = q.data?.data ?? [];
 
   return (
@@ -26,17 +26,15 @@ export function Activity({ user }: { user: AuthUser }) {
 
       <main className="px-5">
         <FadeUp>
-          <div className="font-display font-semibold text-[22px]">{user.firstName} {user.lastName}</div>
-          {/* Tier-2 fix: was "Volunteer · Spring Valley" for every driver
-              regardless of where they live. We don't carry the neighborhood
-              on AuthUser, so drop the city half rather than lie about it. */}
-          <div className="text-[12.5px] text-muted">Volunteer</div>
+          {/* Oct 9 client: friendly heading, no "Volunteer" label. */}
+          <div className="font-display font-semibold text-[22px]">Your pickups</div>
+          <div className="text-[14px] text-muted">Thank you, {user.firstName || 'friend'}!</div>
         </FadeUp>
 
         <div className="mt-3 mb-4 bg-[#F3EFE4] border border-line rounded-[11px] p-[3px] flex">
           {([['month', 'This month'], ['all', 'All time']] as const).map(([k, label]) => (
             <button key={k} onClick={() => setScope(k)}
-                    className={cx('flex-1 text-[12px] font-bold py-2 rounded-[8px] transition',
+                    className={cx('flex-1 text-[15px] font-bold min-h-[44px] rounded-[8px] transition', // Oct 9 client: 44px tap target
                                   scope === k ? 'bg-paper text-forest shadow-soft' : 'text-muted')}>
               {label}
             </button>
@@ -47,30 +45,36 @@ export function Activity({ user }: { user: AuthUser }) {
           <div className="grid grid-cols-2 gap-3"><Skeleton className="h-32 rounded-[18px]" /><Skeleton className="h-32 rounded-[18px]" /><Skeleton className="h-32 rounded-[18px]" /><Skeleton className="h-32 rounded-[18px]" /></div>
         ) : (
           <div className="grid grid-cols-2 gap-3">
-            <Metric tone="green" value={stats.pickups}                       label="Pickups"
+            {/* Oct 8: exactly four real numbers. "Families helped" and
+                "Meals rescued" were estimates, so they are gone. */}
+            <Metric tone="green" value={Number(stats.pickups) || 0}                  label="Pickups"
                     sub={scope === 'month' ? 'this month' : 'all time'}      icon={<Truck size={18} />} />
-            <Metric tone="sky"   value={Math.round(stats.miles * 10) / 10}    unit="mi" label="Miles driven"
-                    sub={stats.pickups > 0 ? `~${Math.round(stats.miles / stats.pickups)} mi / pickup` : '—'}
-                    icon={<Route size={18} />} />
-            <Metric tone="clay"  value={stats.stores}                         label="Stores"
+            <Metric tone="sky"   value={Math.round((Number(stats.miles) || 0) * 10) / 10} label="Miles"
+                    sub="driven"                                               icon={<Route size={18} />} />
+            <Metric tone="clay"  value={Number(stats.stores) || 0}                   label="Stores"
                     sub="picked up from"                                       icon={<Store size={18} />} />
-            <Metric tone="amber" value={Math.round((stats.minutes / 60) * 10) / 10} unit="hrs" label="Hours"
-                    sub={stats.pickups > 0 ? `~${Math.round(stats.minutes / stats.pickups)} min / pickup` : '—'}
-                    icon={<Clock size={18} />} />
-            {/* Impact tiles — non-metric estimates the driver actually cares about. */}
-            <Metric tone="green" value={stats.families ?? stats.stores}        label="Families helped"
-                    sub="distinct stores served"                                icon={<Users2 size={18} />} />
-            <Metric tone="clay"  value={stats.meals ?? 0}                      label="Meals rescued"
-                    sub="~15 meals per pickup"                                  icon={<UtensilsCrossed size={18} />} />
+            <Metric tone="amber" value={Math.round(((Number(stats.minutes) || 0) / 60) * 10) / 10} label="Hours"
+                    sub="spent"                                                icon={<Clock size={18} />} />
           </div>
         )}
 
-        <div className="flex justify-between items-center mt-5 mb-2 text-[10.5px] font-extrabold uppercase tracking-[.05em] text-muted">
-          Recent pickups <a href={exportCSV(rows)} download="zlz-activity.csv" className="text-forest text-[12px] font-bold normal-case tracking-normal">Export</a>
+        <div className="flex justify-between items-center mt-5 mb-2 text-[13px] font-extrabold uppercase tracking-[.05em] text-muted">
+          {/* Oct 9 client: Export link removed (drivers never need a CSV). */}
+          Recent pickups
         </div>
 
         <div className="border border-line rounded-[16px] divide-y divide-line overflow-hidden bg-paper">
-          {rows.length === 0 && <div className="px-4 py-6 text-center text-muted text-[13px]">No trips logged yet — complete a pickup and capture it.</div>}
+          {/* Oct 9 client: a failed load is not "no trips". */}
+          {q.isError && (
+            <div className="px-4 py-6 text-center">
+              <div className="text-[15px] font-bold text-ink">Can't connect — check your signal.</div>
+              <button onClick={() => q.refetch()} disabled={q.isFetching}
+                      className="haptic mt-3 w-full min-h-[52px] rounded-[14px] bg-forest text-paper text-[17px] font-bold disabled:opacity-60">
+                {q.isFetching ? 'Trying…' : 'Try again'}
+              </button>
+            </div>
+          )}
+          {!q.isLoading && !q.isError && rows.length === 0 &&<div className="px-4 py-6 text-center text-muted text-[15px]">No trips yet.</div>}
           {rows.slice(0, 14).map((r) => <LogRow key={r.id} r={r} />)}
         </div>
       </main>
@@ -97,8 +101,8 @@ function Metric({ tone, value, unit, label, sub, icon }: {
         <span className={s.n}>{value}</span>
         {unit && <span className="text-[14px] text-muted ml-1">{unit}</span>}
       </div>
-      <div className="text-[11px] font-extrabold uppercase tracking-[.04em] text-muted mt-1.5">{label}</div>
-      <div className="text-[11px] text-muted font-semibold mt-1">{sub}</div>
+      <div className="text-[13px] font-extrabold uppercase tracking-[.04em] text-muted mt-1.5">{label}</div>
+      <div className="text-[13px] text-muted font-semibold mt-1">{sub}</div>
     </div>
   );
 }
@@ -110,23 +114,13 @@ function LogRow({ r }: { r: ActivityRow }) {
       <span className="grid h-[34px] w-[34px] place-items-center rounded-[10px] bg-[#F3EFE4] text-muted"><Store size={16} /></span>
       <div className="flex-1 min-w-0">
         <div className="text-[13px] font-bold truncate">{r.store_name ?? 'Pickup'}</div>
-        <div className="text-[11px] text-muted">{when}</div>
+        <div className="text-[13px] text-muted">{when}</div>
       </div>
-      <div className="text-right">
-        <div className="font-display font-bold text-[13px]">{r.miles != null ? `${Number(r.miles).toFixed(1)} mi` : '—'}</div>
-        <div className="text-[11px] text-muted">{r.minutes != null ? `${Math.floor((r.minutes ?? 0) / 60)}h ${String((r.minutes ?? 0) % 60).padStart(2, '0')}m` : '—'}</div>
-      </div>
+      {/* Oct 14 client: no "— —" when miles / time weren't entered. */}
+      {(r.miles != null || r.minutes != null) && <div className="text-right">
+        <div className="font-display font-bold text-[13px]">{r.miles != null ? `${Number(r.miles).toFixed(1)} mi` : ''}</div>
+        <div className="text-[13px] text-muted">{r.minutes != null ? `${Math.floor((r.minutes ?? 0) / 60)}h ${String((r.minutes ?? 0) % 60).padStart(2, '0')}m` : ''}</div>
+      </div>}
     </div>
   );
-}
-
-function exportCSV(rows: ActivityRow[]) {
-  const header = 'store,date,miles,minutes\n';
-  const body   = rows.map((r) => [
-    JSON.stringify(r.store_name ?? ''),
-    new Date(r.completed_at).toISOString().slice(0, 10),
-    r.miles ?? '',
-    r.minutes ?? '',
-  ].join(',')).join('\n');
-  return 'data:text/csv;charset=utf-8,' + encodeURIComponent(header + body);
 }

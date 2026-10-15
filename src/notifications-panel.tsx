@@ -3,6 +3,7 @@
  * has a list of phone numbers and an enabled toggle per number. Call sites
  * in the backend pass the event key to notifyOffice(event, text).
  */
+import { uiConfirm } from './ui-dialogs';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Clock } from 'lucide-react';
@@ -102,7 +103,7 @@ function PrefRow({ row, onChanged }: { row: NotificationPref; onChanged: () => v
           <span className={cx('absolute top-0.5 h-5 w-5 rounded-full bg-paper shadow transition',
                               row.enabled ? 'left-[26px]' : 'left-0.5')} />
         </button>
-        <button onClick={() => { if (confirm(`Delete ${row.phone} from this event?`)) del.mutate(); }}
+        <button onClick={() => { void uiConfirm(`Delete ${row.phone} from this event?`).then((ok) => { if (ok) { del.mutate(); } }); }}
                 className="haptic grid h-8 w-8 place-items-center rounded-full bg-clay-soft text-clay hover:bg-clay/20">
           <Trash2 size={13} />
         </button>

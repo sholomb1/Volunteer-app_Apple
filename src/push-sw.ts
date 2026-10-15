@@ -28,8 +28,10 @@ precacheAndRoute(self.__WB_MANIFEST);
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     try {
+      // Oct 8: keep Workbox's precache — it's being filled during this same
+      // install, and wiping it left the offline cache half-empty.
       const names = await caches.keys();
-      await Promise.all(names.map((n) => caches.delete(n)));
+      await Promise.all(names.filter((n) => !n.startsWith('workbox-precache')).map((n) => caches.delete(n)));
     } catch {
       /* ignore */
     }
@@ -43,6 +45,8 @@ self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const c of clients) {
+      // Oct 8: never reload a kiosk mid drop-off; it picks up the new build on its next start-over.
+      if ((c as WindowClient).url.includes('/kiosk/')) continue;
       try { (c as WindowClient).navigate?.((c as WindowClient).url); } catch { /* ignore */ }
     }
   })());
@@ -58,10 +62,21 @@ self.addEventListener('push', (event) => {
     icon: '/rescue/icon-192.png',
     badge: '/rescue/icon-192.png',
     data: payload.data ?? {},
-    tag: payload.data?.type ?? 'zlz',
+    tag: payload.data?.tag ?? payload.data?.type ?? 'zlz', // Oct 11 client: each office alert its own notification
     renotify: true,
   };
-  event.waitUntil(self.registration.showNotification(title, options));
+  // Oct 11 client: alerts clear themselves — an office alert push carries the ids of alerts
+  // that were handled since (resolved=1,2,3); close those pop-ups first, then show the new one.
+  const resolved = String(payload.data?.resolved ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  event.waitUntil((async () => {
+    if (resolved.length) {
+      try {
+        const tags = new Set(resolved.map((id) => `office_alert_${id}`));
+        for (const n of await self.registration.getNotifications()) if (n.tag && tags.has(n.tag)) n.close();
+      } catch { /* ignore */ }
+    }
+    await self.registration.showNotification(title, options);
+  })());
 });
 
 self.addEventListener('notificationclick', (event) => {

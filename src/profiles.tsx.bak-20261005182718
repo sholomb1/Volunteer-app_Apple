@@ -1,0 +1,225 @@
+/**
+ * Oct 5 client (UI ideas 2, 3, 4): driver profile, store profile, suggested drivers.
+ * Backend: apps/api/src/routes/profiles.ts
+ */
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { api } from './api';
+
+const DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const fmtDate = (d: string | null | undefined, t?: string | null) => {
+  if (!d) return '—';
+  const dt = new Date(`${d}T${(t ?? '12:00').slice(0, 5)}:00`);
+  const day = dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: dt.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined });
+  return t ? `${day} · ${dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}` : day;
+};
+
+function Stat({ n, label, tone }: { n: number | string; label: string; tone?: 'good' | 'bad' | 'warn' }) {
+  const c = tone === 'good' ? 'text-forest' : tone === 'bad' ? 'text-clay' : tone === 'warn' ? 'text-[#9a7415]' : 'text-ink';
+  return (
+    <div className="rounded-[12px] border border-line bg-paper px-3 py-2 min-w-[92px]">
+      <div className={`font-display text-[20px] leading-none ${c}`}>{n}</div>
+      <div className="mt-1 text-[11px] font-bold text-muted">{label}</div>
+    </div>
+  );
+}
+
+function DayBars({ days }: { days: number[] }) {
+  const max = Math.max(1, ...days);
+  return (
+    <div className="flex items-end gap-1.5 h-[64px]">
+      {days.map((n, i) => (
+        <div key={i} className="flex flex-col items-center gap-1 flex-1">
+          <div className="w-full rounded-t-[4px] bg-forest/70" style={{ height: `${Math.round((n / max) * 44) + (n ? 4 : 1)}px` }} title={`${n} on ${DAY[i]}`} />
+          <div className="text-[10px] font-bold text-muted">{DAY[i]}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RecentList({ rows, who }: { rows: any[]; who: 'store' | 'drivers' }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? rows : rows.slice(0, 8);
+  if (rows.length === 0) return <div className="text-[12.5px] text-muted">No pickups yet.</div>;
+  return (
+    <>
+      <ul className="divide-y divide-line rounded-[12px] border border-line bg-paper">
+        {shown.map((r) => (
+          <li key={r.id} className="flex items-start justify-between gap-3 px-3 py-2">
+            <div className="min-w-0">
+              <div className="text-[13px] font-semibold text-ink truncate">{(who === 'store' ? r.store : r.drivers) || <span className="italic font-normal text-muted">No driver</span>}</div>
+              <div className="text-[11.5px] text-muted">{fmtDate(r.date, r.time)} · #{r.ref_number ?? r.id}</div>
+            </div>
+            <div className="shrink-0 text-right text-[11.5px]">
+              <div className="font-bold text-ink">{r.outcome_label ?? 'Still open'}</div>
+              {String(r.outcome ?? '').startsWith('completed') && (
+                <div className={r.kiosk_verified ? 'text-forest font-bold' : 'text-muted'}>{r.kiosk_verified ? '✓ Kiosk' : 'No kiosk'}</div>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+      {rows.length > 8 && (
+        <button onClick={() => setAll(!all)} className="haptic mt-1 text-[12.5px] font-bold text-forest hover:underline">
+          {all ? 'Show less' : `View all ${rows.length}`}
+        </button>
+      )}
+    </>
+  );
+}
+
+const H = ({ children }: { children: any }) => <div className="text-[11px] font-extrabold uppercase tracking-[.05em] text-muted mb-1.5">{children}</div>;
+
+/** Driver profile (idea 2). */
+export function DriverOverview({ volunteerId, phone, firstName }: { volunteerId: number; phone?: string | null; firstName?: string | null }) {
+  const q = useQuery({ queryKey: ['vol-profile', volunteerId], queryFn: () => api<{ data: any }>(`/api/volunteers/${volunteerId}/profile`) });
+  const [msg, setMsg] = useState('');
+  const [sent, setSent] = useState<string | null>(null);
+  const send = useMutation({
+    mutationFn: () => api('/api/sms/send-one', { method: 'POST', body: JSON.stringify({ phone, body: msg.trim() }) }),
+    onSuccess: () => { setSent('✅ Sent.'); setMsg(''); },
+    onError: (e: any) => setSent(`⚠️ ${e?.message || 'Not sent'}`),
+  });
+  if (q.isLoading) return <div className="text-[13px] text-muted">Loading…</div>;
+  if (q.isError) return <div className="text-[13px] text-clay">Couldn't load. <button onClick={() => q.refetch()} className="underline font-bold">Try again</button></div>;
+  const d = q.data!.data;
+  const t = d.totals;
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-2">
+        <Stat n={t.completed} label="Completed" tone="good" />
+        <Stat n={t.kiosk} label="Kiosk verified" />
+        <Stat n={t.upcoming} label="Coming up" />
+        <Stat n={d.reliability == null ? '—' : `${d.reliability}%`} label="Reliability" tone={d.reliability == null ? undefined : d.reliability >= 85 ? 'good' : d.reliability >= 65 ? 'warn' : 'bad'} />
+        <Stat n={t.driverCancels + t.released} label="Dropped after taking" tone={t.driverCancels + t.released ? 'bad' : undefined} />
+      </div>
+      <div className="text-[12px] text-muted">
+        Last completed pickup: <b className="text-ink">{fmtDate(d.lastDone)}</b>. Reliability = completed ÷ (completed + dropped after taking it).
+      </div>
+      <div className="grid gap-4 md:grid-cols-2">
+        <div>
+          <H>Usual stores</H>
+          {d.topStores.length === 0 ? <div className="text-[12.5px] text-muted">None yet.</div> : (
+            <div className="flex flex-wrap gap-1.5">
+              {d.topStores.map((s: any) => (
+                <span key={s.name} className="rounded-full border border-line bg-paper px-2.5 py-1 text-[12px]">
+                  <b>{s.name}</b> <span className="text-muted">× {s.count}</span>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        <div>
+          <H>Days they drive</H>
+          <DayBars days={d.days} />
+        </div>
+      </div>
+      {phone && (
+        <div>
+          <H>Text {firstName || 'them'}</H>
+          <div className="flex gap-2">
+            <input value={msg} onChange={(e) => { setMsg(e.target.value); setSent(null); }} placeholder="Type a message…"
+                   className="flex-1 min-w-0 rounded-[10px] border border-line bg-paper px-3 py-2 text-[13px]" />
+            <button disabled={!msg.trim() || send.isPending} onClick={() => send.mutate()}
+                    className="haptic rounded-[10px] bg-forest px-4 py-2 text-[13px] font-bold text-paper disabled:opacity-50">{send.isPending ? 'Sending…' : 'Send'}</button>
+          </div>
+          {sent && <div className="mt-1 text-[12px] font-semibold">{sent}</div>}
+        </div>
+      )}
+      <div>
+        <H>Pickup history</H>
+        <RecentList rows={d.recent} who="store" />
+      </div>
+    </div>
+  );
+}
+
+/** Store profile (idea 3). */
+export function StoreOverview({ supplierId }: { supplierId: number }) {
+  const q = useQuery({ queryKey: ['sup-profile', supplierId], queryFn: () => api<{ data: any }>(`/api/suppliers/${supplierId}/profile`) });
+  if (q.isLoading) return <div className="text-[13px] text-muted mt-4">Loading pickup history…</div>;
+  if (q.isError) return <div className="text-[13px] text-clay mt-4">Couldn't load. <button onClick={() => q.refetch()} className="underline font-bold">Try again</button></div>;
+  const d = q.data!.data;
+  const t = d.totals;
+  return (
+    <div className="mt-5 space-y-4 border-t border-line pt-4">
+      <div className="flex flex-wrap gap-2">
+        <Stat n={t.total} label="Pickups" />
+        <Stat n={t.completed} label="Completed" tone="good" />
+        <Stat n={t.missed} label="Missed / no driver" tone={t.missed ? 'bad' : undefined} />
+        <Stat n={t.cancelled} label="Cancelled" />
+        <Stat n={t.upcoming} label="Coming up" />
+      </div>
+      <div className="grid gap-4 md:grid-cols-2">
+        <div>
+          <H>Who usually covers it</H>
+          {d.topDrivers.length === 0 ? <div className="text-[12.5px] text-muted">Nobody yet.</div> : (
+            <ul className="space-y-1">
+              {d.topDrivers.map((v: any) => (
+                <li key={v.id} className="flex items-center justify-between gap-2 text-[12.5px]">
+                  <span><b>{v.name}</b> <span className="text-muted">× {v.count}</span></span>
+                  <span className="text-muted">last {fmtDate(v.last)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div>
+          <H>Pickup days</H>
+          <DayBars days={d.days} />
+        </div>
+      </div>
+      <div>
+        <H>Pickups at this store</H>
+        <RecentList rows={d.recent} who="drivers" />
+      </div>
+    </div>
+  );
+}
+
+/** Suggested drivers (idea 4) — shown on an uncovered pickup. */
+export function SuggestedDriversCard({ pickupId }: { pickupId: number }) {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['suggested-drivers', pickupId], queryFn: () => api<{ data: any[] }>(`/api/pickup-instances/${pickupId}/suggested-drivers`) });
+  const [done, setDone] = useState<Record<number, string>>({});
+  const ask = useMutation({
+    mutationFn: (vid: number) => api<{ data: { code: number } }>(`/api/pickup-instances/${pickupId}/ask-driver`, { method: 'POST', body: JSON.stringify({ volunteerId: vid }) }),
+    onSuccess: (r, vid) => setDone((m) => ({ ...m, [vid]: `Texted — they reply ${r.data.code} to accept` })),
+    onError: (e: any, vid) => setDone((m) => ({ ...m, [vid]: `⚠️ ${e?.message || 'Not sent'}` })),
+  });
+  const assign = useMutation({
+    mutationFn: (vid: number) => api(`/api/pickup-instances/${pickupId}/volunteers`, { method: 'POST', body: JSON.stringify({ volunteerId: vid }) }),
+    onSuccess: (_r, vid) => {
+      setDone((m) => ({ ...m, [vid]: '✅ Assigned' }));
+      for (const k of ['admin-pickup-single', 'admin-pickup-detail', 'pickup-history', 'admin-pickups', 'admin-pickups-range', 'suggested-drivers']) qc.invalidateQueries({ queryKey: [k] });
+    },
+    onError: (e: any, vid) => setDone((m) => ({ ...m, [vid]: `⚠️ ${e?.message || 'Could not assign'}` })),
+  });
+  const rows = q.data?.data ?? [];
+  if (q.isLoading || rows.length === 0) return null;
+  return (
+    <section className="rounded-[14px] border border-forest/30 bg-sage/30 px-4 py-3">
+      <h2 className="text-[11px] font-extrabold uppercase tracking-[.05em] text-forest-deep mb-2">Suggested drivers — they covered this place before</h2>
+      <ul className="space-y-2">
+        {rows.map((v) => (
+          <li key={v.id} className="flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="text-[13.5px] font-bold text-ink">{v.name}{v.unit_number != null && <span className="ml-1 text-muted font-semibold text-[11.5px]">#{v.unit_number}</span>}</div>
+              <div className="text-[11.5px] text-muted">Covered it {v.count}× · last {fmtDate(v.last)}{v.phone ? ` · ${v.phone}` : ''}</div>
+              {done[v.id] && <div className="text-[11.5px] font-semibold text-forest">{done[v.id]}</div>}
+            </div>
+            <div className="flex gap-1.5 shrink-0">
+              {v.phone && (
+                <button disabled={ask.isPending} onClick={() => ask.mutate(v.id)}
+                        className="haptic rounded-[10px] border border-forest/40 bg-paper px-3 py-1.5 text-[12px] font-bold text-forest disabled:opacity-50">Ask them</button>
+              )}
+              <button disabled={assign.isPending} onClick={() => assign.mutate(v.id)}
+                      className="haptic rounded-[10px] bg-forest px-3 py-1.5 text-[12px] font-bold text-paper disabled:opacity-50">Assign</button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}

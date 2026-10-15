@@ -35,7 +35,21 @@ export const API_BASE = (() => {
 
 export type AuthUser = {
   id: number; email: string | null; firstName: string; lastName: string; role: string;
+  testMode?: 'sandbox' | 'live_test';
+  // Oct 2: null/undefined = role default menu; array = only these sections.
+  accessSections?: string[] | null;
 };
+
+// Whether the API server is running in sandbox-available mode (dev box only).
+// Populated from the login response (sandboxAvailable field). Persisted in
+// localStorage so the pill renders instantly on subsequent loads.
+const SANDBOX_AVAIL_KEY = 'zlz_sandbox_available';
+export function isSandboxAvailable(): boolean {
+  try { return localStorage.getItem(SANDBOX_AVAIL_KEY) === '1'; } catch { return false; }
+}
+export function setSandboxAvailable(v: boolean) {
+  try { localStorage.setItem(SANDBOX_AVAIL_KEY, v ? '1' : '0'); } catch {}
+}
 
 export function getToken(): string | null { return localStorage.getItem(TOKEN_KEY); }
 /**
@@ -50,6 +64,49 @@ export function canWrite(role?: string | null): boolean {
 export function canManageUsers(role?: string | null): boolean {
   return role === 'admin';
 }
+// Sep 10 client: dispatcher visibility is a strict allow-list of THREE
+// tabs — Members (volunteers), Pickups, Send Out Messages (sms-combo) —
+// plus 'change-password' so the dispatcher can rotate their own login.
+// Every other nav item is hidden. Prior "deny-list" was too permissive
+// (dispatchers were still seeing calendars, chats, dispatchers admin,
+// etc.). Now it's the opposite pattern: an allow-list.
+// Oct 2 client (UI plan §6): dispatchers see Live Board, Pickups,
+// Volunteers, Suppliers and their own My Shift screen (no admin roster
+// controls, no SMS composer).
+const DISPATCHER_ALLOWED_TABS = new Set([
+  'live',              // Live Board
+  'pickups',           // Pickups
+  'volunteers',        // Members
+  'suppliers',         // Suppliers
+  'my-shift',          // My Shift
+  'donations',         // Food Donations (Oct 7 client)
+  'change-password',   // rotate own password
+]);
+// Oct 2 client (invite + access levels): which main-menu section each page is in.
+const TAB_SECTION: Record<string, string> = {
+  live: 'live', pickups: 'pickups', calendar: 'pickups', steady: 'pickups', donations: 'pickups',
+  volunteers: 'volunteers', suppliers: 'suppliers', coverage: 'map',
+  tasks: 'tasks', recruiting: 'tasks', prospects: 'tasks', reports: 'reports',
+  'sms-combo': 'messaging', 'chat-volunteers': 'messaging', 'chat-stores': 'messaging', 'driver-replies': 'messaging',
+  'dispatchers-combo': 'admin', shifts: 'admin', 'center-help': 'admin', 'holiday-sms': 'admin',
+  'kiosk-activity': 'admin', 'app-usage': 'admin', settings: 'admin', neighborhoods: 'admin',
+};
+export function canSeeTab(role: string | null | undefined, tabKey: string): boolean {
+  const isDispatcher = (role ?? '').toLowerCase() === 'dispatcher';
+  if (tabKey === 'my-shift') return isDispatcher;
+  if (tabKey === 'change-password') return true;
+  const sections = getUser()?.accessSections;
+  if (Array.isArray(sections) && sections.length > 0) {
+    const sec = TAB_SECTION[tabKey];
+    return !!sec && sections.includes(sec);
+  }
+  if (isDispatcher) return DISPATCHER_ALLOWED_TABS.has(tabKey);
+  return true;
+}
+// The auth cache in vp-api refreshes role from DB every 60s, but the JWT
+// itself carries the role at issue time. To be safe when an admin changes
+// someone's role, tell the operator the affected user must re-login.
+export function roleChangeNeedsRelogin(): boolean { return true; }
 export function getUser(): AuthUser | null {
   const raw = localStorage.getItem(USER_KEY);
   return raw ? (JSON.parse(raw) as AuthUser) : null;
@@ -68,6 +125,88 @@ export function setAuth(token: string | null, user: AuthUser | null) {
  *
  * Login itself short-circuits this so the wrong-password 401 stays inline.
  */
+/** Oct 5 client: one set of plain-English error messages everywhere
+ *  (instead of "HTTP 502", "Failed to fetch", "invalid body", "not found"…).
+ *  A server message that is already a readable sentence is kept. */
+export const NETWORK_ERROR_TEXT = "Can't reach the server. Check the internet connection and try again.";
+export function friendlyError(status: number, body: any): string {
+  const raw = String(body?.message || body?.error || '').trim();
+  const readable = raw.length > 0 && /\s/.test(raw) && !/^[a-z0-9_]+$/i.test(raw) && !/^invalid (body|request|id)$/i.test(raw);
+  if (readable) return raw;
+  if (status === 400) return 'Some information is missing or not in the right format. Please check the form and try again.';
+  if (status === 401) return 'Your sign-in has expired. Please sign in again.';
+  if (status === 403) return "You don't have access to do this.";
+  if (status === 404) return "This wasn't found. It may have been removed, or it's no longer available.";
+  if (status === 409) return 'This was already changed by someone else. Refresh and try again.';
+  if (status === 413) return 'That file is too big.';
+  if (status === 429) return 'Too many requests at once. Wait a few seconds and try again.';
+  if (status === 502 || status === 503 || status === 504) return 'The server is busy or restarting. Please try again in a few seconds.';
+  if (status >= 500) return 'Something went wrong on our side. Please try again. If it keeps happening, tell the office.';
+  return raw || `Something went wrong (code ${status}).`;
+}
+
+// Oct 11 client: office internet filters (TAG/JNet-style) sometimes swap an API
+// reply for their own HTML block page. Every request sends `X-Zlz-Enc: 1`, so the
+// server replies {"enc":"<base64 of the JSON>"} that filters can't read; decodeEnc
+// unwraps it (safe to call twice — anything that isn't exactly {enc: string} is
+// returned as is). If a filter still swaps the reply, we say so plainly.
+export const FILTER_BLOCKED_TEXT = "Your internet filter blocked this information. Ask your filter company to allow zlz.zehlzeh.org and staging.zehlzeh.org (Zeh L'Zeh).";
+export function decodeEnc<T = any>(x: any): T {
+  if (x && typeof x === 'object' && !Array.isArray(x) && typeof x.enc === 'string' && Object.keys(x).length === 1) {
+    const bytes = Uint8Array.from(atob(x.enc), (c) => c.charCodeAt(0));
+    return JSON.parse(new TextDecoder('utf-8').decode(bytes)) as T;
+  }
+  return x as T;
+}
+// Oct 11 client: speed — X-Zlz-Enc (base64 replies: +33% size, compress 2x
+// worse) is only sent once a filter block was seen on this device. The flag
+// lives 30 days in localStorage 'zlz_enc' (time it was last set) plus memory.
+// Oct 11 client: speed — gzip opt-in header for browsers only (the phone apps'
+// native HTTP client stays on plain replies).
+export const GZ_OK: boolean = (() => {
+  try {
+    const cap = (window as any).Capacitor;
+    return !(cap?.isNativePlatform?.() === true || cap?.getPlatform?.() === 'android' || cap?.getPlatform?.() === 'ios');
+  } catch { return false; }
+})();
+const ENC_LS_KEY = 'zlz_enc';
+const ENC_TTL_MS = 30 * 86400e3;
+let encMem = false;
+export function encNeeded(): boolean {
+  if (encMem) return true;
+  try {
+    const t = Number(localStorage.getItem(ENC_LS_KEY) || '0');
+    if (t && Date.now() - t < ENC_TTL_MS) { encMem = true; return true; }
+  } catch { /* storage blocked */ }
+  return false;
+}
+export function markEncNeeded(): void {
+  encMem = true;
+  try { localStorage.setItem(ENC_LS_KEY, String(Date.now())); } catch { /* storage blocked */ }
+}
+// Oct 11 client: speed — lists asked with ?logo=url return store logos as API
+// paths ('/api/suppliers/:id/logo?v=…') instead of inline images; prefix the API base.
+export function apiAssetUrl(u: string | null | undefined): string | undefined {
+  if (!u) return undefined;
+  return u.startsWith('/api/') ? API_BASE.replace(/\/$/, '') + u : u;
+}
+// Oct 11 client: every filter block also fires this window event — FilterBlockedBanner (App.tsx) shows the plain message at the top.
+export const FILTER_BLOCKED_EVENT = 'zlz-filter-blocked';
+export function filterBlockedError(status: number): Error & { status: number; filterBlocked: true } {
+  try { window.dispatchEvent(new Event(FILTER_BLOCKED_EVENT)); } catch { /* no window (tests) */ }
+  return Object.assign(new Error(FILTER_BLOCKED_TEXT), { status, filterBlocked: true as const });
+}
+/** "Couldn't load X (reason)." — or just the plain filter message when a filter blocked it. */
+export function loadFailText(what: string, err: unknown): string {
+  if ((err as any)?.filterBlocked) return FILTER_BLOCKED_TEXT;
+  const m = (err as Error | null)?.message;
+  return `${what}${m ? ` (${m})` : ''}.`;
+}
+/** Error bodies: JSON (maybe {enc}) or {} if unreadable. */
+async function readErrorBody(r: Response): Promise<any> {
+  try { return decodeEnc(await r.json()); } catch { return {}; }
+}
+
 export async function api<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = { ...((init.headers as Record<string, string>) || {}) };
   // Always declare JSON content-type for body-bearing verbs. CapacitorHttp
@@ -88,8 +227,29 @@ export async function api<T = unknown>(path: string, init: RequestInit = {}): Pr
   }
   const token = getToken();
   if (token) headers['Authorization'] = `Bearer ${token}`;
+  // Sandbox toggle: pass current user's test mode as a header so the server-
+  // side sandbox-router knows whether to redirect outbound SMS/WA. Only
+  // meaningful on the dev box (where SANDBOX_PHONE is set); no-op on live.
+  const u = getUser();
+  if (u?.testMode) headers['X-Test-Mode'] = u.testMode;
+  if (smsOverrideUntil() > Date.now()) headers['X-Sms-Pause-Override'] = '1';
+  // Oct 11 client: ask for filter-proof (base64) replies — speed: only after a
+  // filter block was seen on this device (see encNeeded).
+  const encSent = encNeeded();
+  if (encSent) headers['X-Zlz-Enc'] = '1';
+  // Oct 11 client: speed — ask for gzip'd JSON (server opt-in; not in the phone apps).
+  if (GZ_OK) headers['X-Zlz-Gz'] = '1';
 
-  const r = await fetch(API_BASE.replace(/\/$/, '') + path, { ...finalInit, headers });
+  // Oct 5: a 502/503/504 while the server restarts used to show "HTTP 502".
+  // Reads retry quietly (1.5s, then 3s); writes are never repeated.
+  const doFetch = () => fetch(API_BASE.replace(/\/$/, '') + path, { ...finalInit, headers })
+    .catch(() => { throw Object.assign(new Error(NETWORK_ERROR_TEXT), { status: 0 }); });
+  let r = await doFetch();
+  for (const wait of method === 'GET' ? [1500, 3000] : []) {
+    if (r.status !== 502 && r.status !== 503 && r.status !== 504) break;
+    await new Promise((res) => setTimeout(res, wait));
+    r = await doFetch();
+  }
   // Portal-wide force-refresh check. Any response can carry the epoch; if the
   // server has bumped ahead of what this tab has seen, wipe caches, unregister
   // the SW, and reload. Runs at most once per page load.
@@ -105,16 +265,38 @@ export async function api<T = unknown>(path: string, init: RequestInit = {}): Pr
         window.location.replace(base + '/');
       }
     }
-    const body = await r.json().catch(() => ({}));
+    const body = await readErrorBody(r);
     throw new Error((body as any).error || (isLoginCall ? 'Invalid credentials' : 'Session expired'));
   }
   if (!r.ok) {
-    const body = await r.json().catch(() => ({}));
-    const err = new Error((body as any).error || `${r.status} ${r.statusText}`) as Error & { status?: number };
+    const body = await readErrorBody(r);
+    const err = new Error(friendlyError(r.status, body)) as Error & { status?: number; body?: any };
+    err.body = body;
     err.status = r.status;
+    // Oct 14 client: remembered for "Report a problem" (last error the app showed).
+    try { (window as any).__zlzLastApiError = { at: Date.now(), status: r.status, path, message: err.message }; } catch { /* no window */ }
     throw err;
   }
-  return r.json() as Promise<T>;
+  // Oct 11 client: an OK reply that isn't JSON = a filter's block page.
+  // Speed: if we hadn't asked for base64 yet, remember it (30 days) and, for
+  // reads, ask again right away with X-Zlz-Enc before showing the filter message.
+  const readOk = async (resp: Response): Promise<{ ok: true; v: T } | { ok: false }> => {
+    if (/text\/html/i.test(resp.headers.get('content-type') || '')) return { ok: false };
+    const text = await resp.text();
+    if (!text && resp.status === 204) return { ok: true, v: undefined as T };
+    try { return { ok: true, v: decodeEnc<T>(JSON.parse(text)) }; } catch { return { ok: false }; }
+  };
+  let res = await readOk(r);
+  if (!res.ok && !encSent) {
+    markEncNeeded();
+    if (method === 'GET') {
+      headers['X-Zlz-Enc'] = '1';
+      const r2 = await doFetch();
+      if (r2.ok) res = await readOk(r2);
+    }
+  }
+  if (!res.ok) throw filterBlockedError(r.status);
+  return res.v;
 }
 
 // Portal-wide force-refresh. On any API response, we compare the server's
@@ -165,13 +347,6 @@ async function forceHardReload() {
   window.location.replace(u.toString());
 }
 
-export type PickupAlertRecipient = { id: number; volunteerId: number; name: string; phone: string | null; smsOptIn: boolean; addedAt: string };
-export const pickupAlerts = {
-  list: () => api<{ data: PickupAlertRecipient[] }>('/api/admin/pickup-alert-recipients'),
-  add:  (volunteerId: number) => api<{ data: { id: number; volunteerId: number } }>(
-    '/api/admin/pickup-alert-recipients', { method: 'POST', body: JSON.stringify({ volunteerId }) }),
-  remove: (id: number) => api(`/api/admin/pickup-alert-recipients/${id}`, { method: 'DELETE' }),
-};
 
 export const portalReload = {
   bump: () => api<{ data: { reloadSince: number } }>('/api/admin/portal-reload', { method: 'POST' }),
@@ -198,20 +373,45 @@ export const sse = {
 };
 
 export async function login(username: string, password: string): Promise<AuthUser> {
-  const res = await api<{ token: string; user: AuthUser }>('/api/auth/login', {
+  const res = await api<{ token: string; user: AuthUser; sandboxAvailable?: boolean }>('/api/auth/login', {
     method: 'POST',
     body: JSON.stringify({ username: username.trim(), password }),
   });
   setAuth(res.token, res.user);
+  setSandboxAvailable(!!res.sandboxAvailable);
   // Push registration is handled by AuthedApp's effect in App.tsx (runs on both
   // fresh login and startup-with-session), using static plugin imports.
   return res.user;
+}
+
+// Refresh the current user's server-side state (test mode, sandbox availability).
+// Called on portal mount so an existing session picks up test-mode changes
+// made from a different device / after backend upgrades. Silently swallows
+// network errors — a stale localStorage user still works for offline UX.
+export async function refreshMeFromServer(): Promise<void> {
+  try {
+    const res = await api<{ user: AuthUser; sandboxAvailable?: boolean }>('/api/auth/me');
+    const existing = getUser();
+    if (existing) setAuth(getToken(), { ...existing, ...res.user });
+    setSandboxAvailable(!!res.sandboxAvailable);
+  } catch { /* ignore — offline is fine */ }
+}
+
+// Flip the current user's test mode. Persists server-side and locally.
+export async function setUserTestMode(mode: 'sandbox' | 'live_test'): Promise<void> {
+  await api('/api/auth/me/test-mode', {
+    method: 'PATCH',
+    body: JSON.stringify({ testMode: mode }),
+  });
+  const u = getUser();
+  if (u) setAuth(getToken(), { ...u, testMode: mode });
 }
 
 // ---------- volunteer endpoints ----------
 
 export type SignupRow = { slot: number; first_name: string; last_name: string; unit_number?: number | null };
 export type OpenPickup = {
+  store_photo_url?: string | null; // Oct 14 client: the store's photo ('/uploads/...'), store posts only
   pickup_instance_id: number; scheduled_date: string; scheduled_time: string;
   status: string; urgency_level: string; notes: string | null;
   must_pickup_by: string | null; food_description: string | null;
@@ -228,6 +428,8 @@ export type OpenPickup = {
 };
 export type MyPickup = OpenPickup & {
   assignment_id: number; assignment_status: string;
+  // Oct 9 client: the short code the texts use ("37 DONE"); null if never texted.
+  text_code?: string | number | null;
 };
 export type HistoryStats = {
   lifetime: number; thisMonth: number; hoursLogged: number;
@@ -240,12 +442,14 @@ export type ActivityStats = { pickups: number; miles: number; minutes: number; s
 export const onDuty = {
   // Consolidated brief #15 (Aug 18): action-summary counts for the
   // dispatcher on-duty banner. Cheap query; safe to poll every 20s.
-  summary: () => api<{ data: { pickups_need_driver: number; pickups_within_30m: number; unread_sms: number; pending_confirmation: number } }>('/api/on-duty-summary'),
+  summary: () => api<{ data: { pickups_need_driver: number; pickups_within_30m: number; unread_sms: number; pending_confirmation: number; pickups_need_driver_ids?: (number | string)[]; pickups_within_30m_ids?: (number | string)[] } }>('/api/on-duty-summary'),
 };
 
 export const volunteer = {
   open:    () => api<{ data: OpenPickup[] }>('/api/me/open-pickups'),
-  mine:    () => api<{ profile: { name: string }; data: MyPickup[] }>('/api/me/pickups'),
+  // Oct 14 client: a pickup the driver gave back is not theirs any more (older API still sent it).
+  mine:    () => api<{ profile: { name: string }; data: MyPickup[] }>('/api/me/pickups')
+    .then((r) => ({ ...r, data: (r.data ?? []).filter((p) => !['declined', 'cancelled'].includes(String(p.assignment_status ?? ''))) })),
   history: () => api<{ profile: { name: string }; stats: HistoryStats; data: any[] }>('/api/me/history'),
   // Client Aug 18: mobile-app usage tracking. Native app calls this on
   // launch + on foreground so the office can see who actually opens the app.
@@ -267,9 +471,9 @@ export const volunteer = {
   sendMessage: (pickupId: number, body: string) => api<{ data: ChatMsg }>(`/api/me/pickups/${pickupId}/messages`, { method: 'POST', body: JSON.stringify({ body }) }),
   chatSummary: () => api<{ data: { total: number; byPickup: Array<{ pickupInstanceId: number; lastBody: string; lastAt: string; unread: number }> } }>('/api/me/pickups/chat-summary'),
   saveActivity: (body: { pickupInstanceId?: number; storeId?: number; miles?: number; minutes?: number; notes?: string }) =>
-    api<{ data: any }>('/api/me/activity-log', { method: 'POST', body: JSON.stringify(body) }),
+    api<{ data: any }>('/api/me/my-trips', { method: 'POST', body: JSON.stringify(body) }), // Oct 11 client: was /me/activity-log (blocked by a content filter)
   activity:    (scope: 'month' | 'all' = 'all') =>
-    api<{ data: ActivityRow[]; stats: ActivityStats }>(`/api/me/activity-log?scope=${scope}`),
+    api<{ data: ActivityRow[]; stats: ActivityStats }>(`/api/me/my-trips?scope=${scope}`), // Oct 11 client: was /me/activity-log
   availability: () =>
     api<{ data: { isAvailable: boolean; unavailableUntil: string | null } }>('/api/me/availability'),
   setAvailability: (isAvailable: boolean, unavailableUntil?: string | null) =>
@@ -419,6 +623,8 @@ export type DispatcherRosterRow = {
   unitNumber: number | null;
   email: string | null;
   userId: number | null;
+  /** Oct 5: their portal login (separate from a volunteer-app login). */
+  portalLogin?: any | null;
   currentShift: DispatcherShiftInfo | null;
   nextShift: DispatcherShiftInfo | null;
 };
@@ -455,14 +661,14 @@ export const staffUsers = {
 // Admin/staff user management
 export type AdminUser = {
   id: number; email: string; phone: string | null;
-  role: 'admin' | 'coordinator' | 'staff';
+  role: 'admin' | 'coordinator' | 'staff' | 'dispatcher';
   firstName: string; lastName: string;
   isActive: boolean;
   lastLoginAt: string | null; createdAt?: string;
 };
 export const adminUsers = {
   list:   () => api<{ data: AdminUser[] }>('/api/admin-users'),
-  create: (body: { username: string; password: string; firstName?: string; lastName?: string; role?: 'admin' | 'coordinator' | 'staff' }) =>
+  create: (body: { username: string; password: string; firstName?: string; lastName?: string; role?: 'admin' | 'coordinator' | 'staff' | 'dispatcher' }) =>
     api<{ data: AdminUser }>('/api/admin-users', { method: 'POST', body: JSON.stringify(body) }),
   patch:  (id: number, body: { role?: string; isActive?: boolean }) =>
     api<{ data: AdminUser }>(`/api/admin-users/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
@@ -475,6 +681,9 @@ export type VolunteerSelfProfile = {
   id: number;
   firstName: string; lastName: string;
   phonePrimary: string | null; email: string | null;
+  // Oct 14 client: all the driver's numbers (read) / the phone list editor (save).
+  phones?: { numbers: Array<{ phone: string; label: string | null; call?: boolean; text?: boolean }>; callAt: string | null; textTo: string | null }
+        | { numbers: Array<{ phone: string; label: string | null }>; callAt: string | null; textTo: string | null } | null;
   homeAddress: string | null; locationArea: string | null;
   vehicleType: string | null; vehicleCapacity: string | null;
   refrigeratedHandling: string | null;
@@ -487,6 +696,28 @@ export type VolunteerSelfProfile = {
   vacationFrom: string | null;
   vacationUntil: string | null;
 };
+// Oct 14 client: driver app Settings + My application (apps/api/src/routes/me-settings.ts).
+// channel = "How should we reach you about pickups?" (Text / WhatsApp / Both / App only / Nothing).
+export type ReachChoice = 'text' | 'whatsapp' | 'both' | 'app' | 'none';
+export type DriverSettings = {
+  channel: ReachChoice; notifChannel: string; contactChannel: string; smsOptIn: boolean; whatsappReady: boolean;
+  isAvailable: boolean; unavailableUntil: string | null; vacationFrom: string | null; vacationUntil: string | null;
+  quietDays: number; quietWindows: Array<{ start: string; end: string; days?: number }>; // Oct 14 client: + days (bit 0 = Sunday)
+  texting: { texting: string; quiet: string | null; days: string | null; away: string | null; check: boolean; quietMinutes: number };
+  steadyReminders: boolean; hasSteady: boolean;
+};
+export type DriverSettingsPatch = Partial<{
+  channel: ReachChoice; quietWindows: Array<{ start: string; end: string; days?: number }>; quietDays: number;
+  vacationFrom: string | null; vacationUntil: string | null; steadyReminders: boolean; smsOptIn: boolean;
+}>;
+export type MyApplicationData = { answers: Record<string, any>; hasApplication: boolean; receivedAt: string | null; updatedAt: string | null; changed?: string[] };
+export const driverSettings = {
+  get:  () => api<{ data: DriverSettings }>('/api/me/settings'),
+  save: (body: DriverSettingsPatch) => api<{ data: DriverSettings }>('/api/me/settings', { method: 'PUT', body: JSON.stringify(body) }),
+  application:     () => api<{ data: MyApplicationData }>('/api/me/application'),
+  saveApplication: (body: Record<string, unknown>) => api<{ data: MyApplicationData }>('/api/me/application', { method: 'PUT', body: JSON.stringify(body) }),
+};
+
 export const volunteerSelf = {
   get:   () => api<{ data: VolunteerSelfProfile }>('/api/me/volunteer-profile'),
   patch: (body: Partial<VolunteerSelfProfile>) =>
@@ -540,7 +771,7 @@ export const auth = {
 export const dm = {
   messages: (userId: number) => api<{ data: DMRow[] }>(`/api/me/dm/${userId}`),
   send:     (userId: number, body: string) => api<{ data: DMRow }>(`/api/me/dm/${userId}`, { method: 'POST', body: JSON.stringify({ body }) }),
-  suppliers:  () => api<{ data: SupplierContact[] }>('/api/me/dm/contacts?kind=supplier'),
+  suppliers:  () => api<{ data: SupplierContact[] }>('/api/me/dm/contacts?kind=supplier&logo=url'), // Oct 11 client: speed — logo links, not inline images
   volunteers: () => api<{ data: VolunteerContact[] }>('/api/me/dm/contacts?kind=volunteer'),
   office:     () => api<{ data: Array<{ user_id: number; first_name: string; last_name: string; role: string; name: string }> }>('/api/me/dm/contacts?kind=office'),
   unread:     () => api<{ data: { total: number; byPeer: Array<{ peerUserId: number; unread: number }> } }>('/api/me/dm/unread'),
@@ -667,7 +898,30 @@ export const adminCRUD = {
       }>;
     }>;
     summary: { today: number; past_7d: number; past_30d: number; total: number };
-  }>(`/api/dropoff/activity?days=${days}&limit=${limit}`),
+  }>(`/api/dropoff/log?days=${days}&limit=${limit}`),
+
+  // Sep 8 client (#B3/#B4): driver activity — auto-computed status per
+  // volunteer using verified events only (completed pickup or matched
+  // kiosk sign-in). Accepting alone does NOT count as verified. Buckets:
+  //   'active' | 'needs_followup' | 'inactive' | 'never_started'
+  //   | 'accepted_not_verified' | 'data_mismatch'
+  driverActivity: () => api<{
+    data: Array<{
+      id: number; firstName: string; lastName: string; unitNumber: number | null;
+      volunteerStatus: string | null; volunteerActive: boolean;
+      activityStatus: 'active' | 'needs_followup' | 'inactive' | 'never_started' | 'accepted_not_verified' | 'data_mismatch';
+      smsOptIn: boolean; wantsSteady: boolean;
+      acceptedCount: number; completedCount: number; assignedPendingCount: number;
+      kioskCount: number; matchedKioskCount: number;
+      lastAcceptedAt: string | null; lastCompletedAt: string | null;
+      lastMatchedKioskAt: string | null; lastVerifiedAt: string | null;
+    }>;
+    summary: Record<string, number>;
+    thresholds: { active: number; followup: number };
+  }>('/api/reports/driver-stats'),
+  activityThresholds: () => api<{ data: { active: number; followup: number } }>('/api/settings/driver-thresholds'),
+  setActivityThresholds: (body: { active: number; followup: number }) =>
+    api<{ data: { active: number; followup: number } }>('/api/settings/driver-thresholds', { method: 'POST', body: JSON.stringify(body) }),
 
   // App usage report — every volunteer's last-app-open + count + freshness bucket.
   // Server bucket values: 'today' | 'week' | 'month' | 'stale' | 'never'.
@@ -676,7 +930,7 @@ export const adminCRUD = {
     last_app_open_at: string | null; app_open_count: number | null;
     last_app_platform: string | null; last_app_version: string | null;
     bucket: 'today' | 'week' | 'month' | 'stale' | 'never';
-  }> }>('/api/reports/app-usage'),
+  }> }>('/api/reports/app-usage'),   // Oct 14 client: the office filter blocks URLs with "activity" (page was empty)
 
   // Options (statuses, types, urgency levels)
   options:        (category?: string) => api<{ data: any[] }>(`/api/options${category ? `?category=${encodeURIComponent(category)}` : ''}`),
@@ -850,9 +1104,11 @@ export const upcomingSms = {
   reschedule: (newTimeISO: string) =>
     api<{ data: { overrideAt: string } }>(
       `/api/sms/upcoming-drop/reschedule`, { method: 'POST', body: JSON.stringify({ newTime: newTimeISO }) }),
-  pickupSendNow: (id: number, dryRun = false) =>
-    api<{ data: { id: number; attempted?: number; sent?: number; failed?: number; skipped?: number; code?: number | null; reason?: string; dryRun?: boolean; preview?: string; wouldGoTo?: number } }>(
-      `/api/sms/pickup/${id}/send-now${dryRun ? '?dryRun=true' : ''}`, { method: 'POST', body: JSON.stringify({}) }),
+  // Oct 8: needsConfirm + lastSentAt come back when the pickup was already texted;
+  // re-send with confirmResend=true (see pickup-send-now.ts).
+  pickupSendNow: (id: number, dryRun = false, confirmResend = false) =>
+    api<{ data: { id: number; attempted?: number; sent?: number; failed?: number; skipped?: number; code?: number | null; reason?: string; dryRun?: boolean; preview?: string; wouldGoTo?: number; needsConfirm?: boolean; lastSentAt?: string; lastSentTo?: number } }>(
+      `/api/sms/pickup/${id}/send-now${dryRun ? '?dryRun=true' : ''}`, { method: 'POST', body: JSON.stringify(confirmResend ? { confirmResend: true } : {}) }),
 };
 
 // abc890 (Aug 20) — coordinator-configurable drop hours (NY-local integers,
@@ -963,8 +1219,8 @@ export const volunteerGroups = {
     api<{ data: VolunteerGroup }>('/api/volunteer-groups', { method: 'POST', body: JSON.stringify(body) }),
   patch:  (id: number, body: Partial<{ name: string; isDefaultBroadcast: boolean }>) =>
     api<{ data: VolunteerGroup }>(`/api/volunteer-groups/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-  addMembers:    (id: number, volunteerIds: number[]) =>
-    api<{ data: { added: number } }>(`/api/volunteer-groups/${id}/members`, { method: 'POST', body: JSON.stringify({ volunteerIds }) }),
+  addMembers:    (id: number, volunteerIds: number[], sendWelcome = false) =>
+    api<{ data: { added: number; welcomed?: number; welcomeRequested?: boolean } }>(`/api/volunteer-groups/${id}/members`, { method: 'POST', body: JSON.stringify({ volunteerIds, sendWelcome }) }),
   removeMember:  (id: number, volunteerId: number) =>
     api<{ data: { ok: true } }>(`/api/volunteer-groups/${id}/members/${volunteerId}`, { method: 'DELETE' }),
   remove: (id: number) => api<{ data: { ok: true } }>(`/api/volunteer-groups/${id}`, { method: 'DELETE' }),
@@ -987,12 +1243,29 @@ export type SmsThreadRow = {
 export type SmsThreadMessage = {
   id: string | number; direction: 'in' | 'out'; body: string; created_at: string;
   volunteer_id: string | null; sent_by_user_id: string | null; meta: Record<string, any>;
+  phone_last10?: string; // Oct 14 client: which of the driver's numbers
 };
 export const smsThreads = {
-  list: (opts: { includeShop?: boolean } = {}) => api<{ data: SmsThreadRow[] }>(
-    `/api/sms/threads${opts.includeShop ? '?includeShop=1' : ''}`),
-  get:  (phone: string, opts: { includeShop?: boolean } = {}) => api<{ data: { phone: string; contact: any | null; messages: SmsThreadMessage[] } }>(
-    `/api/sms/threads/${encodeURIComponent(phone)}${opts.includeShop ? '?includeShop=1' : ''}`),
+  // includeAutomated=false (default) → only real conversations (threads with an
+  // inbound message); the response `meta.hidden` reports how many automated,
+  // outbound-only threads were filtered out.
+  list: (opts: { includeShop?: boolean; includeAutomated?: boolean } = {}) => {
+    const qs = new URLSearchParams();
+    if (opts.includeShop) qs.set('includeShop', '1');
+    if (opts.includeAutomated) qs.set('includeAutomated', '1');
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return api<{ data: SmsThreadRow[]; meta?: { total?: number; hidden?: number } }>(
+      `/api/sms/threads${suffix}`);
+  },
+  // Oct 11 client: newest messages first-loaded; `total` = all in the thread; limit for "Show all".
+  get:  (phone: string, opts: { includeShop?: boolean; limit?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (opts.includeShop) qs.set('includeShop', '1');
+    if (opts.limit) qs.set('limit', String(opts.limit));
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return api<{ data: { phone: string; contact: any | null; messages: SmsThreadMessage[]; total?: number; numbers?: string[]; textTo?: string } }>( // Oct 14 client: all the driver's numbers
+      `/api/sms/threads/${encodeURIComponent(phone)}${suffix}`);
+  },
   send: (phone: string, body: string) => api<{ data: { sent: number } }>(
     '/api/sms/send-one', { method: 'POST', body: JSON.stringify({ phone, body }) }),
   // Consolidated brief #1 (Aug 18): mark thread + global unread count.
@@ -1001,13 +1274,12 @@ export const smsThreads = {
   unreadCount: () => api<{ data: { total: number } }>('/api/sms/unread-count'),
 };
 
-// Kiosk device flag lives in localStorage. When set, App.tsx routes every
-// visit on this device straight to /kiosk/<secret>. Cleared via the 5-tap
-// escape gesture in KioskApp or the "Turn off kiosk mode" button in Settings.
+// Oct 11 client: the old per-device kiosk switch (localStorage) is gone.
+// getSecret/clear stay only for the one-time migration in App.tsx and for
+// kioskMode.stop(); fetchSecret is used by Settings -> Kiosk (Open/Copy link).
 const KIOSK_LS_KEY = 'zlz_kiosk_secret';
 export const kioskDevice = {
   getSecret:   (): string | null => localStorage.getItem(KIOSK_LS_KEY),
-  setSecret:   (secret: string) => localStorage.setItem(KIOSK_LS_KEY, secret),
   clear:       () => localStorage.removeItem(KIOSK_LS_KEY),
   fetchSecret: () => api<{ data: { secret: string | null } }>('/api/admin/kiosk-secret'),
 };
@@ -1020,6 +1292,13 @@ export type AppVersionInfo = {
     latestVersionCode: number | null;
     minSupportedVersionCode: number | null;
     playStoreUrl: string | null;
+  };
+  // Oct 14 client: both phone apps (optional; older API versions leave it out).
+  // minVersionCode = portal setting app_min_version_code (below it: "must update" pop-up);
+  // iosAppStoreUrl = portal setting ios_app_store_url (the pop-up's iPhone "Update now").
+  app?: {
+    minVersionCode: number | null;
+    iosAppStoreUrl: string | null;
   };
 };
 export const appVersion = {
@@ -1073,8 +1352,12 @@ export type SupplierPickup = {
 export const supplier = {
   profile:  () => api<{ data: SupplierProfile }>('/api/me/supplier/profile'),
   pickups:  () => api<{ profile: any; data: SupplierPickup[] }>('/api/me/supplier-pickups'),
-  notify:   (opts: { kind: 'ready' | 'left_behind' | 'additional'; time?: string; readyTill?: string; notes?: string; photoUrl?: string }) =>
-    api<{ data: { id: number } }>('/api/me/supplier/notify', { method: 'POST', body: JSON.stringify(opts) }),
+  notify:   (opts: { kind: 'ready' | 'left_behind' | 'additional'; time?: string; readyTill?: string; notes?: string; photoUrl?: string;
+              foodDescription?: string; estimatedQuantity?: string; pickupInstructions?: string;
+              // Oct 11/12 client: who the driver asks for (+ other contacts) and a one-off address.
+              contactName?: string; contactPhone?: string; pickupAddress?: string;
+              extraContacts?: Array<{ name: string | null; phone: string }> }) =>
+    api<{ data: { id: number }; autoBroadcast?: { sent: number; reason?: string } }>('/api/me/supplier/notify', { method: 'POST', body: JSON.stringify(opts) }),
   cancel:   (id: number) => api(`/api/me/supplier-pickups/${id}/cancel`, { method: 'POST' }),
   get:      (id: number) => api<{ data: any }>(`/api/me/supplier-pickups/${id}`),
   edit:     (id: number, body: {
@@ -1086,10 +1369,60 @@ export const supplier = {
 };
 
 // Aug 29 (WA parity): WhatsApp admin status endpoint feed.
+// Sep 4 — dispatcher weekly coverage template + calendar view.
+export type DispShiftSlot = {
+  id: number; section: 'daily' | 'friday' | 'motzei_shabbos';
+  rosterDow: number; startDow: number;
+  startTime: string; endTime: string;
+  wrapsNextDay: boolean; sortOrder: number; isActive: boolean;
+};
+export type DispWeeklyRow = {
+  slotId: number; section: 'daily' | 'friday' | 'motzei_shabbos';
+  rosterDow: number; startDow: number; sortOrder: number; wrapsNextDay: boolean;
+  startTime: string; endTime: string;
+  startAt: string; endAt: string;   // ISO tstz
+  shiftId: number | null;
+  volunteerId: number | null; firstName: string | null; lastName: string | null; phone: string | null;
+};
+export const dispatcherShifts = {
+  listSlots: () => api<{ data: DispShiftSlot[] }>('/api/dispatcher-shift-slots'),
+  createSlot: (body: Omit<DispShiftSlot, 'id'>) =>
+    api<{ id: number }>('/api/dispatcher-shift-slots', { method: 'POST', body: JSON.stringify(body) }),
+  patchSlot: (id: number, body: Partial<Omit<DispShiftSlot, 'id'>>) =>
+    api<{ ok: boolean }>(`/api/dispatcher-shift-slots/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteSlot: (id: number) => api<{ ok: boolean }>(`/api/dispatcher-shift-slots/${id}`, { method: 'DELETE' }),
+  weekly: (weekStart: string) =>
+    api<{ data: DispWeeklyRow[]; weekStart: string; covered: number; total: number }>(
+      `/api/dispatcher-shifts/weekly?week=${encodeURIComponent(weekStart)}`),
+  assign: (body: { slotId: number; weekStart: string; volunteerId: number }) =>
+    api<{ shiftId: number }>('/api/dispatcher-shifts/assign', { method: 'POST', body: JSON.stringify(body) }),
+  unassign: (shiftId: number) =>
+    api<{ ok: boolean }>(`/api/dispatcher-shifts/assign/${shiftId}`, { method: 'DELETE' }),
+};
+
+// Sep 4 client feature: 90-min uncovered pickup alert group.
+export type UncoveredAlertMember = {
+  volunteerId: number; firstName: string; lastName: string;
+  phone: string | null; unitNumber: number | null; addedAt: string;
+};
+export const uncoveredAlerts = {
+  list:   () => api<{ data: UncoveredAlertMember[] }>('/api/uncovered-alert-members'),
+  add:    (volunteerId: number) => api('/api/uncovered-alert-members', { method: 'POST', body: JSON.stringify({ volunteerId }) }),
+  remove: (volunteerId: number) => api(`/api/uncovered-alert-members/${volunteerId}`, { method: 'DELETE' }),
+};
+
 export const whatsappAdmin = {
-  addMember: (body: { kind: 'volunteer' | 'supplier'; id: number; both?: boolean }) =>
-    api<{ data: { id: number; contact_channel: string; whatsapp_opted_in_at: string | null } }>(
+  addMember: (body: { kind: 'volunteer' | 'supplier'; id: number; both?: boolean; sendWelcome?: boolean }) =>
+    api<{ data: { id: number; contact_channel: string; whatsapp_opted_in_at: string | null }; welcome_sent?: boolean }>(
       '/api/whatsapp/admin/add-member',
+      { method: 'POST', body: JSON.stringify(body) }),
+  removeMember: (body: { kind: 'volunteer' | 'supplier'; id: number }) =>
+    api<{ data: { id: number; contact_channel: string; whatsapp_opted_in_at: string | null } }>(
+      '/api/whatsapp/admin/remove-member',
+      { method: 'POST', body: JSON.stringify(body) }),
+  resetPending: (body: { kind: 'volunteer' | 'supplier'; id: number }) =>
+    api<{ data: { id: number; contact_channel: string; whatsapp_opted_in_at: string | null } }>(
+      '/api/whatsapp/admin/reset-pending',
       { method: 'POST', body: JSON.stringify(body) }),
   status: () => api<{ data: {
     env: { waba_id: string | null; phone_number_id: string | null; reengagement_template: string; enabled: boolean };
@@ -1104,3 +1437,81 @@ export const whatsappAdmin = {
     pending_queue: { pending_count: number };
   } }>('/api/whatsapp/admin/status'),
 };
+
+// Sep 13 2026: wa-bridge (Android WhatsApp bridge, not Meta Cloud API).
+// Used for direct test-sends from the admin UI. The bridge polls
+// /api/wa/outbound every 5s and hands messages to the tablet's WhatsApp
+// Business via a deep link + auto-tap.
+export const waBridge = {
+  send: (body: { phone?: string; conversationKey?: string; text: string }) =>
+    api<{ ok: boolean; id: number | null }>('/api/wa/bridge/send', {
+      method: 'POST', body: JSON.stringify(body),
+    }),
+  status: () => api<{ data: {
+    inbound_total: number; last_inbound_at: string | null;
+    queued: number; claimed: number; sent: number; failed: number;
+    last_sent_at: string | null; known_contacts: number;
+    wa_bridge_number: string | null;
+  }; tokenConfigured: boolean }>('/api/wa/bridge/status'),
+};
+
+// Sep 15 client #3b — Hebcal-driven Jewish calendar view.
+export type HebcalBlock = {
+  kind: 'shabbos' | 'yom_tov';
+  name: string;
+  startISO: string; endISO: string;
+  startNyLocal: string; endNyLocal: string;
+};
+export const jewishCalendar = {
+  list: (from?: string, to?: string) => {
+    const qs = new URLSearchParams();
+    if (from) qs.set('from', from);
+    if (to)   qs.set('to', to);
+    return api<{ data: { blocks: HebcalBlock[]; source: string; location: string } }>(
+      `/api/jewish-calendar${qs.toString() ? `?${qs}` : ''}`);
+  },
+};
+
+// Sep 15 client #2 — WhatsApp Threads (mirror of SMS Threads). Reads from
+// wa_bridge_inbound + wa_bridge_outbound.
+export type WaThreadRow = {
+  phone: string; last_at: string;
+  in_count: number; out_count: number; failed_count: number; total: number;
+  last_body: string | null; last_direction: 'in' | 'out'; last_status: string | null;
+  volunteer_id: number | null;
+  first_name: string | null; last_name: string | null; unit_number: number | null;
+};
+export type WaThreadMessage = {
+  id: number; created_at: string; body: string;
+  direction: 'in' | 'out'; status: string | null;
+  error: string | null; media_url: string | null;
+  conversation_key: string | null;
+};
+export const waThreads = {
+  list: () => api<{ data: WaThreadRow[]; meta: { total: number } }>('/api/wa/threads'),
+  get: (phone: string) => api<{ data: {
+    phone: string;
+    volunteer: { id: number; first_name: string; last_name: string; unit_number: number | null } | null;
+    messages: WaThreadMessage[];
+  } }>(`/api/wa/threads/${encodeURIComponent(phone)}`),
+};
+
+// Sep 15 client #2 — master emergency toggle to pause every AUTOMATIC SMS.
+// Manual "Send Now" from the office still goes out. Pause state is stored
+// server-side (portal_settings.sms_all_paused_at) and cached in the API
+// process so every sweeper sees it without a DB round-trip.
+export const adminSmsPause = {
+  status: () => api<{ paused: boolean; pausedAt: string | null; pausedBy?: string | null; resumeAt?: string | null }>('/api/admin/sms-pause'),
+  set:    (paused: boolean, resumeAt?: string | null) => api<{ paused: boolean; pausedAt: string | null }>('/api/admin/sms-pause', {
+    method: 'POST', body: JSON.stringify({ paused, resumeAt: resumeAt ?? null }),
+  }),
+  mode:   () => api<{ data: { providerConfigured: boolean; sandbox: boolean; scheduledDryRun: boolean; paused: boolean; yomTov: string | null; shabbosQuiet: boolean } }>('/api/sms/sending-mode'),
+};
+// Oct 5 (review item 12): an admin can allow their OWN sends for 10 minutes
+// while everything is paused. Sent as a header; the server verifies + logs it.
+export function setSmsOverrideFor(minutes: number) {
+  try { sessionStorage.setItem('zlz_sms_override_until', String(Date.now() + minutes * 60_000)); } catch { /* */ }
+}
+export function smsOverrideUntil(): number {
+  try { return Number(sessionStorage.getItem('zlz_sms_override_until') ?? 0) || 0; } catch { return 0; }
+}

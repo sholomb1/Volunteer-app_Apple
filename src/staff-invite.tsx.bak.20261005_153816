@@ -1,0 +1,230 @@
+/**
+ * Invite a dispatcher / staff login and choose their access (client Oct 2 2026).
+ * - InviteStaffModal: name, phone, email, role, access sections → invite link
+ *   (copy, or text it to them). They set their own password at /invite/<token>.
+ * - AccessModal: change an existing login's access sections.
+ * - AcceptInvite: the public "choose your password" page.
+ * Backend: POST /api/admin-users/invite, POST /api/admin-users/:id/invite,
+ * PATCH /api/admin-users/:id { accessSections }, GET/POST /api/auth/(invite|accept-invite).
+ */
+import { useState } from 'react';
+import { useParams } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { api, setAuth } from './api';
+import { cx } from './design';
+
+export const ACCESS_SECTIONS: { key: string; label: string; hint: string }[] = [
+  { key: 'live',       label: 'Live Board',      hint: 'Open pickups right now' },
+  { key: 'pickups',    label: 'Pickups',         hint: 'All pickups, calendar, recurring' },
+  { key: 'volunteers', label: 'Volunteers',      hint: 'Driver records' },
+  { key: 'suppliers',  label: 'Suppliers',       hint: 'Store / donor records' },
+  { key: 'map',        label: 'Map View',        hint: 'Map of pickups & coverage' },
+  { key: 'tasks',      label: 'Task Management', hint: 'Tasks, recruiting, prospects' },
+  { key: 'reports',    label: 'Reports',         hint: 'All reports' },
+  { key: 'messaging',  label: 'Messaging',       hint: 'SMS, WhatsApp, chats, broadcasts' },
+  { key: 'admin',      label: 'Admin',           hint: 'Dispatchers, settings, holiday & SMS controls' },
+];
+const PRESETS: { key: string; label: string; sections: string[] | null }[] = [
+  { key: 'dispatcher',     label: 'Dispatcher — Live Board, Pickups, Volunteers, Suppliers', sections: ['live', 'pickups', 'volunteers', 'suppliers'] },
+  { key: 'dispatcher-msg', label: 'Dispatcher + Messaging', sections: ['live', 'pickups', 'volunteers', 'suppliers', 'messaging'] },
+  { key: 'office',         label: 'Office staff — everything except Admin', sections: ACCESS_SECTIONS.filter((s) => s.key !== 'admin').map((s) => s.key) },
+  { key: 'full',           label: 'Full access — everything', sections: ACCESS_SECTIONS.map((s) => s.key) },
+];
+const portalBase = () => window.location.origin + (((import.meta as any).env?.BASE_URL ?? '/').replace(/\/$/, ''));
+
+function AccessPicker({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+  const same = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-1.5">
+        {PRESETS.map((p) => (
+          <button key={p.key} type="button" onClick={() => onChange(p.sections ?? [])}
+                  className={cx('haptic rounded-full border px-3 py-1 text-[12px] font-bold',
+                    same(value, p.sections ?? []) ? 'bg-forest text-paper border-forest' : 'bg-paper text-ink border-line hover:bg-cream')}>
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+        {ACCESS_SECTIONS.map((s) => (
+          <label key={s.key} className={cx('flex items-start gap-2 rounded-[10px] border px-3 py-2 cursor-pointer',
+                                           value.includes(s.key) ? 'border-forest/40 bg-sage/40' : 'border-line bg-paper')}>
+            <input type="checkbox" className="mt-0.5 h-4 w-4 accent-forest" checked={value.includes(s.key)}
+                   onChange={(e) => onChange(e.target.checked ? [...value, s.key] : value.filter((x) => x !== s.key))} />
+            <span><span className="block text-[13px] font-bold">{s.label}</span><span className="block text-[11px] text-muted">{s.hint}</span></span>
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Shell({ title, onClose, children }: { title: string; onClose: () => void; children: any }) {
+  return (
+    <div onClick={onClose} className="fixed inset-0 z-[2100] bg-ink/50 flex items-start justify-center pt-10 px-4 overflow-y-auto">
+      <div onClick={(e) => e.stopPropagation()} className="relative z-[2101] bg-paper rounded-[18px] shadow-lift border border-line w-full max-w-lg p-5 space-y-3 mb-10">
+        <div className="flex items-center justify-between">
+          <div className="font-display font-semibold text-[16px]">{title}</div>
+          <button onClick={onClose} className="haptic grid h-8 w-8 place-items-center rounded-full hover:bg-cream text-muted">✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function InviteResult({ url, texted, onClose }: { url: string; texted: boolean; onClose: () => void }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="space-y-3">
+      <div className="rounded-[12px] bg-sage/50 border border-sage-line px-4 py-3 text-[13px]">
+        {texted ? '✅ Invite created and texted to them.' : '✅ Invite created. Send them this link:'}
+      </div>
+      <div className="flex gap-2">
+        <input readOnly value={url} className="flex-1 rounded-[10px] border border-line bg-cream/40 px-3 py-2 text-[12px] font-mono" />
+        <button onClick={() => { void navigator.clipboard?.writeText(url); setCopied(true); }}
+                className="haptic rounded-[10px] bg-forest px-3 py-2 text-[12.5px] font-bold text-paper">{copied ? 'Copied' : 'Copy'}</button>
+      </div>
+      <div className="text-[11.5px] text-muted">The link works for 7 days. They open it, choose a password, and they're in.</div>
+      <div className="flex justify-end"><button onClick={onClose} className="haptic rounded-[10px] border border-line px-4 py-2 text-[13px] font-bold">Done</button></div>
+    </div>
+  );
+}
+
+export function InviteStaffModal({ onClose }: { onClose: () => void }) {
+  const qc = useQueryClient();
+  const [firstName, setFirst] = useState('');
+  const [lastName, setLast] = useState('');
+  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState<'dispatcher' | 'staff' | 'coordinator' | 'admin'>('dispatcher');
+  const [sections, setSections] = useState<string[]>(PRESETS[0]!.sections!);
+  const [sendText, setSendText] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState<{ url: string; texted: boolean } | null>(null);
+  const mut = useMutation({
+    mutationFn: () => api<{ data: { inviteUrl: string; texted: boolean } }>('/api/admin-users/invite', {
+      method: 'POST',
+      body: JSON.stringify({ firstName, lastName, phone, email, role, accessSections: sections, sendText, baseUrl: portalBase() }),
+    }),
+    onSuccess: (r) => { setDone({ url: r.data.inviteUrl, texted: r.data.texted }); qc.invalidateQueries({ queryKey: ['admin-dispatchers'] }); qc.invalidateQueries({ queryKey: ['admin-dispatchers-attendance'] }); },
+    onError: (e: any) => setErr(e?.message || 'Invite failed'),
+  });
+  const inp = 'mt-1 w-full rounded-[10px] border border-line bg-paper px-3 py-2 text-[13px] font-normal';
+  if (done) return <Shell title="Invite sent" onClose={onClose}><InviteResult url={done.url} texted={done.texted} onClose={onClose} /></Shell>;
+  return (
+    <Shell title="Invite someone to the portal" onClose={onClose}>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block text-[12px] font-bold">First name<input value={firstName} onChange={(e) => setFirst(e.target.value)} className={inp} /></label>
+        <label className="block text-[12px] font-bold">Last name<input value={lastName} onChange={(e) => setLast(e.target.value)} className={inp} /></label>
+        <label className="block text-[12px] font-bold">Cell phone<input value={phone} onChange={(e) => setPhone(e.target.value)} className={inp} placeholder="845-555-1234" /></label>
+        <label className="block text-[12px] font-bold">Email (optional)<input value={email} onChange={(e) => setEmail(e.target.value)} className={inp} /></label>
+        <label className="block text-[12px] font-bold col-span-2">Role
+          <select value={role} onChange={(e) => setRole(e.target.value as any)} className={inp}>
+            <option value="dispatcher">Dispatcher</option><option value="staff">Office staff</option>
+            <option value="coordinator">Coordinator</option><option value="admin">Admin</option>
+          </select></label>
+      </div>
+      <div className="text-[12px] font-bold">What can they open?</div>
+      <AccessPicker value={sections} onChange={setSections} />
+      <label className="flex items-center gap-2 text-[12.5px]">
+        <input type="checkbox" checked={sendText} onChange={(e) => setSendText(e.target.checked)} className="h-4 w-4 accent-forest" />
+        Text the invite link to their cell phone
+      </label>
+      <div className="text-[11.5px] text-muted">Their username will be {email.trim() ? 'their email' : 'their phone number'}.</div>
+      {err && <div className="text-[12px] text-clay">{err}</div>}
+      <div className="flex justify-end gap-2">
+        <button onClick={onClose} className="haptic rounded-[10px] border border-line px-4 py-2 text-[13px] font-bold text-muted">Cancel</button>
+        <button disabled={!firstName.trim() || (!phone.trim() && !email.trim()) || sections.length === 0 || mut.isPending}
+                onClick={() => { setErr(null); mut.mutate(); }}
+                className="haptic rounded-[10px] bg-forest px-4 py-2 text-[13px] font-bold text-paper disabled:opacity-50">
+          {mut.isPending ? 'Sending…' : 'Send invite'}
+        </button>
+      </div>
+    </Shell>
+  );
+}
+
+export function AccessModal({ user, onClose }: { user: { id: number; firstName: string | null; lastName: string | null; accessSections?: string[] | null; invitePending?: boolean; phone?: string | null }; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [sections, setSections] = useState<string[]>(user.accessSections ?? []);
+  const [useDefault, setUseDefault] = useState(!user.accessSections);
+  const [err, setErr] = useState<string | null>(null);
+  const [resent, setResent] = useState<{ url: string; texted: boolean } | null>(null);
+  const save = useMutation({
+    mutationFn: () => api(`/api/admin-users/${user.id}`, { method: 'PATCH', body: JSON.stringify({ accessSections: useDefault ? null : sections }) }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin-dispatchers'] }); onClose(); },
+    onError: (e: any) => setErr(e?.message || 'Save failed'),
+  });
+  const resend = useMutation({
+    mutationFn: () => api<{ data: { inviteUrl: string; texted: boolean } }>(`/api/admin-users/${user.id}/invite`, {
+      method: 'POST', body: JSON.stringify({ sendText: !!user.phone, baseUrl: portalBase() }) }),
+    onSuccess: (r) => setResent({ url: r.data.inviteUrl, texted: r.data.texted }),
+    onError: (e: any) => setErr(e?.message || 'Could not create a new link'),
+  });
+  const name = [user.firstName, user.lastName].filter(Boolean).join(' ');
+  if (resent) return <Shell title={`New link for ${name}`} onClose={onClose}><InviteResult url={resent.url} texted={resent.texted} onClose={onClose} /></Shell>;
+  return (
+    <Shell title={`Access for ${name}`} onClose={onClose}>
+      <label className="flex items-center gap-2 text-[12.5px]">
+        <input type="checkbox" checked={useDefault} onChange={(e) => setUseDefault(e.target.checked)} className="h-4 w-4 accent-forest" />
+        Use the standard menu for their role
+      </label>
+      {!useDefault && <AccessPicker value={sections} onChange={setSections} />}
+      {err && <div className="text-[12px] text-clay">{err}</div>}
+      <div className="flex flex-wrap justify-between gap-2">
+        <button onClick={() => resend.mutate()} disabled={resend.isPending}
+                className="haptic rounded-[10px] border border-line px-3 py-2 text-[12.5px] font-bold text-forest">
+          {resend.isPending ? '…' : user.invitePending ? 'Resend invite link' : 'Send a password-setup link'}
+        </button>
+        <div className="flex gap-2">
+          <button onClick={onClose} className="haptic rounded-[10px] border border-line px-4 py-2 text-[13px] font-bold text-muted">Cancel</button>
+          <button disabled={(!useDefault && sections.length === 0) || save.isPending} onClick={() => save.mutate()}
+                  className="haptic rounded-[10px] bg-forest px-4 py-2 text-[13px] font-bold text-paper disabled:opacity-50">Save access</button>
+        </div>
+      </div>
+      <div className="text-[11.5px] text-muted">Changes apply the next time they open or refresh the portal.</div>
+    </Shell>
+  );
+}
+
+export function AcceptInvite() {
+  const { token = '' } = useParams<{ token: string }>();
+  const info = useQuery({
+    queryKey: ['invite', token], retry: false,
+    queryFn: () => api<{ data: { firstName: string; role: string; username: string } }>(`/api/auth/invite/${token}`),
+  });
+  const [pw, setPw] = useState('');
+  const [pw2, setPw2] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const accept = useMutation({
+    mutationFn: () => api<{ token: string; user: any }>('/api/auth/accept-invite', { method: 'POST', body: JSON.stringify({ token, password: pw }) }),
+    onSuccess: (r) => { setAuth(r.token, r.user); window.location.href = portalBase() + '/'; },
+    onError: (e: any) => setErr(e?.message || 'Could not set your password'),
+  });
+  const inp = 'mt-1 w-full rounded-[12px] border border-line bg-paper px-3 py-2.5 text-[15px]';
+  return (
+    <div className="min-h-screen bg-cream flex items-start justify-center px-4 pt-16">
+      <div className="w-full max-w-sm rounded-[18px] border border-line bg-paper p-6 space-y-4 shadow-card">
+        <div className="font-display font-bold text-[22px] text-forest">Zeh L'Zeh</div>
+        {info.isLoading ? <div className="text-[14px] text-muted">Checking your invite…</div> :
+         info.isError ? <div className="text-[14px] text-clay">{(info.error as Error)?.message || 'This invite link has expired. Ask the office for a new one.'}</div> : (
+          <>
+            <div className="text-[15px]">Welcome, <b>{info.data!.data.firstName}</b>! Choose a password to finish setting up your account.</div>
+            <div className="text-[12.5px] text-muted">Your username: <b>{info.data!.data.username}</b></div>
+            <label className="block text-[12.5px] font-bold">New password (at least 8 characters)
+              <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} className={inp} autoComplete="new-password" /></label>
+            <label className="block text-[12.5px] font-bold">Type it again
+              <input type="password" value={pw2} onChange={(e) => setPw2(e.target.value)} className={inp} autoComplete="new-password" /></label>
+            {pw2 && pw !== pw2 && <div className="text-[12px] text-clay">The two passwords don't match.</div>}
+            {err && <div className="text-[12px] text-clay">{err}</div>}
+            <button disabled={pw.length < 8 || pw !== pw2 || accept.isPending} onClick={() => { setErr(null); accept.mutate(); }}
+                    className="haptic w-full rounded-[12px] bg-forest px-4 py-3 text-[15px] font-bold text-paper disabled:opacity-50">
+              {accept.isPending ? 'Setting up…' : 'Set password & sign in'}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

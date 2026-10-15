@@ -46,14 +46,26 @@ async function readPosition(): Promise<{ lat: number; lng: number; accuracy?: nu
   }
 }
 
+/**
+ * Oct 8: Geolocation.requestPermissions() throws "Not implemented on web",
+ * and older Safari can't checkPermissions() either — so first-time browser
+ * users never reported. On web the browser asks on the first
+ * getCurrentPosition(), so only a hard 'denied' stops us there.
+ */
+async function ensureLocationPermission(): Promise<string> {
+  const native = (window as any).Capacitor?.isNativePlatform?.() === true;
+  let st = 'prompt';
+  try { st = (await Geolocation.checkPermissions()).location; } catch { /* no Permissions API */ }
+  if (st === 'granted') return st;
+  if (!native) return st === 'denied' ? 'denied' : 'granted';
+  return (await Geolocation.requestPermissions()).location;
+}
+
 /** Manual one-shot — surfaces every failure so the user can see it. */
 export async function reportNow(): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
-    const status = await Geolocation.checkPermissions();
-    if (status.location !== 'granted') {
-      const req = await Geolocation.requestPermissions();
-      if (req.location !== 'granted') return { ok: false, error: `Permission ${req.location}` };
-    }
+    const perm = await ensureLocationPermission();
+    if (perm !== 'granted') return { ok: false, error: `Permission ${perm}` };
   } catch (e: any) {
     return { ok: false, error: `Permission check failed: ${e?.message ?? String(e)}` };
   }
@@ -93,21 +105,17 @@ export function useLocationReporting(enabled: boolean) {
     const start = async () => {
       if (timer.current != null) return;
       try {
-        const st = await Geolocation.checkPermissions();
-        setStatus((s) => ({ ...s, permission: st.location as any }));
-        if (st.location !== 'granted') {
-          const req = await Geolocation.requestPermissions();
-          setStatus((s) => ({ ...s, permission: req.location as any }));
-          if (req.location !== 'granted') {
-            setStatus((s) => ({ ...s, lastError: `Permission ${req.location}` }));
-            return;
-          }
+        const perm = await ensureLocationPermission();
+        setStatus((s) => ({ ...s, permission: perm as any }));
+        if (perm !== 'granted') {
+          setStatus((s) => ({ ...s, lastError: `Permission ${perm}` }));
+          return;
         }
       } catch (e: any) {
         setStatus((s) => ({ ...s, lastError: `Permission check failed: ${e?.message ?? String(e)}` }));
         return;
       }
-      window.setTimeout(() => { if (!cancelled) tick(); }, FIRST_REPORT_DELAY_MS);
+      window.setTimeout(() => { if (!cancelled && timer.current != null) tick(); }, FIRST_REPORT_DELAY_MS);
       timer.current = window.setInterval(tick, REPORT_INTERVAL_MS);
     };
 

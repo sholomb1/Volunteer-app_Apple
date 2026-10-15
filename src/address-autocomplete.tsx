@@ -16,7 +16,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { MapPin } from 'lucide-react';
-import { API_BASE, maybeForcePortalReload } from './api';
+import { API_BASE, maybeForcePortalReload, getToken } from './api';
 
 // Server-side proxy for Google Places autocomplete. Some tablet WebViews strip the
 // Referer header, which breaks the browser-side call (Google's HTTP-referrer
@@ -48,6 +48,7 @@ export function AddressAutocomplete({
   placeholder = 'Street, city',
   className = '',
   disabled = false,
+  lookupName = '',
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -55,7 +56,10 @@ export function AddressAutocomplete({
   placeholder?: string;
   className?: string;
   disabled?: boolean;
+  /** Oct 6 client: the store name typed above — searched automatically when the address is still empty. */
+  lookupName?: string;
 }) {
+  const [nameHint, setNameHint] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -97,38 +101,41 @@ export function AddressAutocomplete({
     ensureFreshSession();
     setLoading(true);
     setError(null);
-    fetch(PROXY_URL, {
+    // Oct 6 client: our own stores + addresses we picked up from before come first
+    // (signed-in portal users only), then Google's suggestions. No warning box when
+    // Google is unavailable — the box simply works as a plain text field.
+    const token = getToken();
+    const local: Promise<Suggestion[]> = token
+      ? fetch((API_BASE || '').replace(/\/$/, '') + `/api/address-suggest?q=${encodeURIComponent(q)}`, { headers: { Authorization: `Bearer ${token}` } })
+          .then((r) => (r.ok ? r.json() : { data: [] }))
+          .then((d: any) => (d?.data ?? []).map((x: any) => ({ placeId: `local:${x.kind}:${x.full}`, main: x.main, secondary: x.secondary, full: x.full })))
+          .catch(() => [])
+      : Promise.resolve([]);
+    const google: Promise<Suggestion[]> = fetch(PROXY_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        input: q,
-        sessionToken: sessionRef.current.token,
-      }),
+      // Oct 11 client: signed-in users skip the public per-IP lookup limit.
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ input: q, sessionToken: sessionRef.current.token }),
     })
       .then(async (r) => {
-        // Honor the portal-wide reload epoch even on raw-fetch calls so
-        // tabs on stale bundles self-heal instead of showing this error
-        // forever (this file doesn't route through the api() wrapper).
         maybeForcePortalReload(r.headers.get('X-Portal-Reload-Since'));
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const ct = r.headers.get('content-type') || '';
-        if (!ct.includes('application/json')) throw new Error('Address search temporarily unavailable');
-        return r.json();
-      })
-      .then((data: any) => {
-        const list: Suggestion[] = (data?.data?.suggestions ?? []).map((p: any) => ({
-          placeId:   p.placeId,
-          main:      p.main ?? p.full ?? '',
-          secondary: p.secondary ?? '',
-          full:      p.full ?? '',
+        if (!r.ok || !(r.headers.get('content-type') || '').includes('application/json')) return [];
+        const data: any = await r.json();
+        return (data?.data?.suggestions ?? []).map((p: any) => ({
+          placeId: p.placeId, main: p.main ?? p.full ?? '', secondary: p.secondary ?? '', full: p.full ?? '',
         }));
-        setSuggestions(list.slice(0, 6));
       })
-      .catch((e) => setError(String(e?.message ?? e)))
+      .catch(() => []);
+    Promise.all([local, google])
+      .then(([l, g]) => {
+        const seen = new Set(l.map((x) => x.full.toLowerCase()));
+        setSuggestions([...l.slice(0, 4), ...g.filter((x) => !seen.has(x.full.toLowerCase()))].slice(0, 7));
+      })
       .finally(() => setLoading(false));
   }
 
   function onInputChange(v: string) {
+    setNameHint(null);
     onChange(v);
     setOpen(true);
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -137,7 +144,7 @@ export function AddressAutocomplete({
 
   function pick(s: Suggestion) {
     onChange(s.full);
-    onPick?.({ address: s.full, placeId: s.placeId });
+    onPick?.({ address: s.full, placeId: s.placeId.startsWith('local:') ? '' : s.placeId });
     setOpen(false);
     setSuggestions([]);
     // Google recommends a fresh session token after each pick.
@@ -149,7 +156,11 @@ export function AddressAutocomplete({
       <input
         value={value}
         onChange={(e) => onInputChange(e.target.value)}
-        onFocus={() => value && suggestions.length > 0 && setOpen(true)}
+        onFocus={() => {
+          const n = lookupName.trim();
+          if (!value.trim() && n.length >= 3) { setNameHint(n); setOpen(true); fetchSuggestions(n); return; }
+          if (value && suggestions.length > 0) setOpen(true);
+        }}
         placeholder={placeholder}
         disabled={disabled}
         className={className}
@@ -157,6 +168,9 @@ export function AddressAutocomplete({
       />
       {open && (suggestions.length > 0 || loading || error) && (
         <div className="absolute left-0 right-0 mt-1.5 bg-paper border border-line rounded-[10px] shadow-lift z-[2100] max-h-[320px] overflow-y-auto">
+          {nameHint && suggestions.length > 0 && (
+            <div className="px-3 py-1.5 text-[11.5px] font-bold text-muted border-b border-line/60">Places named “{nameHint}”</div>
+          )}
           {loading && suggestions.length === 0 && (
             <div className="px-3 py-2 text-[12.5px] text-muted">Searching…</div>
           )}

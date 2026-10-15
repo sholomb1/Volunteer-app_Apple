@@ -15,7 +15,8 @@
 import { PushNotifications } from '@capacitor/push-notifications';
 import { api } from './api';
 
-const APP_VERSION = '1.0.17';
+// Keep in step with android/app/build.gradle versionName.
+const APP_VERSION = '1.0.42';
 let listenersBound = false;
 
 async function postToken(platform: 'android' | 'ios', token: string) {

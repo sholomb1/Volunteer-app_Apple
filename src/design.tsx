@@ -4,10 +4,11 @@
  * uses color + check icons; the **sign-up slot avatars** (filled circles +
  * dashed empty ones with N-of-M label) are the signature pattern.
  */
+import { uiConfirm } from './ui-dialogs';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { forwardRef, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Loader2, Check, Circle, Mail, LogOut, Menu, X, Home, Calendar, Map as MapIcon, MessageSquare, User } from 'lucide-react';
+import { Loader2, Check, Circle, Mail, LogOut, Menu, X, Home, Calendar, Map as MapIcon, MessageSquare, User, Settings as SettingsIcon, FileText } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { getUser, setAuth } from './api';
 
@@ -112,10 +113,9 @@ export function SlotAvatars({ filled, capacity, size = 24 }: {
 
 export function SlotLabel({ filled, capacity }: { filled: number; capacity: number }) {
   const ok = filled >= capacity && capacity > 0;
-  const text = ok ? 'Fully covered'
-    : capacity - filled === capacity ? `0 of ${capacity}`
-    : `${capacity - filled} of ${capacity} needed`;
-  return <span className={cx('text-[11px] font-semibold ml-2', ok ? 'text-forest' : 'text-clay')}>{text}</span>;
+  const text = ok ? 'All drivers set'
+    : `${filled} of ${capacity} drivers going`;
+  return <span className={cx('text-[14px] font-bold ml-2', ok ? 'text-forest' : 'text-clay')}>{text}</span>;
 }
 
 // ---------------- Status timeline ----------------
@@ -140,8 +140,8 @@ export function StatusTimeline({ stages, current }: { stages: TLStage[]; current
               {state === 'now'  && <Circle size={9} fill="currentColor" />}
             </span>
             <div>
-              <div className={cx('text-[13px] font-bold', state === 'todo' && 'text-muted font-semibold')}>{s.label}</div>
-              {s.ts && state !== 'todo' && <div className="text-[11px] text-muted">{s.ts}</div>}
+              <div className={cx('text-[15px] font-bold', state === 'todo' && 'text-muted font-semibold')}>{s.label}</div>
+              {s.ts && state !== 'todo' && <div className="text-[13px] text-muted">{s.ts}</div>}
             </div>
           </div>
         );
@@ -154,19 +154,20 @@ export function StatusTimeline({ stages, current }: { stages: TLStage[]; current
 
 export function StatusPill({ status }: { status: string }) {
   const map: Record<string, { bg: string; fg: string; label: string }> = {
-    pending:     { bg: 'bg-amber-soft', fg: 'text-[#9a7415]', label: 'Posted' },
-    scheduled:   { bg: 'bg-sky-soft',   fg: 'text-sky',       label: 'Scheduled' },
-    confirmed:   { bg: 'bg-sage',       fg: 'text-forest',    label: 'Claimed' },
-    in_progress: { bg: 'bg-clay-soft',  fg: 'text-clay',      label: 'En route' },
-    en_route:    { bg: 'bg-clay-soft',  fg: 'text-clay',      label: 'En route' },
+    pending:     { bg: 'bg-amber-soft', fg: 'text-[#9a7415]', label: 'Waiting for a driver' },
+    scheduled:   { bg: 'bg-amber-soft', fg: 'text-[#9a7415]', label: 'Coming up' }, // Oct 8: also shows on a driver's own card
+    confirmed:   { bg: 'bg-sage',       fg: 'text-forest',    label: 'Ready to go' },
+    in_progress: { bg: 'bg-clay-soft',  fg: 'text-clay',      label: 'On the way' },
+    en_route:    { bg: 'bg-clay-soft',  fg: 'text-clay',      label: 'On the way' },
     picked_up:   { bg: 'bg-clay-soft',  fg: 'text-clay',      label: 'Picked up' },
     delivered:   { bg: 'bg-sage',       fg: 'text-forest',    label: 'Delivered' },
-    completed:   { bg: 'bg-sage',       fg: 'text-forest',    label: 'Completed' },
+    completed:   { bg: 'bg-sage',       fg: 'text-forest',    label: 'Delivered' },
     cancelled:   { bg: 'bg-line',       fg: 'text-muted',     label: 'Cancelled' },
     missed:      { bg: 'bg-clay-soft',  fg: 'text-clay',      label: 'Missed' },
   };
-  const m = map[status] ?? { bg: 'bg-line', fg: 'text-muted', label: status };
-  return <span className={cx('inline-flex items-center text-[10.5px] font-bold rounded-full px-2.5 py-1', m.bg, m.fg)}>{m.label}</span>;
+  // Oct 8: never show a raw code like "in_progress" to a driver.
+  const m = map[status] ?? { bg: 'bg-line', fg: 'text-muted', label: String(status || '').replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()) };
+  return <span className={cx('inline-flex items-center text-[13px] font-bold rounded-full px-2.5 py-1', m.bg, m.fg)}>{m.label}</span>;
 }
 
 // ---------------- App bar + screen scaffold ----------------
@@ -192,6 +193,25 @@ export function AppBar({ title, right, leftMark = 'ז', altMark = false }: {
   );
 }
 
+// Oct 9 client: "unsaved changes" guard. A screen with edits (driver Profile)
+// calls setUnsavedGuard(true); the bottom tabs and this menu then ask
+// "Leave without saving?" before moving away, and the browser asks on reload/close.
+let unsavedGuard = false;
+const onBeforeUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+export function setUnsavedGuard(on: boolean) {
+  if (on === unsavedGuard) return;
+  unsavedGuard = on;
+  if (on) window.addEventListener('beforeunload', onBeforeUnload);
+  else window.removeEventListener('beforeunload', onBeforeUnload);
+}
+/** Resolves true when it's OK to leave (nothing unsaved, or the user said leave). */
+export async function confirmLeaveIfUnsaved(): Promise<boolean> {
+  if (!unsavedGuard) return true;
+  const ok = await uiConfirm('Leave without saving? Your changes will be lost.', { okLabel: 'Leave', cancelLabel: 'Stay' });
+  if (ok) setUnsavedGuard(false);
+  return ok;
+}
+
 /**
  * Slide-in drawer from the right with nav links + sign out. Lives in every
  * AppBar so the menu is always reachable.
@@ -201,8 +221,8 @@ export function HamburgerMenu() {
   const me = getUser();
   const nav = useNavigate();
 
-  function signOut() {
-    if (!confirm('Sign out?')) return;
+  async function signOut() {
+    if (!(await uiConfirm('Sign out?'))) return;
     setAuth(null, null);
     const target = import.meta.env.BASE_URL.startsWith('.') ? window.location.pathname : import.meta.env.BASE_URL;
     window.location.href = target;
@@ -218,9 +238,14 @@ export function HamburgerMenu() {
     { to: '/chat',     label: 'Chat',     icon: MessageSquare },
     { to: '/you',      label: 'My Activity', icon: User },
     { to: '/profile',  label: 'My Profile',  icon: User },
+    { to: '/settings', label: 'Settings',    icon: SettingsIcon },   // Oct 14 client: how we reach you, pause, quiet times
+    { to: '/application', label: 'My application', icon: FileText }, // Oct 14 client: sign-up answers
   ];
   const SUPPLIER_LINKS = [
-    { to: '/',        label: 'My Pickups', icon: Calendar },
+    // Oct 8 client: My Pickups is its own page (it used to be the home screen,
+    // so tapping it looked like nothing happened).
+    { to: '/',        label: 'Home',       icon: Home },
+    { to: '/my-pickups', label: 'My Pickups', icon: Calendar },
     { to: '/post',    label: 'Post a Pickup', icon: Home },
     { to: '/profile', label: 'Edit Store Info', icon: User },
   ];
@@ -229,9 +254,10 @@ export function HamburgerMenu() {
   return (
     <>
       <button onClick={() => setOpen(true)}
-              className="haptic grid h-9 w-9 place-items-center rounded-full border border-line bg-paper hover:bg-cream"
+              // Oct 9 client: 44px tap target for older drivers.
+              className="haptic grid h-[44px] w-[44px] place-items-center rounded-full border border-line bg-paper hover:bg-cream" /* Oct 14 client: real 44px */
               aria-label="Menu">
-        <Menu size={17} />
+        <Menu size={20} />
       </button>
 
       <AnimatePresence>
@@ -247,15 +273,15 @@ export function HamburgerMenu() {
             <motion.aside
               initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
               transition={{ type: 'spring', damping: 30, stiffness: 320 }}
-              className="fixed top-0 bottom-0 right-0 z-[2001] w-[88vw] max-w-[320px] bg-paper shadow-lift flex flex-col">
+              className="fixed top-0 bottom-0 right-0 z-[2001] w-[88vw] max-w-[320px] bg-paper shadow-lift flex flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">{/* Oct 14 client: notch padding */}
               {/* Top bar */}
               <div className="flex items-center justify-between px-4 py-3 border-b border-line">
                 <div className="flex items-center gap-2">
                   <div className="grid h-8 w-8 place-items-center rounded-lg bg-forest text-paper font-display font-extrabold text-[13px]">ז</div>
                   <span className="font-display font-semibold">Menu</span>
                 </div>
-                <button onClick={() => setOpen(false)} className="haptic grid h-8 w-8 place-items-center rounded-full hover:bg-cream">
-                  <X size={17} />
+                <button onClick={() => setOpen(false)} aria-label="Close menu" className="haptic grid h-11 w-11 place-items-center rounded-full hover:bg-cream">
+                  <X size={20} />
                 </button>
               </div>
 
@@ -275,32 +301,38 @@ export function HamburgerMenu() {
 
               {/* Links */}
               <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-0.5">
+                {/* Oct 9 client: 16px text, 48px rows; asks before leaving unsaved edits. */}
                 {!isStaff && links.map((l) => (
-                  <Link key={l.to} to={l.to} onClick={() => setOpen(false)}
-                        className="flex items-center gap-3 px-3 py-2.5 rounded-[10px] text-[13px] font-bold text-ink hover:bg-cream haptic">
-                    <l.icon size={17} className="text-forest" />
+                  <Link key={l.to} to={l.to}
+                        onClick={async (e) => {
+                          e.preventDefault();
+                          if (!(await confirmLeaveIfUnsaved())) return;
+                          setOpen(false); nav(l.to);
+                        }}
+                        className="flex items-center gap-3 px-3 min-h-[48px] rounded-[10px] text-[16px] font-bold text-ink hover:bg-cream haptic">
+                    <l.icon size={20} className="text-forest" />
                     {l.label}
                   </Link>
                 ))}
                 {isStaff && (
                   <button onClick={() => { setOpen(false); nav('/'); }}
-                          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-[10px] text-[13px] font-bold text-ink hover:bg-cream haptic">
-                    <Home size={17} className="text-forest" /> Live Board
+                          className="w-full flex items-center gap-3 px-3 min-h-[48px] rounded-[10px] text-[16px] font-bold text-ink hover:bg-cream haptic">
+                    <Home size={20} className="text-forest" /> Live Board
                   </button>
                 )}
 
                 <div className="border-t border-line my-2" />
 
                 <a href="mailto:office@zehlzeh.org?subject=Feedback"
-                   className="flex items-center gap-3 px-3 py-2.5 rounded-[10px] text-[13px] font-bold text-ink hover:bg-cream haptic">
-                  <Mail size={17} className="text-muted" /> Send feedback
+                   className="flex items-center gap-3 px-3 min-h-[48px] rounded-[10px] text-[16px] font-bold text-ink hover:bg-cream haptic">
+                  <Mail size={20} className="text-muted" /> Send feedback
                 </a>
               </nav>
 
               {/* Sign out */}
               <button onClick={signOut}
-                      className="flex items-center gap-3 px-4 py-3.5 border-t border-line text-[13px] font-bold text-clay hover:bg-cream haptic">
-                <LogOut size={17} /> Sign out
+                      className="flex items-center gap-3 px-4 min-h-[52px] border-t border-line text-[16px] font-bold text-clay hover:bg-cream haptic">
+                <LogOut size={20} /> Sign out
               </button>
               <div className="px-4 pb-3 text-[10.5px] text-muted">Zeh L'Zeh Rescue v1.0</div>
             </motion.aside>
@@ -335,8 +367,8 @@ export function Avatar({ initials, size = 30 }: { initials?: string; size?: numb
     };
   }, [open]);
 
-  function signOut() {
-    if (!confirm('Sign out?')) return;
+  async function signOut() {
+    if (!(await uiConfirm('Sign out?'))) return;
     setAuth(null, null);
     // After clearing, hard-reload so the React tree resets to the Login screen.
     // BASE_URL is '/rescue/' on web and './' inside Capacitor — for cap we
@@ -348,7 +380,8 @@ export function Avatar({ initials, size = 30 }: { initials?: string; size?: numb
   return (
     <div ref={ref} className="relative inline-block">
       <button onClick={() => setOpen((v) => !v)}
-              className="haptic inline-grid place-items-center rounded-full text-paper font-bold ring-2 ring-paper shadow-[0_0_0_1px_#EAE3D4]"
+              // Oct 14 client: bigger invisible tap area (the circle stays small).
+              className="haptic relative inline-grid place-items-center rounded-full text-paper font-bold ring-2 ring-paper shadow-[0_0_0_1px_#EAE3D4] before:content-[''] before:absolute before:-inset-[7px]"
               style={{ width: size, height: size, fontSize: size * 0.4, background: 'linear-gradient(135deg,#3a7350,#2C5A3B)' }}
               aria-label="Account menu">
         {fallback.slice(0, 2).toUpperCase()}
@@ -410,4 +443,141 @@ export function Skeleton({ className }: { className?: string }) {
   return <div className={cx('relative overflow-hidden rounded-2xl bg-line/60', className)}>
     <div className="absolute inset-0 -translate-x-full animate-pulse bg-gradient-to-r from-transparent via-paper/70 to-transparent" />
   </div>;
+}
+
+/** Oct 5 client: one search bar look on every page. */
+export function SearchBar({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
+  return (
+    <div className="relative">
+      <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder ?? 'Search…'}
+             className="w-full rounded-[12px] border border-line bg-paper pl-9 pr-9 py-2.5 text-[14px] outline-none focus:border-forest" />
+      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted pointer-events-none">🔍</span>
+      {value && (
+        <button onClick={() => onChange('')} title="Clear search" type="button"
+                className="absolute right-2 top-1/2 -translate-y-1/2 grid h-6 w-6 place-items-center rounded-full text-muted hover:bg-cream">✕</button>
+      )}
+    </div>
+  );
+}
+
+/** Oct 5 client: every pick-from-a-list dropdown can be searched by typing.
+ *  Click → type → pick. Arrow keys + Enter work too. */
+export function SearchSelect<T>({ items, getKey, getLabel, getHint, onPick, placeholder, emptyText }: {
+  items: T[]; getKey: (x: T) => string | number; getLabel: (x: T) => string; getHint?: (x: T) => string;
+  onPick: (x: T) => void; placeholder?: string; emptyText?: string;
+}) {
+  const [q, setQ] = useState('');
+  const [open, setOpen] = useState(false);
+  const [hi, setHi] = useState(0);
+  const s = q.trim().toLowerCase();
+  const shown = (s ? items.filter((x) => (getLabel(x) + ' ' + (getHint?.(x) ?? '')).toLowerCase().includes(s)) : items).slice(0, 80);
+  const pick = (x: T) => { onPick(x); setQ(getLabel(x)); setOpen(false); };
+  return (
+    <div className="relative">
+      <input value={q} placeholder={placeholder ?? 'Type to search…'}
+             onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)}
+             onChange={(e) => { setQ(e.target.value); setOpen(true); setHi(0); }}
+             onKeyDown={(e) => {
+               if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); setHi((h) => Math.min(h + 1, shown.length - 1)); }
+               else if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
+               else if (e.key === 'Enter' && open && shown[hi]) { e.preventDefault(); pick(shown[hi]!); }
+               else if (e.key === 'Escape') setOpen(false);
+             }}
+             className="w-full rounded-[10px] border border-line bg-paper pl-9 pr-9 py-2 text-[13px] font-normal outline-none focus:border-forest" />
+      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted pointer-events-none text-[13px]">🔍</span>
+      {q && <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { setQ(''); setOpen(true); }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 grid h-6 w-6 place-items-center rounded-full text-muted hover:bg-cream">✕</button>}
+      {open && (
+        <div className="absolute z-[2200] mt-1 w-full max-h-[260px] overflow-y-auto rounded-[12px] border border-line bg-paper shadow-lift">
+          {shown.length === 0 ? <div className="px-3 py-2 text-[12.5px] text-muted">{emptyText ?? 'No matches'}</div> :
+            shown.map((x, i) => (
+              <button key={getKey(x)} type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => pick(x)}
+                      onMouseEnter={() => setHi(i)}
+                      className={`block w-full text-left px-3 py-2 ${i === hi ? 'bg-sage/50' : ''}`}>
+                <div className="text-[13px] font-semibold text-ink">{getLabel(x)}</div>
+                {getHint && <div className="text-[11.5px] text-muted">{getHint(x)}</div>}
+              </button>
+            ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Oct 5: date box that doesn't scramble while typing. A controlled
+ *  <input type="date"> re-rendered on every keystroke turned 2026 into
+ *  272026 and broke report ranges. Only complete dates are passed up;
+ *  a new value from outside (a preset button) refreshes the box. */
+export function DateInput({ value, onChange, className, min, max, disabled }: {
+  value: string; onChange: (v: string) => void; className?: string; min?: string; max?: string; disabled?: boolean;
+}) {
+  const committed = useRef(value);
+  const [k, setK] = useState(0);
+  useEffect(() => { if (value !== committed.current) { committed.current = value; setK((x) => x + 1); } }, [value]);
+  const push = (v: string) => {
+    if (v === '' || /^(19|20)\d\d-\d\d-\d\d$/.test(v)) { committed.current = v; onChange(v); }
+  };
+  return <input key={k} type="date" defaultValue={value} min={min} max={max} disabled={disabled} className={className}
+                onChange={(e) => push(e.target.value)} onBlur={(e) => push(e.target.value)} />;
+}
+
+/** Oct 5 client: dark mode + bigger text, each person chooses (this browser). */
+export function applyDisplayPrefs() {
+  try {
+    const el = document.documentElement;
+    el.classList.toggle('dark', localStorage.getItem('zlz_dark') === '1');
+    el.classList.toggle('big-text', localStorage.getItem('zlz_big_text') === '1');
+  } catch { /* storage blocked — keep defaults */ }
+}
+export function DisplayToggles() {
+  const [dark, setDark] = useState(() => document.documentElement.classList.contains('dark'));
+  const [big, setBig] = useState(() => document.documentElement.classList.contains('big-text'));
+  const set = (key: string, cls: string, on: boolean) => {
+    document.documentElement.classList.toggle(cls, on);
+    try { localStorage.setItem(key, on ? '1' : '0'); } catch { /* fine */ }
+  };
+  const btn = 'haptic grid h-9 min-w-9 px-2 place-items-center rounded-full border text-[13px] font-extrabold';
+  return (
+    <div className="flex items-center gap-1.5">
+      <button title={dark ? 'Switch to light mode' : 'Switch to dark mode'} aria-pressed={dark}
+              onClick={() => { set('zlz_dark', 'dark', !dark); setDark(!dark); }}
+              className={`${btn} ${dark ? 'bg-forest text-paper border-forest' : 'bg-paper text-ink border-line hover:bg-cream'}`}>
+        {dark ? '☀' : '☾'}
+      </button>
+      <button title={big ? 'Normal text size' : 'Bigger text'} aria-pressed={big}
+              onClick={() => { set('zlz_big_text', 'big-text', !big); setBig(!big); }}
+              className={`${btn} ${big ? 'bg-forest text-paper border-forest' : 'bg-paper text-ink border-line hover:bg-cream'}`}>
+        {big ? 'A−' : 'A+'}
+      </button>
+    </div>
+  );
+}
+
+/** Oct 5 client: a small (i) that explains a term in one line — hover or tap. */
+export function Tip({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative inline-block align-middle">
+      <button type="button" aria-label="What's this?" aria-expanded={open}
+              onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+              onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)} onBlur={() => setOpen(false)}
+              className="hit40 ml-1 inline-grid h-[15px] w-[15px] place-items-center rounded-full border border-current text-[9.5px] font-bold leading-none opacity-60 hover:opacity-100">i</button>
+      {open && (
+        <span role="tooltip"
+              className="absolute left-1/2 top-[19px] z-[2300] w-[230px] -translate-x-1/2 rounded-[10px] border border-line bg-paper px-3 py-2 text-left text-[12px] font-normal normal-case tracking-normal leading-snug text-ink shadow-lift">
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** Oct 6 client rule: every time people see is 12-hour. Turns "17:00" or
+ *  "17:00:00" into "5:00 PM"; any other text is returned unchanged. */
+export function to12h(v: unknown): string {
+  const t = String(v ?? '');
+  const m = t.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!m) return t;
+  const h = Number(m[1]); if (h > 23) return t;
+  return `${((h + 11) % 12) + 1}:${m[2]} ${h >= 12 ? 'PM' : 'AM'}`;
 }

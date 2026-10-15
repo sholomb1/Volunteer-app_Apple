@@ -1,0 +1,3481 @@
+/**
+ * Coordinator portal — desktop, matches mockup 03.
+ *
+ * Layout:  [forest-deep left nav 212px] [main: top bar + (map | feed pane)]
+ * Nav:     Live Board / Pickups / Volunteers / Suppliers / Map / Reports
+ *          + Places list with active/paused dots
+ * Main:    map shows pickup pins; feed pane shows date-grouped pickups with
+ *          slot avatars, status pills, assign-driver button.
+ *
+ * Role-gated to admin/coordinator. Mobile route /portal redirects to the
+ * Volunteer home so this stays desktop-only as designed.
+ */
+import { useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import L from 'leaflet';
+import { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { LayoutGrid, Calendar, Users, Store, BarChart3, LogOut, MessageSquare, ClipboardList, Settings, ShieldCheck, X, MapPin } from 'lucide-react';
+import { adminCRUD, adminSmsPause, api, broadcast, canSeeTab, canWrite, dispatcherShifts, dm, getUser, location as locationApi, smsInbox, smsThreads, onDuty, sse, uncoveredAlerts, upcomingSms, type DispShiftSlot, type DispWeeklyRow, type SignupRow } from '../api';
+import { cx } from '../design';
+import { ChatThread } from '../chat-thread';
+import { SuppliersPanel, VolunteersPanel, SteadyPickupsPanel, AppUsagePanel, KioskActivityPanel, SettingsPanel, NeighborhoodsPanel, CoveragePanel, QuickPickupModal, ChangePasswordPanel, BroadcastPanel, SmsComposerPanel, SmsGroupsPanel, SmsThreadsPanel, SmsDispatchersPanel, DispatchersPanel, DispatchersRosterPanel, SupplierForm, SteadyForm, ShiftsPanel, CenterHelpStandalonePanel, UpcomingSmsPanel, WhatsappAdminPanel, WaThreadsPanel, JewishCalendarPanel } from '../portal-sections';
+// Tabbed wrapper components consolidating the "Chat" and "Admin" sub-items
+// (batch abc820 Aug 11 · nav consolidation). Defined below in this file.
+import { ProspectsPanel, NeedsConfirmationSection } from '../prospects-and-confirmation';
+import { RecruitingPanel } from '../crm-sections';
+import { TasksPanel } from '../tasks-panel';
+import { MyShiftPanel } from '../my-shift-panel';
+import { DispatcherAttendancePanel } from '../dispatcher-attendance';
+import { ReportsPanel } from '../reports-panel';
+import { readCoordNav, writeCoordNav, patchCoordNav } from '../nav-state';
+import { CalendarPanel } from './CalendarPanel';
+import { AdminPickupDetail } from './AdminPickupDetail';
+import { Plus, KeyRound, UserPlus2 } from 'lucide-react';
+import { nyToday } from '../time-format';
+
+type TabKey = 'my-shift' | 'holiday-sms' | 'tasks' | 'calendar' | 'live' | 'pickups' | 'volunteers' | 'suppliers' | 'reports' | 'chat-stores' | 'chat-volunteers' | 'sms-combo' | 'dispatchers-combo' | 'steady' | 'shifts' | 'center-help' | 'settings' | 'neighborhoods' | 'coverage' | 'change-password' | 'recruiting' | 'prospects' | 'app-usage' | 'kiosk-activity';
+
+const NAV_ITEMS: { key: TabKey; label: string; icon: any; section?: 'top' | 'chat' | 'admin' }[] = [
+  // client Aug 13 (C6) — Live Board is the default landing again; Calendar
+  // sits as a secondary page after Pickups. Reversal of the Aug 12 change
+  // that promoted Calendar to first — client asked for the original order.
+  { key: 'live',           label: 'Live Board',     icon: LayoutGrid,    section: 'top' },
+  { key: 'pickups',        label: 'Pickups',        icon: Calendar,      section: 'top' },
+  // Oct 2 client fix (UI plan §3): Calendar + Steady Pickups now live inside
+  // Pickups as views (Calendar / Recurring). Old #coord/calendar and
+  // #coord/steady links are redirected below.
+  { key: 'volunteers',     label: 'Volunteers',     icon: Users,         section: 'top' },
+  { key: 'suppliers',      label: 'Suppliers',      icon: Store,         section: 'top' },
+  { key: 'prospects',      label: 'Prospects',      icon: UserPlus2,     section: 'top' },
+  { key: 'shifts',         label: 'Dispatching Shifts', icon: Calendar,  section: 'top' },
+  { key: 'center-help',    label: 'Center Help',    icon: Calendar,      section: 'top' },
+  { key: 'coverage',       label: 'Coverage',       icon: ShieldCheck,   section: 'top' },
+  { key: 'my-shift',       label: 'My Shift',       icon: Calendar,      section: 'top' }, // Oct 2: dispatchers only
+  { key: 'tasks',          label: 'Tasks & Follow-ups', icon: ClipboardList, section: 'top' }, // Oct 2: Task Management (UI plan §6)
+  { key: 'recruiting',     label: 'Recruiting',     icon: UserPlus2,     section: 'top' },
+  { key: 'reports',        label: 'Reports',        icon: BarChart3,     section: 'top' },
+  // Chat section — consolidated from 6+ items to 3.
+  { key: 'chat-stores',    label: 'Chat: Stores',      icon: MessageSquare, section: 'chat' },
+  { key: 'chat-volunteers',label: 'Chat: Drivers',     icon: MessageSquare, section: 'chat' },
+  { key: 'sms-combo',      label: 'SMS Composer & Broadcast', icon: MessageSquare, section: 'chat' },
+  // Admin section — Dispatchers combines "Manage dispatchers" + "Driver-reply SMS".
+  { key: 'dispatchers-combo', label: 'Dispatchers',   icon: ShieldCheck,   section: 'admin' },
+  // Aug 23 client fix 4: Office Sign-In removed from nav. Legacy tool the
+  // client no longer uses; Kiosk Activity replaces it.
+  { key: 'kiosk-activity', label: 'Kiosk Activity', icon: ClipboardList, section: 'admin' },
+  { key: 'app-usage',      label: 'App Usage',      icon: BarChart3,     section: 'admin' },
+  // Oct 2 client fix: Neighborhoods tucked away under Admin (UI plan §9).
+  { key: 'neighborhoods',  label: 'Neighborhoods',  icon: MapPin,        section: 'admin' },
+  { key: 'holiday-sms',    label: 'Holiday & SMS Controls', icon: ShieldCheck, section: 'admin' }, // Oct 2 (UI plan §9)
+  { key: 'settings',       label: 'Settings',       icon: Settings,      section: 'admin' },
+  { key: 'change-password',label: 'Change password',icon: KeyRound,      section: 'admin' },
+];
+
+// Oct 2 client fix (UI plan §1): the nine-item main menu. Each item groups
+// one or more existing sections; groups with several show a tab strip at the
+// top of the page. NAV_ITEMS stays the source of truth for permissions,
+// labels and URL-hash restore.
+const NAV_GROUPS: { key: string; label: string; icon: any; tabs: TabKey[] }[] = [
+  { key: 'live',       label: 'Live Board',      icon: LayoutGrid,    tabs: ['live'] },
+  { key: 'pickups',    label: 'Pickups',         icon: Calendar,      tabs: ['pickups'] },
+  { key: 'volunteers', label: 'Volunteers',      icon: Users,         tabs: ['volunteers'] },
+  { key: 'suppliers',  label: 'Suppliers',       icon: Store,         tabs: ['suppliers'] },
+  { key: 'map',        label: 'Map View',        icon: MapPin,        tabs: ['coverage'] },
+  { key: 'myshift',    label: 'My Shift',        icon: Calendar,      tabs: ['my-shift'] },
+  { key: 'tasks',      label: 'Task Management', icon: ClipboardList, tabs: ['tasks', 'recruiting', 'prospects'] },
+  { key: 'reports',    label: 'Reports',         icon: BarChart3,     tabs: ['reports'] },
+  { key: 'messaging',  label: 'Messaging',       icon: MessageSquare, tabs: ['sms-combo', 'chat-volunteers', 'chat-stores'] },
+  { key: 'password',   label: 'Change password', icon: KeyRound,      tabs: [] },
+  { key: 'admin',      label: 'Admin',           icon: Settings,      tabs: ['dispatchers-combo', 'shifts', 'center-help', 'holiday-sms', 'kiosk-activity', 'app-usage', 'settings', 'neighborhoods', 'change-password'] },
+];
+const groupOfTab = (t: TabKey) => NAV_GROUPS.find((g) => g.tabs.includes(t));
+
+// Valid section keys for URL-hash restore (client Sep 2 refresh-persistence).
+const VALID_TABS = new Set<TabKey>(NAV_ITEMS.map((it) => it.key));
+
+type PiRow = {
+  id: number; scheduled_date: string; scheduled_time: string; status: string;
+  suppliers: string | null; supplier_address: string | null;
+  supplier_city?: string | null; supplier_logo_url?: string | null;
+  estimated_quantity?: string | null;
+  // One-time-pickup fields (present when no supplier_id is attached to the row).
+  contact_name: string | null; contact_phone: string | null;
+  pickup_address: string | null;
+  is_one_time?: boolean;
+  // xyz122 test-mode flag: TRUE = coordinator created this as a dry-run.
+  // Backend hides it from every driver-facing surface; the Live Board shows
+  // a small TEST badge next to the label so the office can spot it.
+  is_test?: boolean;
+  ref_number?: string | null;
+  posted_via_supplier?: boolean;
+  must_pickup_by?: string | null;
+  notes: string | null; food_description: string | null; slots_capacity: number;
+  signups?: SignupRow[];
+  // For instances materialized from a steady_pickup template: the template's
+  // name (e.g. "Bites cafe"). Used as a card-label fallback when the template
+  // has no supplier attached, so the card doesn't read as "One-time pickup."
+  steady_pickup_id?: number | null;
+  steady_name?: string | null;
+  // Oct 2 client fix: closed-state details from the list API, used for the
+  // "Completed – no kiosk sign-in" / "Needs review" / "Expired" labels.
+  cancelled_at?: string | null;
+  cancellation_reason?: string | null;
+  completion_notes?: string | null;
+};
+type Place = { id: number; name: string; status: string };
+
+export function CoordinatorPortal() {
+  const user = getUser();
+  // Read-only staff (viewer / read_only) can browse the portal but can't
+  // trigger writes. Hide destructive/creation UI when write isn't allowed.
+  const writeOk = canWrite(user?.role);
+  // Sep 4: dispatcher role-scoping. Hide donations/reports/admin-settings
+  // panels for role='dispatcher' — server enforces the same, this is UX.
+  const visibleNav = NAV_ITEMS.filter((it) => canSeeTab(user?.role, it.key));
+  const visibleTabs = new Set<TabKey>(visibleNav.map((it) => it.key));
+  const isDispatcherRole = String(user?.role ?? '').toLowerCase() === 'dispatcher';
+  const visibleGroups = NAV_GROUPS
+    .map((g) => ({ ...g, tabs: g.key === 'password'
+      ? (isDispatcherRole ? (['change-password'] as TabKey[]) : [])
+      : g.key === 'admin' && isDispatcherRole ? [] : g.tabs.filter((t) => visibleTabs.has(t)) }))
+    .filter((g) => g.tabs.length > 0);
+  // C1 Aug 13 — pickup detail is now a modal (see modalPickupId), no route
+  // navigation from Live Board rows. useNavigate() call removed.
+  const qc   = useQueryClient();
+  // Refresh-persistence (client Sep 2): restore the section from the URL hash
+  // so a reload stays put instead of bouncing to the Live Board. See nav-state.
+  const [tab, setTab] = useState<TabKey>(() => {
+    const n = readCoordNav();
+    const legacy = n.tab === 'calendar' || n.tab === 'steady';
+    const wanted = legacy ? 'pickups'
+      : (n.tab && VALID_TABS.has(n.tab as TabKey)) ? (n.tab as TabKey) : 'live';
+    // Sep 4: if the deep-link points at a tab this role can't see, fall
+    // back to a tab this role CAN see. Sep 10: dispatchers can't see
+    // 'live' either, so pick the first allowed tab (Members) for them.
+    if (canSeeTab(user?.role, wanted)) return wanted;
+    if (canSeeTab(user?.role, 'live')) return 'live';
+    return 'volunteers';
+  });
+  // Issue #17 Aug 10: hide fully-covered pickups from the default Live Board;
+  // dispatcher can toggle "Show covered" to reveal them.
+  const [showCoveredOnLive, setShowCoveredOnLive] = useState(false);
+  const [pickerFor, setPickerFor] = useState<PiRow | null>(null);
+  const [showQuickAdd, setShowQuickAdd] = useState(false);
+  const [editingPickup, setEditingPickup] = useState<PiRow | null>(null);
+  const [duplicatingPickup, setDuplicatingPickup] = useState<PiRow | null>(null);
+  // Oct 2 client fix (UI plan §3): editing a recurring occurrence asks
+  // "this occurrence / this and all future / complete schedule".
+  const [recurringEditFor, setRecurringEditFor] = useState<PiRow | null>(null);
+  const [steadyEdit, setSteadyEdit] = useState<{ row: any; applyFrom: string | null } | null>(null);
+  const steadyTemplates = useQuery({ queryKey: ['admin-steady'], queryFn: adminCRUD.steady, enabled: recurringEditFor != null });
+  const editPickup = (p: PiRow) => (p.steady_pickup_id != null ? setRecurringEditFor(p) : setEditingPickup(p));
+  // C1 Aug 13 — click a pickup row/card → open detail as a modal in place
+  // rather than navigating to /admin/pickup/:id. Preserves scroll + context.
+  const [modalPickupId, setModalPickupId] = useState<number | null>(null);
+  // Per-pickup SMS modal removed — SMS is now managed from the dedicated
+  // SMS Composer / SMS Groups / SMS Threads tabs.
+  const [smsPickup] = useState<PiRow | null>(null);
+  // 3-way "New…" dropdown in the header: one-time pickup, steady pickup, new
+  // supplier. Also drives the standalone "New supplier" flow so it lives
+  // outside the pickup form now.
+  const [showNewSupplierStandalone, setShowNewSupplierStandalone] = useState(false);
+  const [showNewSteady, setShowNewSteady] = useState(false);
+  // client Aug 12 — schedule .xlsx download modal (date-range picker).
+  const [showScheduleDownload, setShowScheduleDownload] = useState(false);
+  // When a search result is picked, we jump to the matching tab AND stash the id
+  // so the tab's panel can open that entity's edit modal on mount.
+  const [openPersonId, setOpenPersonId] = useState<number | null>(null);
+  // batch abc820 · Pickups tab tabstrip (Needs attention / Upcoming /
+  // Completed / History) replaces the old office-status chip filter + date
+  // focus. Sub-tab lives here so it survives while the user scrolls entities
+  // in and out.
+  // Oct 2 client fix: one search bar at the top of Pickups (all views) and on the Live Board.
+  const [pickupSearch, setPickupSearch] = useState('');
+  const [pickupsSubTab, setPickupsSubTab] = useState<PickupsSubTab>(() => {
+    const n = readCoordNav();
+    if (n.tab === 'calendar') return 'calendar';
+    if (n.tab === 'steady') return 'recurring';
+    const valid: PickupsSubTab[] = ['today', 'list', 'calendar', 'history', 'recurring', 'attention'];
+    return (n.tab === 'pickups' && valid.includes(n.sub as PickupsSubTab))
+      ? (n.sub as PickupsSubTab) : 'today';
+  });
+  // Any remaining setTab('calendar' | 'steady') (search results, sidebar,
+  // reports links) lands on the matching Pickups view instead.
+  useEffect(() => {
+    if (tab === 'calendar') { setTab('pickups'); setPickupsSubTab('calendar'); }
+    else if (tab === 'steady') { setTab('pickups'); setPickupsSubTab('recurring'); }
+  }, [tab]);
+  // Oct 2 client: each page's search is its own — clear it on leaving.
+  useEffect(() => { setPickupSearch(''); }, [tab, pickupsSubTab]);
+
+  // Keep the URL hash in step with the active section + Pickups sub-tab. The
+  // full-write only happens when the SECTION changes (clears deeper levels a
+  // different section shouldn't carry); a sub-tab change within Pickups just
+  // patches its segment. Child panels (SMS combo, Dispatchers, SMS threads)
+  // own their own deeper segments and won't be clobbered here — prevTabRef
+  // starts equal to `tab`, so the initial mount doesn't overwrite a hash the
+  // children are still restoring from.
+  const [lastInGroup, setLastInGroup] = useState<Record<string, TabKey>>({});
+  useEffect(() => {
+    const g = groupOfTab(tab);
+    if (g) setLastInGroup((m) => (m[g.key] === tab ? m : { ...m, [g.key]: tab }));
+  }, [tab]);
+  const openGroup = (g: { key: string; tabs: TabKey[] }) => setTab(lastInGroup[g.key] && g.tabs.includes(lastInGroup[g.key]!) ? lastInGroup[g.key]! : g.tabs[0]!);
+  const currentGroup = visibleGroups.find((g) => g.tabs.includes(tab));
+  const prevTabRef = useRef<TabKey>(tab);
+  useEffect(() => {
+    if (prevTabRef.current !== tab) {
+      prevTabRef.current = tab;
+      writeCoordNav({ tab, sub: tab === 'pickups' ? pickupsSubTab : undefined });
+    } else if (tab === 'pickups') {
+      patchCoordNav({ sub: pickupsSubTab });
+    }
+  }, [tab, pickupsSubTab]);
+
+  // Pickups feed range: today through +7d for the live board is fine on its
+  // own, but the Pickups tab's Completed/History sub-tabs need up to 60 days
+  // back. Widen the shared fetch so both surfaces work off one cache entry.
+  // NY-anchored — toISOString().slice(0,10) reports UTC and rolls the day
+  // over at 8 PM NY (EDT), hiding evening pickups from tonight's board.
+  const today    = nyToday();
+  const fromDate = new Date(Date.now() - 60 * 86400e3).toISOString().slice(0, 10);
+  const inAMonth = new Date(Date.now() + 30 * 86400e3).toISOString().slice(0, 10);
+  const pickups = useQuery({
+    queryKey: ['admin-pickups', today],
+    queryFn:  () => api<{ data: PiRow[] }>(`/api/pickup-instances?from=${fromDate}&to=${inAMonth}`),
+    // abc881 (Aug 19): admin was seeing claimed pickups still bucketed under
+    // "Looking for a driver" because the query only refreshed on manual
+    // reload. Poll every 30s so an SMS-claim / app-claim from another surface
+    // shows up in the admin's Live Board within a normal glance.
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+  });
+  const suppliers = useQuery({
+    queryKey: ['admin-suppliers'],
+    queryFn:  () => api<{ data: any[] }>('/api/suppliers?limit=500'),
+  });
+  const volunteers = useQuery({
+    queryKey: ['admin-volunteers'],
+    queryFn:  () => api<{ data: any[] }>('/api/volunteers?limit=500'),
+  });
+
+  // abc882 (Aug 19): real-time push. Opens a Server-Sent Events connection to
+  // /api/pickup-events/stream so claim/release/assign/reschedule/dismiss/
+  // broadcast events invalidate ['admin-pickups'] the instant the DB commits
+  // instead of waiting for the 30s poll. Poll stays as fallback in case the
+  // stream is torn down for a long time.
+  //
+  // Reconnect: EventSource has native reconnect, but on hard failures (401 for
+  // an expired nonce, network death) we manually re-open with exponential
+  // backoff capped at 30s. `liveOpen` drives the little green/grey dot next
+  // to the Live Board title so dispatch knows the wire is warm.
+  const [liveOpen, setLiveOpen] = useState(false);
+  useEffect(() => {
+    const staff = canWrite(user?.role) || user?.role === 'viewer';
+    if (!staff) return;
+    let es: EventSource | null = null;
+    let cancelled = false;
+    let backoff = 1000;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    // Tier-2 fix #9: the dot used to flip grey on the first error event and
+    // strobe every time EventSource wobbled — even though its own reconnect
+    // was still winning. Only flip grey after N consecutive failures so
+    // normal transient noise (a single reconnect blip) stays green.
+    const ERROR_STREAK_TO_GREY = 3;
+    let errorStreak = 0;
+
+    const connect = async () => {
+      if (cancelled) return;
+      try {
+        es = await sse.connectPickupEvents();
+        es.addEventListener('open', () => {
+          backoff = 1000;
+          errorStreak = 0;
+          setLiveOpen(true);
+        });
+        es.addEventListener('pickup-changed', () => {
+          // Any real event = the wire is warm. Reset the failure streak so a
+          // burst of activity doesn't leave stale error credit lying around.
+          errorStreak = 0;
+          setLiveOpen(true);
+          qc.invalidateQueries({ queryKey: ['admin-pickups'] });
+        });
+        es.addEventListener('error', () => {
+          errorStreak++;
+          if (errorStreak >= ERROR_STREAK_TO_GREY) setLiveOpen(false);
+          // EventSource will try its own reconnect first — only escalate to a
+          // manual re-open if the socket has closed permanently.
+          if (es && es.readyState === EventSource.CLOSED) {
+            try { es.close(); } catch { /* already closed */ }
+            es = null;
+            const delay = backoff;
+            backoff = Math.min(backoff * 2, 30_000);
+            retryTimer = setTimeout(connect, delay);
+          }
+        });
+      } catch {
+        errorStreak++;
+        if (errorStreak >= ERROR_STREAK_TO_GREY) setLiveOpen(false);
+        const delay = backoff;
+        backoff = Math.min(backoff * 2, 30_000);
+        retryTimer = setTimeout(connect, delay);
+      }
+    };
+    void connect();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      if (es) { try { es.close(); } catch { /* ignore */ } }
+      setLiveOpen(false);
+    };
+    // qc + user role are stable for the tab's lifetime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const supplierPlaces: Place[] = (suppliers.data?.data ?? []).slice(0, 200).map((s: any) => ({
+    id: s.id, name: s.name, status: s.status ?? 'active',
+  }));
+
+  // Determines what the map and feed pane render. Live = everything; the
+  // entity tabs narrow to one type. Reports/Map have their own treatment.
+  const showPickups    = tab === 'live' || tab === 'pickups' || tab === 'coverage';
+  const showSuppliers  = tab === 'live' || tab === 'suppliers' || tab === 'coverage';
+  const showVolunteers = tab === 'live' || tab === 'volunteers' || tab === 'coverage';
+
+  // Consolidated brief #8 (Aug 18): the map only belongs on the Live Board.
+  // On Volunteers / Suppliers / Pickups management screens the person or
+  // location details are what the user actually scans; the previous map
+  // squeezed those into a narrow column and added no operational value.
+  // Oct 2 client fix (UI plan §2): map removed from the Live Board so pickup
+  // cards use the full width; it lives on Coverage (future "Map View").
+  const mapTabs: TabKey[] = ['coverage'];
+  const showMap = mapTabs.includes(tab);
+
+  // Right-pane feed: Live Board shows the REST OF TODAY (from now onward
+  // through end of day). Client feedback said the previous 6-hour rolling
+  // window looked empty even when there were pickups later today. The
+  // Pickups tab still shows the whole 7-day window for planning.
+  //
+  // batch abc812 Aug 10 — Overdue-and-unresolved pickups (scheduled_time
+  // in the past, status NOT completed/delivered/cancelled) stay on the
+  // list until resolved even if they fall outside the -30m window.
+  // Previously the header badge counted them but the filter hid them,
+  // producing "All quiet for now" while an overdue pickup was still open.
+  const allPickups = pickups.data?.data ?? [];
+  const nowDate = new Date();
+  const nowMs2 = nowDate.getTime();
+  const endOfTodayMs = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate(), 23, 59, 59).getTime();
+  // client Aug 12 — 'missed' joins the closed-set. The 15-min auto-missed
+  // sweeper (backend: auto-missed-sweeper.ts) flips old orphan pickups to
+  // 'missed', which should drop them from Needs-a-Driver / Live board /
+  // attention count everywhere the same way cancelled does.
+  const DONE_STATUSES = ['completed', 'delivered', 'cancelled', 'missed'];
+  const livePickups = allPickups.filter((p) => {
+    const status = String(p.status || '').toLowerCase();
+    // abc884 (Aug 19 AM): cancelled/completed/delivered/missed must be
+    // excluded from the Live Board — Bobov Yeshiva stayed on "Rest of Today"
+    // even after the steady-cancel cascade because this filter only checked
+    // DONE_STATUSES for the overdue branch, not for the in-window branch.
+    if (DONE_STATUSES.includes(status)) return false;
+    // Oct 2 client fix (UI plan §2): Live Board must never show cancelled,
+    // picked-up, or test pickups as open. Mirrors the cancelled_at / is_test
+    // exclusions the header counters already use.
+    if (status === 'picked_up') return false;
+    if ((p as any).cancelled_at) return false;
+    if (p.is_test) return false;
+    const when = new Date(p.scheduled_date.slice(0,10) + 'T' + (p.scheduled_time || '00:00:00')).getTime();
+    const inWindow = when >= (nowMs2 - 30 * 60_000) && when <= endOfTodayMs;
+    const isOverdueUnresolved = when < nowMs2;
+    return inWindow || isOverdueUnresolved;
+  });
+  // §1: Live Board keeps its 6-hour rolling window (unchanged).
+  // Aug 24 client fix (count/list mismatch on Needs attention): the sub-tab
+  // count and the sub-tab list must be derived from the SAME evaluation so
+  // "1 in badge → 0 in list" (or vice-versa) cannot happen. Prior code had
+  // two independent useMemos (feedPickups + pickupsSubCounts) with different
+  // deps; if a driver signup landed between their reruns, only one saw it.
+  // Fix: compute each sub-tab's list ONCE, then derive count = length.
+  const attentionList = useMemo(() => {
+    const nowMs3 = Date.now();
+    return allPickups.filter((p) => {
+      // Oct 2 client fix: roster-only pickups the sweeper closed for review
+      // land here so the office can confirm them one by one.
+      if (officeStatusOf(p) === 'review') return true;
+      const status = String(p.status || '').toLowerCase();
+      if (DONE_STATUSES.includes(status)) return false;
+      if ((p as any).posted_via_supplier) return false;
+      const activeSignups = ((p as any).signups ?? [])
+        .filter((s: any) => !s.released_at).length;
+      if (activeSignups > 0) return false;
+      const startMs = new Date(p.scheduled_date.slice(0,10) + 'T' + (p.scheduled_time || '00:00:00')).getTime();
+      const windowEndMs = (p as any).must_pickup_by
+        ? new Date((p as any).must_pickup_by).getTime()
+        : startMs + 60 * 60_000;
+      return windowEndMs < nowMs3;
+    });
+  }, [allPickups]);
+  const upcomingList = useMemo(() => {
+    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+    const todayStartMs = todayStart.getTime();
+    return allPickups
+      .filter((p) => {
+        const status = String(p.status || '').toLowerCase();
+        if (DONE_STATUSES.includes(status)) return false;
+        const dayMs = new Date(p.scheduled_date.slice(0,10) + 'T00:00:00').getTime();
+        return dayMs >= todayStartMs;
+      })
+      .sort((a, b) => (a.scheduled_date + a.scheduled_time).localeCompare(b.scheduled_date + b.scheduled_time));
+  }, [allPickups]);
+  const completedList = useMemo(() => {
+    return allPickups
+      .filter((p) => {
+        const status = String(p.status || '').toLowerCase();
+        return status === 'completed' || status === 'delivered';
+      })
+      .sort((a, b) => (b.scheduled_date + b.scheduled_time).localeCompare(a.scheduled_date + a.scheduled_time));
+  }, [allPickups]);
+  const historyList = useMemo(() => {
+    const sixtyDaysAgo = Date.now() - 60 * 86400e3;
+    return allPickups
+      .filter((p) => {
+        const dayMs = new Date(p.scheduled_date.slice(0,10) + 'T00:00:00').getTime();
+        return dayMs >= sixtyDaysAgo;
+      })
+      .sort((a, b) => (b.scheduled_date + b.scheduled_time).localeCompare(a.scheduled_date + a.scheduled_time));
+  }, [allPickups]);
+
+  // Oct 2 client fix (UI plan §3): Pickups opens on Today — every pickup
+  // scheduled today, any status, test rows excluded.
+  const todayList = useMemo(() => {
+    const t = nyToday();
+    return allPickups
+      .filter((p) => String(p.scheduled_date).slice(0, 10) === t && !p.is_test)
+      .sort((a, b) => String(a.scheduled_time).localeCompare(String(b.scheduled_time)));
+  }, [allPickups]);
+
+  const feedPickups = useMemo(() => {
+    if (tab === 'live') {
+      if (showCoveredOnLive) return livePickups;
+      return livePickups.filter((p) => {
+        const need = Number((p as any).slots_capacity ?? 1) || 1;
+        // Oct 2 client fix: released (driver-cancelled) signups no longer
+        // count as filled, so a reopened slot shows back up on the board.
+        const filled = ((p as any).signups ?? []).filter((s: any) => !s.released_at).length;
+        return filled < need;
+      });
+    }
+    if (tab !== 'pickups') return allPickups;
+    if (pickupsSubTab === 'attention') return attentionList;
+    if (pickupsSubTab === 'today') return todayList;
+    // list / history / calendar / recurring render their own panels.
+    return [];
+  }, [tab, livePickups, allPickups, showCoveredOnLive, pickupsSubTab, attentionList, todayList]);
+
+  // Counts derive from the SAME arrays the feed uses — count and list can no
+  // longer disagree.
+  const pickupsSubCounts = useMemo(() => ({
+    attention: attentionList.length,
+    upcoming: upcomingList.length,
+    completed: completedList.length,
+    history: historyList.length,
+    today: todayList.length,
+  }), [attentionList, upcomingList, completedList, historyList, todayList]);
+
+  // Subtitle count = pickups NOT yet completed within the current feed scope
+  // (§1.3 — Completed pickups must not remain in the upcoming count).
+  const upcomingCount = useMemo(
+    () => feedPickups.filter((p) => {
+      const os = officeStatusOf(p);
+      return !CLOSED_OFFICE_STATUSES.includes(os);
+    }).length,
+    [feedPickups]
+  );
+
+  const searchedFeed = useMemo(() => {
+    const needle = pickupSearch.trim().toLowerCase();
+    return needle ? feedPickups.filter((p) => pickupHaystack(p).includes(needle)) : feedPickups;
+  }, [feedPickups, pickupSearch]);
+  const groups = useMemo(() => groupByDate(searchedFeed), [searchedFeed]);
+
+  // Operational counters for the Live Board tiles.
+  const nowMs = Date.now();
+  // abc901 (Aug 21): "Waiting" chip must reconcile EXACTLY with the Pickups
+  // → attention sub-tab list it links to. Previously used a smaller closed-set
+  // (missing 'missed') and counted any signup row (including released ones),
+  // producing 68 vs. a list of 2. Now mirrors pickupsSubCounts.attention:
+  // DONE_STATUSES (incl. 'missed'), only ACTIVE signups block, past-window,
+  // and not supplier-posted.
+  const overdueCount = allPickups.filter((p) => {
+    const status = String(p.status || '').toLowerCase();
+    if (DONE_STATUSES.includes(status)) return false;
+    if ((p as any).cancelled_at) return false;
+    // Supplier-posted pickups don't have a real end-of-window — just show
+    // "open calls", never mark them overdue (client abc792).
+    if (p.posted_via_supplier) return false;
+    // Tier-2 fix #10: xyz122 test/dry-run pickups leak into the operational
+    // "Waiting" chip — office was seeing a red count for rows that are hidden
+    // from every driver-facing surface.
+    if (p.is_test) return false;
+    const activeSignups = ((p as any).signups ?? [])
+      .filter((s: any) => !s.released_at).length;
+    if (activeSignups > 0) return false;
+    const startMs = new Date(p.scheduled_date.slice(0, 10) + 'T' + (p.scheduled_time || '00:00:00')).getTime();
+    const endMs   = p.must_pickup_by ? new Date(p.must_pickup_by).getTime() : startMs + 60 * 60_000;
+    return endMs < nowMs;
+  }).length;
+  // abc901 (Aug 21): "Unassigned · 7d" was including cancelled + missed +
+  // completed pickups because the filter only checked signup count. Add the
+  // same DONE_STATUSES + cancelled_at exclusion the upcoming list uses.
+  const unassignedThisWeek = allPickups.filter((p) => {
+    const status = String(p.status || '').toLowerCase();
+    if (DONE_STATUSES.includes(status)) return false;
+    if ((p as any).cancelled_at) return false;
+    // Tier-2 fix #10: exclude test/dry-run pickups from the header count so
+    // the chip reflects real driver-facing work.
+    if (p.is_test) return false;
+    const activeSignups = ((p as any).signups ?? [])
+      .filter((s: any) => !s.released_at).length;
+    if (activeSignups > 0) return false;
+    const startMs = new Date(p.scheduled_date.slice(0, 10) + 'T' + (p.scheduled_time || '00:00:00')).getTime();
+    return startMs >= nowMs && startMs <= nowMs + 7 * 24 * 3600e3;
+  }).length;
+
+  function signOut() {
+    if (!confirm('Sign out?')) return;
+    // Oct 2 client: tell the server so the session (and a current shift) is closed.
+    api('/api/auth/logout', { method: 'POST' }).catch(() => {}).finally(() => { localStorage.clear(); window.location.reload(); });
+  }
+
+  // Live SMS-reply toaster. Polls /admin/sms-inbox every 20s; when the highest
+  // seen id increases, pop a toast. First poll seeds the baseline so we don't
+  // toast historical replies on page load.
+  //
+  // Tier-2 fix #8: the previous "first poll = seed and return" ate any reply
+  // that arrived between mount and first poll (up to 20 s window). Now we
+  // seed the baseline to the newest message whose created_at is <= mount time
+  // — anything newer than mount is treated as a real inbound and toasts even
+  // on the first poll.
+  const [replyToast, setReplyToast] = useState<{ id: number; who: string; body: string } | null>(null);
+  const seenSinceIdRef = useRef<number | null>(null);
+  const mountedAtRef = useRef<number>(Date.now());
+  const inboxQ = useQuery({
+    queryKey: ['sms-inbox-toast'],
+    queryFn: () => smsInbox.list(),
+    refetchInterval: 20_000,
+  });
+  useEffect(() => {
+    const rows = inboxQ.data?.data ?? [];
+    const top = rows[0];
+    if (!top) return;
+    if (seenSinceIdRef.current === null) {
+      // Seed from the newest message that already existed at mount time.
+      // Anything newer than mount time falls through to the toast branch.
+      const preMount = rows.find(
+        (r) => new Date(r.created_at).getTime() <= mountedAtRef.current,
+      );
+      seenSinceIdRef.current = preMount ? preMount.id : 0;
+    }
+    if (top.id > seenSinceIdRef.current) {
+      seenSinceIdRef.current = top.id;
+      const nm = `${top.first_name ?? ''} ${top.last_name ?? ''}`.trim();
+      const who = (nm ? `${nm}${top.unit_number != null ? ` #${top.unit_number}` : ''}` : (top.phone ?? 'Unknown'));
+      setReplyToast({ id: top.id, who, body: top.body.replace(/^\[SMS\]\s*/, '').slice(0, 240) });
+    }
+  }, [inboxQ.data]);
+
+  return (
+    <div className="min-h-screen bg-cream flex">
+      {/* LEFT NAV */}
+      <aside className="w-[280px] bg-forest-deep text-[#cfe0c8] flex-col shrink-0 hidden lg:flex lg:sticky lg:top-0 lg:self-start lg:h-screen">
+        <div className="px-3 pt-4 pb-3 flex items-center gap-3">
+          <span className="grid h-[38px] w-[38px] place-items-center rounded-[9px] bg-paper text-forest font-display font-extrabold text-[17px]">ז</span>
+          <span className="text-paper font-display font-semibold text-[17px]">Zeh L'Zeh</span>
+        </div>
+        <nav className="px-3 mt-2 flex-1 overflow-y-auto">
+          {visibleGroups.map((g) => (
+            <button key={g.key} onClick={() => openGroup(g)}
+                    className={cx('w-full flex items-center gap-3 px-3 py-3 rounded-[10px] text-[15px] font-bold haptic relative',
+                                  g.tabs.includes(tab) ? 'bg-paper/15 text-paper' : 'text-[#cfe0c8] hover:bg-paper/5')}>
+              <g.icon size={20} />
+              {g.label}
+              {g.key === 'messaging' && <SmsUnreadBadge />}
+            </button>
+          ))}
+
+          {/* Context list — adapts to the active tab. On Live Board this is
+              Places (suppliers). On Pickups it's the live pickup list, on
+              Volunteers the volunteer roster, on Suppliers the donor roster. */}
+          <SidebarContextList tab={tab}
+                              suppliers={supplierPlaces}
+                              suppliersLoading={suppliers.isLoading}
+                              volunteers={volunteers.data?.data ?? []}
+                              volunteersLoading={volunteers.isLoading}
+                              livePickups={livePickups}
+                              onPick={(t: TabKey) => setTab(t)} />
+        </nav>
+
+        <div className="px-3 py-3 border-t border-paper/10">
+          <button onClick={signOut} className="w-full flex items-center gap-2 px-3 py-2 rounded-[10px] text-[12px] font-bold text-[#a9c2a0] hover:bg-paper/5 haptic">
+            <LogOut size={15} /> Sign out
+          </button>
+        </div>
+      </aside>
+
+      {/* MAIN */}
+      <main className="flex-1 min-w-0 flex flex-col">
+        <SmsPausedGlobalBanner onOpen={() => setTab('holiday-sms')} />
+        {/* Oct 2 client fix (UI plan §1): the sidebar is desktop-only, so
+            tablets and phones had no menu at all. Scrollable menu bar. */}
+        <nav className="lg:hidden flex gap-1.5 overflow-x-auto bg-forest-deep px-2 py-2">
+          {visibleGroups.map((g) => (
+            <button key={g.key} onClick={() => openGroup(g)}
+                    className={cx('shrink-0 inline-flex items-center gap-1.5 rounded-[9px] px-3 py-2 text-[13px] font-bold haptic',
+                                  g.tabs.includes(tab) ? 'bg-paper/15 text-paper' : 'text-[#cfe0c8]')}>
+              <g.icon size={16} /> {g.label}
+            </button>
+          ))}
+        </nav>
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-line bg-paper">
+          <div className="flex items-baseline gap-4">
+            <div>
+              <div className="font-display font-semibold text-[20px] tracking-[-0.01em] flex items-center gap-2">
+                {TAB_TITLE[tab]}
+                {tab === 'live' && (
+                  <span
+                    aria-label={liveOpen ? 'Live updates connected' : 'Live updates disconnected — polling'}
+                    title={liveOpen ? 'Live updates: connected' : 'Live updates: disconnected (still polling every 30s)'}
+                    className={cx(
+                      'inline-block h-2.5 w-2.5 rounded-full',
+                      liveOpen
+                        ? 'bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.15)]'
+                        : 'bg-neutral-400/60',
+                    )}
+                  />
+                )}
+              </div>
+              <div className="text-[12.5px] text-muted">
+                {TAB_SUB[tab]}
+                {/* abc889 (Aug 20): the "N upcoming" trailer was a shifts-tab
+                    stat that leaked into every other page's header. Only
+                    surface it where it's contextually meaningful.
+                    xyz127 (Aug 23): on the Pickups tab specifically, using
+                    the current-tab-filtered `upcomingCount` produced a
+                    misleading "0 upcoming" whenever the visible sub-tab
+                    happened to be empty (e.g. Attention=0) even though 193
+                    pickups sat in the Upcoming sub-tab. Use the real
+                    unfiltered count from pickupsSubCounts on that tab. */}
+                {tab === 'pickups' && (
+                  <> · {pickupsSubCounts.upcoming} upcoming</>
+                )}
+                {(tab === 'live' || tab === 'shifts') && (
+                  <> · {upcomingCount} upcoming</>
+                )}
+              </div>
+            </div>
+            {tab === 'live' && (
+              <div className="flex items-center gap-2">
+                {overdueCount > 0 && (
+                  <button onClick={() => setTab('pickups')}
+                          title="Filter to pickups waiting for a driver"
+                          className="haptic flex items-baseline gap-1.5 rounded-[10px] bg-amber/10 border border-amber/40 px-2.5 py-1">
+                    <span className="font-display font-bold text-[15px] text-forest-deep leading-none">{overdueCount}</span>
+                    <span className="text-[10.5px] font-extrabold uppercase tracking-[.06em] text-forest-deep">Waiting</span>
+                  </button>
+                )}
+                {unassignedThisWeek > 0 && (
+                  // Tier-2 fix #6: chip counts FUTURE (next-7-day) unassigned
+                  // pickups. Landing on the default "Needs attention" sub-tab
+                  // (past-window only) showed a mismatched list. Route to the
+                  // "Upcoming" sub-tab so the list matches the chip's number.
+                  <button onClick={() => { setTab('pickups'); setPickupsSubTab('list'); }}
+                          className="haptic flex items-baseline gap-1.5 rounded-[10px] bg-amber-soft border border-amber/40 px-2.5 py-1">
+                    <span className="font-display font-bold text-[15px] text-[#9a7415] leading-none">{unassignedThisWeek}</span>
+                    <span className="text-[10.5px] font-extrabold uppercase tracking-[.06em] text-[#9a7415]">Unassigned · 7d</span>
+                  </button>
+                )}
+                {/* Oct 2 client fix (UI plan §2): page-specific Add Pickup. */}
+                {writeOk && (
+                  <button onClick={() => setShowQuickAdd(true)}
+                          className="haptic flex items-center gap-1 rounded-[10px] bg-forest text-paper px-2.5 py-1 text-[11.5px] font-bold shadow-ctag hover:brightness-110">
+                    <Plus size={13} /> Add Pickup
+                  </button>
+                )}
+                {/* Issue #17 — reveal covered pickups when needed. Default hidden. */}
+                <button onClick={() => setShowCoveredOnLive((v) => !v)}
+                        title={showCoveredOnLive ? 'Hide fully-covered pickups' : 'Also show fully-covered pickups'}
+                        className={cx('haptic flex items-baseline gap-1.5 rounded-[10px] px-2.5 py-1 border',
+                          showCoveredOnLive
+                            ? 'bg-sage border-forest/30 text-forest-deep'
+                            : 'bg-cream border-line text-muted hover:text-forest-deep')}>
+                  <span className="text-[10.5px] font-extrabold uppercase tracking-[.06em]">
+                    {showCoveredOnLive ? '✓ Showing covered' : 'Show covered'}
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            {/* Oct 2 client fix (UI plan §1): global New / search / download
+                removed — each page has its own add, search and export. */}
+            <span className="text-[11px] font-bold py-1.5 px-3 rounded-full bg-clay-soft text-clay">● Live</span>
+            <span className="text-[12.5px] text-muted">{user?.firstName} {user?.lastName}</span>
+            {!writeOk && <span className="text-[10.5px] font-extrabold uppercase tracking-[.06em] text-muted bg-line/70 px-2 py-0.5 rounded-full" title="Your role is view-only">Read-only</span>}
+          </div>
+        </div>
+
+        {/* Split: map + feed (the map only shows on dispatch tabs; on admin/
+            chat/settings/etc. the right pane takes the full width). */}
+        <div className="flex-1 flex flex-col lg:flex-row min-h-0">
+          {/* Sep 11 fix: hide the map on tablet/phone (< lg=1024px). On
+              narrow viewports the map + fixed 480px sidebar overlapped
+              or overflowed, and clicks on pickup cards landed on the map
+              instead of the card. Desktop layout unchanged. */}
+          {showMap && (
+            <div className="h-[55vh] lg:h-auto lg:flex-1 border-b lg:border-b-0 lg:border-r border-line">
+              <CoordMap
+                rows={showPickups ? (pickups.data?.data ?? []) : []}
+                suppliers={showSuppliers ? (suppliers.data?.data ?? []) : []}
+                showVolunteers={showVolunteers}
+                onOpen={(id) => setModalPickupId(id)} />
+            </div>
+          )}
+
+          <div className={cx('overflow-y-auto px-5 py-5 bg-cream/50',
+                             showMap ? 'flex-1 min-w-0 lg:flex-none lg:w-[480px] lg:shrink-0' : 'flex-1 min-w-0')}>
+            {/* Fork S · Aug 7 — occasional pickups awaiting dispatcher
+                confirm/decline. Only rendered on the Live Board; returns null
+                when nothing needs confirmation today. */}
+            {currentGroup && currentGroup.tabs.length > 1 && (
+              <div className="mb-4 flex items-center gap-1.5 border-b border-line overflow-x-auto">
+                {currentGroup.tabs.map((t) => (
+                  <button key={t} onClick={() => setTab(t)}
+                          className={cx('haptic px-3 py-2 text-[13px] font-bold border-b-2 -mb-px whitespace-nowrap inline-flex items-center gap-1.5',
+                                        tab === t ? 'border-forest text-forest' : 'border-transparent text-muted hover:text-ink')}>
+                    {NAV_ITEMS.find((it) => it.key === t)?.label ?? t}
+                    {t === 'chat-stores' && <UnreadBadge kind="stores" />}
+                    {t === 'chat-volunteers' && <UnreadBadge kind="volunteers" />}
+                  </button>
+                ))}
+              </div>
+            )}
+            {tab === 'live' && <PickupSearchBar value={pickupSearch} onChange={setPickupSearch} />}
+            {tab === 'live' && <OnDutyBanner setTab={setTab} setPickupsSubTab={setPickupsSubTab} />}
+            {tab === 'live' && <div id="needs-confirmation-anchor"><NeedsConfirmationSection /></div>}
+            {tab === 'calendar' ? (
+              <CalendarPanel onOpenScheduleDownload={() => setShowScheduleDownload(true)}
+                             onNavigateTab={(t, id) => { setTab(t as TabKey); if (id != null) setOpenPersonId(id); }}
+                             onOpenPickup={(id) => setModalPickupId(id)} />
+            ) : tab === 'suppliers' ? (
+              <SuppliersPanel rows={suppliers.data?.data ?? []} refetch={() => suppliers.refetch()}
+                              openId={openPersonId} onOpenConsumed={() => setOpenPersonId(null)} />
+            ) : tab === 'volunteers' ? (
+              <VolunteersPanel rows={volunteers.data?.data ?? []} refetch={() => volunteers.refetch()}
+                               openId={openPersonId} onOpenConsumed={() => setOpenPersonId(null)} />
+            ) : tab === 'steady' ? (
+              <SteadyPickupsPanel />
+            ) : tab === 'shifts' ? (
+              <ShiftsPanel />
+            ) : tab === 'center-help' ? (
+              <CenterHelpStandalonePanel />
+            ) : tab === 'app-usage' ? (
+              <AppUsagePanel />
+            ) : tab === 'kiosk-activity' ? (
+              <KioskActivityPanel />
+            ) : tab === 'settings' ? (
+              <SettingsPanel />
+            ) : tab === 'neighborhoods' ? (
+              <NeighborhoodsPanel />
+            ) : tab === 'change-password' ? (
+              <ChangePasswordPanel />
+            ) : tab === 'my-shift' ? (
+              <MyShiftPanel />
+            ) : tab === 'holiday-sms' ? (
+              <div className="space-y-3"><SmsPauseBanner /><JewishCalendarPanel /></div>
+            ) : tab === 'tasks' ? (
+              <TasksPanel />
+            ) : tab === 'recruiting' ? (
+              <RecruitingPanel />
+            ) : tab === 'coverage' ? (
+              <CoveragePanel />
+            ) : tab === 'reports' ? (
+              <ReportsPanel onNavigateTab={(t) => setTab(t as TabKey)} />
+            ) : tab === 'chat-stores' ? (
+              <ChatList kind="stores" />
+            ) : tab === 'chat-volunteers' ? (
+              <ChatList kind="volunteers" />
+            ) : tab === 'sms-combo' ? (
+              <SmsComboPanel />
+            ) : tab === 'dispatchers-combo' ? (
+              <DispatchersComboPanel />
+            ) : tab === 'prospects' ? (
+              <ProspectsPanel />
+            ) : pickups.isLoading ? (
+              <div className="text-[13px] text-muted">Loading…</div>
+            ) : tab === 'pickups' ? (
+              // ── Pickups tab: always-visible sub-tabstrip. Empty state per
+              //    sub-tab renders as a small quiet card so the tabs stay
+              //    clickable / visible even when the current bucket is empty.
+              <>
+                <PickupSearchBar value={pickupSearch} onChange={setPickupSearch} />
+                <PickupsSubTabStrip current={pickupsSubTab} onChange={setPickupsSubTab} counts={pickupsSubCounts} />
+                {pickupsSubTab === 'calendar' ? (
+                  <CalendarPanel onOpenScheduleDownload={() => setShowScheduleDownload(true)}
+                                 onNavigateTab={(t, id) => { setTab(t as TabKey); if (id != null) setOpenPersonId(id); }}
+                                 onOpenPickup={(id) => setModalPickupId(id)} />
+                ) : pickupsSubTab === 'recurring' ? (
+                  <SteadyPickupsPanel />
+                ) : pickupsSubTab === 'list' || pickupsSubTab === 'history' ? (
+                  <PickupsRangeView key={pickupsSubTab} mode={pickupsSubTab} search={pickupSearch}
+                                    onOpen={(id) => setModalPickupId(id)}
+                                    onAssign={writeOk ? (p) => setPickerFor(p) : undefined}
+                                    onEdit={writeOk ? (p) => editPickup(p) : undefined}
+                                    onDuplicate={writeOk ? (p) => setDuplicatingPickup(p) : undefined}
+                                    onAdd={writeOk ? () => setShowQuickAdd(true) : undefined} />
+                ) : groups.length === 0 ? (
+                  <div className="rounded-[14px] border border-line bg-paper px-4 py-3 text-[13px] text-muted">
+                    {PICKUPS_SUB_EMPTY[pickupsSubTab]}
+                  </div>
+                ) : (
+                  groups.map((g) => (
+                    <section key={g.key} className={cx('mb-5', (g as any).overdue && 'p-3 rounded-[14px] bg-amber/5 border border-amber/40')}>
+                      <div className={cx('text-[11px] font-extrabold uppercase tracking-[.05em] mb-2.5',
+                                          (g as any).overdue ? 'text-forest-deep' : 'text-muted')}>
+                        {g.label}
+                      </div>
+                      <div className="space-y-2.5">
+                        {g.items.map((p) => (
+                          <CoordRow key={p.id} p={p}
+                                    onAssign={writeOk ? () => setPickerFor(p) : () => {}}
+                                    onOpen={() => setModalPickupId(p.id)}
+                                    onEdit={writeOk ? () => editPickup(p) : undefined}
+                                    onDuplicate={writeOk ? () => setDuplicatingPickup(p) : undefined}
+                                    allowDriverCancel={writeOk} />
+                        ))}
+                      </div>
+                    </section>
+                  ))
+                )}
+              </>
+            ) : groups.length === 0 ? (
+              <div className="text-center py-16">
+                <div className="mx-auto h-16 w-16 rounded-2xl bg-sage grid place-items-center mb-4">
+                  <LayoutGrid size={30} className="text-forest" />
+                </div>
+                <div className="font-display font-semibold text-[18px] text-ink">
+                  {tab === 'live' ? 'All quiet for now' : 'No pickups scheduled'}
+                </div>
+                <p className="text-[13.5px] text-muted mt-2 max-w-[38ch] mx-auto">
+                  {tab === 'live'
+                    ? 'Nothing left for today. Switch to Pickups for the 7-day view.'
+                    : 'No pickups in the next 7 days. Try widening the range from the Pickups tab.'}
+                </p>
+                {writeOk && (
+                  <button onClick={() => setShowQuickAdd(true)}
+                          className="haptic mt-5 inline-flex items-center gap-1.5 text-[12.5px] font-bold bg-forest text-paper rounded-[10px] px-3.5 py-2 shadow-ctag hover:brightness-110">
+                    <Plus size={13} /> New pickup
+                  </button>
+                )}
+              </div>
+            ) : (
+              <>
+                {tab === 'live' && (
+                  <div id="live-pickups-feed" className="text-[11px] font-extrabold uppercase tracking-[.05em] text-clay mb-3 scroll-mt-4">
+                    {/* Tier-2 fix #7: N was livePickups (pre-coverage filter),
+                        M was allPickups (whole 60-day+30-day range, unrelated
+                        to "rest of today"). Now: N = actually-shown feed rows,
+                        M = all rest-of-today active pickups. So "3 of 6" reads
+                        as "3 shown, 6 exist in scope" (the other 3 are covered
+                        and hidden by default). */}
+                    Showing the rest of today · {feedPickups.length} of {livePickups.length}
+                  </div>
+                )}
+                {groups.map((g) => (
+                  <section key={g.key} className={cx('mb-5', (g as any).overdue && 'p-3 rounded-[14px] bg-amber/5 border border-amber/40')}>
+                    <div className={cx('text-[11px] font-extrabold uppercase tracking-[.05em] mb-2.5',
+                                        (g as any).overdue ? 'text-forest-deep' : 'text-muted')}>
+                      {g.label}
+                    </div>
+                    <div className="space-y-2.5">
+                      {g.items.map((p) => (
+                        <CoordRow key={p.id} p={p}
+                                  onAssign={writeOk ? () => setPickerFor(p) : () => {}}
+                                  onOpen={() => setModalPickupId(p.id)}
+                                  onEdit={writeOk ? () => editPickup(p) : undefined} />
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </>
+            )}
+          </div>
+        </div>
+      </main>
+
+      {pickerFor && (
+        <DriverPickerModal
+          pickup={pickerFor}
+          volunteers={volunteers.data?.data ?? []}
+          onClose={() => setPickerFor(null)}
+          onChanged={() => { qc.invalidateQueries({ queryKey: ['admin-pickups'] }); }}
+        />
+      )}
+
+      {showQuickAdd && (
+        <QuickPickupModal
+          onClose={() => setShowQuickAdd(false)}
+          onDone={() => { setShowQuickAdd(false); qc.invalidateQueries({ queryKey: ['admin-pickups'] }); }}
+        />
+      )}
+
+      {recurringEditFor && (
+        <RecurringEditChoiceModal
+          p={recurringEditFor}
+          loading={steadyTemplates.isLoading}
+          onOccurrence={() => { setEditingPickup(recurringEditFor); setRecurringEditFor(null); }}
+          onSchedule={(fromThisDate) => {
+            const row = ((steadyTemplates.data as any)?.data ?? []).find((r: any) => Number(r.id) === Number(recurringEditFor.steady_pickup_id));
+            if (!row) { alert("Couldn't load this recurring schedule. Edit it from Pickups → Recurring Templates."); return; }
+            setSteadyEdit({ row, applyFrom: fromThisDate ? String(recurringEditFor.scheduled_date).slice(0, 10) : null });
+            setRecurringEditFor(null);
+          }}
+          onClose={() => setRecurringEditFor(null)} />
+      )}
+      {steadyEdit && (
+        <SteadyForm row={steadyEdit.row} applyFrom={steadyEdit.applyFrom}
+          onCancel={() => setSteadyEdit(null)}
+          onDone={() => { setSteadyEdit(null); qc.invalidateQueries({ queryKey: ['admin-steady'] }); qc.invalidateQueries({ queryKey: ['admin-pickups'] }); qc.invalidateQueries({ queryKey: ['admin-pickups-range'] }); }} />
+      )}
+      {duplicatingPickup && (
+        <QuickPickupModal
+          duplicateFrom={duplicatingPickup}
+          onClose={() => setDuplicatingPickup(null)}
+          onDone={() => { setDuplicatingPickup(null); qc.invalidateQueries({ queryKey: ['admin-pickups'] }); qc.invalidateQueries({ queryKey: ['admin-pickups-range'] }); }}
+        />
+      )}
+      {editingPickup && (
+        <QuickPickupModal
+          pickup={editingPickup}
+          onClose={() => setEditingPickup(null)}
+          onDone={() => { setEditingPickup(null); qc.invalidateQueries({ queryKey: ['admin-pickups'] }); }}
+        />
+      )}
+
+      {/* Per-pickup SMS modal render removed alongside the card button — see setSmsPickup note above. */}
+      {smsPickup && null}
+
+      {showNewSupplierStandalone && (
+        <SupplierForm row={null}
+          onCancel={() => setShowNewSupplierStandalone(false)}
+          onDone={() => { setShowNewSupplierStandalone(false); qc.invalidateQueries({ queryKey: ['admin-suppliers'] }); }} />
+      )}
+
+      {showNewSteady && (
+        <SteadyForm row={null}
+          onCancel={() => setShowNewSteady(false)}
+          onDone={() => { setShowNewSteady(false); qc.invalidateQueries({ queryKey: ['admin-steady'] }); qc.invalidateQueries({ queryKey: ['admin-pickups'] }); }} />
+      )}
+
+      {showScheduleDownload && (
+        <ScheduleDownloadModal onClose={() => setShowScheduleDownload(false)} />
+      )}
+
+      {/* C1 Aug 13 — pickup detail rendered in a full-screen modal so office
+          staff never leave the Live Board. Click backdrop or × to close. The
+          /admin/pickup/:id deep-link route still works (AdminPickupDetail
+          falls back to useParams when no pickupIdOverride prop is given). */}
+      {modalPickupId != null && (
+        <div onClick={() => setModalPickupId(null)}
+             className="fixed inset-0 z-[2000] bg-ink/60 flex items-start justify-center p-4 sm:p-6 overflow-y-auto">
+          <div onClick={(e) => e.stopPropagation()}
+               className="relative bg-paper rounded-[18px] shadow-lift w-full max-w-[1000px] my-4">
+            <button onClick={() => setModalPickupId(null)}
+                    className="haptic absolute top-3 right-3 z-10 grid h-9 w-9 place-items-center rounded-full bg-cream border border-line hover:bg-paper"
+                    aria-label="Close pickup detail">
+              <X size={18} />
+            </button>
+            <AdminPickupDetail pickupIdOverride={modalPickupId} onClose={() => setModalPickupId(null)} />
+          </div>
+        </div>
+      )}
+
+      {/* SMS-reply live toaster (upper-right). Clicking jumps to the inbox. */}
+      {replyToast && (
+        <div className="fixed top-4 right-4 z-[3000] w-[360px] rounded-[14px] border-2 border-sky bg-paper shadow-lift p-4 animate-in fade-in slide-in-from-top-4">
+          <div className="flex items-start gap-2">
+            <div className="text-[18px]">📩</div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[11px] font-extrabold uppercase tracking-[.05em] text-sky-deep">New SMS reply</div>
+              <div className="font-bold text-[14px] mt-0.5">{replyToast.who}</div>
+              <div className="text-[13px] text-ink mt-1 whitespace-pre-wrap">{replyToast.body}</div>
+              <div className="flex gap-2 mt-3">
+                <button onClick={() => { setTab('sms-combo'); setReplyToast(null); }}
+                        className="haptic text-[12px] font-bold bg-sky text-paper px-3 py-1.5 rounded-[8px]">
+                  Open threads →
+                </button>
+                <button onClick={() => setReplyToast(null)}
+                        className="haptic text-[12px] font-bold text-muted px-3 py-1.5 rounded-[8px] hover:bg-cream/60">
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+/**
+ * Driver picker — supports adding additional drivers (so a single pickup can
+ * have 2+ volunteers), removing a specific assignment, and a confirmation
+ * step whenever the coordinator picks someone while there's already an
+ * existing driver. The confirmation guards against mistakenly DOUBLING a
+ * pickup that should have just one driver.
+ */
+/**
+ * PickupSmsModal — office picks drivers, sees a templated SMS preview, then
+ * sends. Uses /api/sms/pickup-broadcast which formats the message with all the
+ * store/where/when/what fields and appends "Reply YES to accept".
+ */
+// Kept exported so tsc (noUnusedLocals) doesn't drop the definition and so a
+// future re-enable of per-pickup SMS is a one-line render change.
+export function PickupSmsModal({ pickup, volunteers, onClose }: {
+  pickup: PiRow; volunteers: any[]; onClose: () => void;
+}) {
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [q, setQ] = useState('');
+  const [extraNote, setExtraNote] = useState('');
+  const [status, setStatus] = useState<string | null>(null);
+
+  const send = useMutation({
+    mutationFn: () => broadcast.pickupSms({
+      pickupIds: [pickup.id],
+      volunteerIds: [...selected],
+      extraNote: extraNote.trim() || null,
+    }),
+    onSuccess: (res) => {
+      setStatus(`Sent to ${res.data.sent}${res.data.failed ? ` · ${res.data.failed} failed` : ''}`);
+      setTimeout(onClose, 2000);
+    },
+    onError: (e: any) => setStatus(e?.message ?? 'send failed'),
+  });
+
+  const filtered = volunteers
+    .filter((v) => !v.deletedAt && v.status !== 'inactive' && v.isAvailable !== false)
+    .filter((v) => {
+      if (!q.trim()) return true;
+      const hay = `${v.firstName} ${v.lastName} ${v.phonePrimary ?? ''} ${v.locationArea ?? ''}`.toLowerCase();
+      return hay.includes(q.trim().toLowerCase());
+    })
+    .slice(0, 200);
+
+  function toggle(id: number) {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setSelected(next);
+  }
+
+  return (
+    <div onClick={onClose} className="fixed inset-0 z-[2000] bg-ink/50 flex items-start justify-center pt-16 px-4">
+      <div onClick={(e) => e.stopPropagation()}
+           className="relative z-[2001] bg-paper rounded-[18px] shadow-lift border border-line w-full max-w-lg max-h-[85vh] overflow-hidden flex flex-col">
+        <div className="px-5 py-3 border-b border-line">
+          <div className="font-display font-semibold text-[18px]">Text pickup to drivers</div>
+          <div className="text-[12px] text-muted mt-0.5">
+            {pickup.suppliers || pickup.contact_name || 'Pickup'} · {pickup.scheduled_date} {fmtTime(pickup.scheduled_time?.slice(0, 5) ?? '')}
+          </div>
+        </div>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter drivers by name, area, phone…"
+               className="mx-4 mt-3 mb-2 rounded-[10px] border border-line px-3 py-2 text-[13.5px] outline-none focus:border-forest" />
+        <div className="flex-1 overflow-y-auto px-2 py-1 border-t border-line">
+          {filtered.map((v) => {
+            const on = selected.has(v.id);
+            return (
+              <button key={v.id} onClick={() => toggle(v.id)}
+                      className={cx('w-full flex items-center gap-3 px-3 py-2 text-left rounded-[10px] hover:bg-cream/40 haptic',
+                                    on && 'bg-sage/50')}>
+                <input type="checkbox" checked={on} readOnly className="h-4 w-4 accent-forest" />
+                <div className="flex-1 min-w-0">
+                  <div className="font-bold text-[13.5px] truncate">
+                    {v.firstName} {v.lastName}
+                    {(v as any).unitNumber != null && <span className="ml-1.5 text-muted font-semibold text-[11.5px]">#{(v as any).unitNumber}</span>}
+                  </div>
+                  <div className="text-[11.5px] text-muted truncate">{v.phonePrimary ?? '—'} · {v.locationArea ?? 'no area'}</div>
+                </div>
+              </button>
+            );
+          })}
+          {filtered.length === 0 && <div className="text-center text-muted text-[12.5px] py-6">No drivers match.</div>}
+        </div>
+        <div className="border-t border-line px-4 py-3 space-y-2">
+          <textarea value={extraNote} onChange={(e) => setExtraNote(e.target.value)} rows={2}
+                    placeholder="Optional note appended to the SMS…"
+                    className="w-full rounded-[10px] border border-line px-3 py-2 text-[13px] outline-none focus:border-forest resize-none" />
+          <div className="text-[11px] text-muted italic">
+            SMS will include store, address, time, food, drop-off location, and "Reply YES to accept."
+          </div>
+          {status && <div className={cx('text-[12px] font-bold', send.error ? 'text-clay' : 'text-forest')}>{status}</div>}
+          <div className="flex items-center justify-between">
+            <span className="text-[12px] font-bold text-muted">{selected.size} selected</span>
+            <div className="flex gap-2">
+              <button onClick={onClose} className="haptic text-[12.5px] font-bold border border-line px-3 py-2 rounded-[10px]">Cancel</button>
+              <button onClick={() => send.mutate()} disabled={selected.size === 0 || send.isPending}
+                      className="haptic text-[12.5px] font-bold bg-forest text-paper px-4 py-2 rounded-[10px] shadow-ctag disabled:opacity-50">
+                {send.isPending ? 'Sending…' : `Send SMS to ${selected.size}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function DriverPickerModal({ pickup, volunteers, onClose, onChanged }: {
+  pickup: PiRow; volunteers: any[]; onClose: () => void; onChanged: () => void;
+}) {
+  const qc = useQueryClient();
+  const [q, setQ] = useState('');
+  const [pending, setPending] = useState<{ v: any } | null>(null); // confirmation target
+
+  const addMut = useMutation({
+    mutationFn: (vid: number) => api(`/api/pickup-instances/${pickup.id}/volunteers`,
+      { method: 'POST', body: JSON.stringify({ volunteerId: vid }) }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin-pickups'] }); onChanged(); onClose(); },
+  });
+  const removeMut = useMutation({
+    mutationFn: (vid: number) => api(`/api/pickup-instances/${pickup.id}/volunteers/${vid}`, { method: 'DELETE' }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin-pickups'] }); onChanged(); },
+  });
+  const slotsMut = useMutation({
+    mutationFn: (n: number) => api(`/api/pickup-instances/${pickup.id}`,
+      { method: 'PATCH', body: JSON.stringify({ slotsCapacity: n }) }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin-pickups'] }); onChanged(); },
+  });
+
+  const current = pickup.signups ?? [];
+  const currentIds = new Set(current.map((s: any) => Number(s.volunteer_id)));
+
+  const filtered = volunteers
+    .filter((v) => !v.deletedAt && v.status !== 'inactive')
+    .filter((v) => {
+      if (!q.trim()) return true;
+      const hay = `${v.firstName} ${v.lastName} ${v.phonePrimary ?? ''} ${v.locationArea ?? ''}`.toLowerCase();
+      return hay.includes(q.trim().toLowerCase());
+    })
+    .slice(0, 80);
+
+  const slotsNeeded = pickup.slots_capacity ?? 1;
+  function handlePick(v: any) {
+    if (currentIds.has(v.id)) return;             // already on it
+    // No confirm while we're still under the planned driver count — that's
+    // exactly what was scheduled. Confirm only when going BEYOND the plan
+    // (e.g. pickup set for 1 driver but coordinator adds a second).
+    if (current.length < slotsNeeded) {
+      addMut.mutate(v.id);
+      return;
+    }
+    setPending({ v });
+  }
+  function confirmAdd() {
+    if (!pending) return;
+    addMut.mutate(pending.v.id);
+    setPending(null);
+  }
+
+  return (
+    <div onClick={onClose} className="fixed inset-0 z-[2000] bg-ink/50 flex items-start justify-center pt-16 px-4">
+      <div onClick={(e) => e.stopPropagation()}
+           className="relative z-[2001] bg-paper rounded-[18px] shadow-lift border border-line w-full max-w-md max-h-[85vh] overflow-hidden flex flex-col">
+        <div className="px-5 py-3 border-b border-line">
+          <div className="font-display font-semibold text-[18px]">Drivers on this pickup</div>
+          <div className="text-[12px] text-muted mt-0.5">
+            {pickup.suppliers || 'Pickup'} · {pickup.scheduled_date} {fmtTime(pickup.scheduled_time?.slice(0, 5) ?? '')}
+          </div>
+          <div className="mt-2.5 flex items-center gap-2">
+            <span className="text-[11.5px] font-bold text-muted">Drivers needed:</span>
+            <div className="flex items-center gap-1.5 bg-cream/60 rounded-full border border-line px-1.5 py-0.5">
+              <button onClick={() => slotsMut.mutate(Math.max(1, (pickup.slots_capacity ?? 1) - 1))}
+                      disabled={slotsMut.isPending || (pickup.slots_capacity ?? 1) <= 1}
+                      className="grid h-6 w-6 place-items-center rounded-full text-muted hover:bg-paper disabled:opacity-40 haptic">−</button>
+              <span className="font-display font-bold text-[14px] text-forest w-5 text-center">{pickup.slots_capacity ?? 1}</span>
+              {/* Tier-2 fix #12: Math.min(20, …) already clamped the value
+                  server-side, but the button itself stayed clickable at the
+                  cap. Disable at 20 so the UI reflects the real ceiling. */}
+              <button onClick={() => slotsMut.mutate(Math.min(20, (pickup.slots_capacity ?? 1) + 1))}
+                      disabled={slotsMut.isPending || (pickup.slots_capacity ?? 1) >= 20}
+                      className="grid h-6 w-6 place-items-center rounded-full text-forest hover:bg-paper disabled:opacity-40 haptic">+</button>
+            </div>
+            {slotsMut.isPending && <span className="text-[11px] text-muted">saving…</span>}
+          </div>
+        </div>
+
+        {/* Currently assigned, with remove buttons */}
+        {current.length > 0 && (
+          <div className="px-4 py-3 border-b border-line bg-sage/30">
+            <div className="text-[10.5px] font-extrabold uppercase tracking-[.05em] text-forest mb-2">Currently assigned</div>
+            <div className="space-y-1.5">
+              {current.map((s: any) => {
+                const color = driverHue(`${s.first_name} ${s.last_name}`);
+                return (
+                  <div key={s.volunteer_id} className="flex items-center gap-2 bg-paper rounded-[10px] border border-sage-line px-2.5 py-1.5">
+                    <span className="grid h-7 w-7 place-items-center rounded-full text-paper text-[10px] font-bold shrink-0" style={{ background: color }}>
+                      {(s.first_name?.[0] ?? '') + (s.last_name?.[0] ?? '')}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-bold text-[13px] truncate">
+                        {s.first_name} {s.last_name}
+                        {s.unit_number != null && <span className="ml-1.5 text-muted font-semibold text-[11px]">#{s.unit_number}</span>}
+                      </div>
+                      <div className="text-[10.5px] text-muted">{s.role === 'backup' ? 'Backup' : 'Primary'} · {s.assignment_status}</div>
+                    </div>
+                    <button onClick={() => { if (confirm(`Remove ${s.first_name} ${s.last_name} from this pickup?`)) removeMut.mutate(Number(s.volunteer_id)); }}
+                            className="text-clay grid h-7 w-7 place-items-center rounded-full hover:bg-clay-soft haptic">
+                      <X size={13} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className="p-3 border-b border-line">
+          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search drivers by name, phone, area…"
+                 className="w-full rounded-[10px] border-[1.4px] border-line bg-paper px-3 py-2.5 text-[13.5px] outline-none focus:border-forest" />
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          {filtered.length === 0 ? (
+            <div className="text-[13px] text-muted text-center py-8">No drivers match.</div>
+          ) : filtered.map((v) => {
+            const color = driverHue(`${v.firstName} ${v.lastName}`);
+            const already = currentIds.has(v.id);
+            return (
+              <button key={v.id} onClick={() => handlePick(v)} disabled={already || addMut.isPending}
+                      className={cx('w-full text-left px-4 py-3 border-b border-line last:border-b-0 haptic flex items-center gap-3',
+                                    already ? 'bg-cream/60 cursor-not-allowed' : 'hover:bg-cream/40')}>
+                <span className="grid h-9 w-9 place-items-center rounded-full text-paper text-[11px] font-bold shrink-0" style={{ background: color }}>
+                  {(v.firstName?.[0] ?? '') + (v.lastName?.[0] ?? '')}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="font-bold text-[13.5px] truncate">
+                    {v.firstName} {v.lastName}
+                    {(v as any).unitNumber != null && <span className="ml-1.5 text-muted font-semibold text-[11.5px]">#{(v as any).unitNumber}</span>}
+                  </div>
+                  <div className="text-[11px] text-muted truncate">
+                    {[v.phonePrimary, v.locationArea].filter(Boolean).join(' · ')}
+                  </div>
+                </div>
+                {already ? (
+                  <span className="text-[10.5px] font-bold py-0.5 px-2 rounded-full bg-sage text-forest">On pickup</span>
+                ) : v.hasCar ? (
+                  <span className="text-[10.5px] font-bold py-0.5 px-2 rounded-full bg-sage text-forest">Has car</span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="px-4 py-2 border-t border-line bg-cream/40 text-[11.5px] text-muted">
+          Tip — adding more drivers than planned ({slotsNeeded}) requires confirmation.
+        </div>
+      </div>
+
+      {/* Confirmation overlay — gates the 2nd+ driver add. */}
+      {pending && (
+        <div onClick={(e) => { e.stopPropagation(); setPending(null); }}
+             className="fixed inset-0 z-[2100] bg-ink/60 flex items-center justify-center px-4">
+          <div onClick={(e) => e.stopPropagation()}
+               className="bg-paper rounded-[18px] shadow-lift border border-line w-full max-w-sm p-5">
+            <div className="font-display font-semibold text-[18px]">Add an extra driver?</div>
+            <p className="text-[13px] text-ink mt-2">
+              <span className="font-bold">{pickup.suppliers || 'This pickup'}</span> is set for{' '}
+              <span className="font-bold">{slotsNeeded} driver{slotsNeeded === 1 ? '' : 's'}</span> and already has{' '}
+              <span className="font-bold">
+                {current.map((s: any) => `${s.first_name} ${s.last_name}${s.unit_number != null ? ` #${s.unit_number}` : ''}`).join(', ')}
+              </span>{' '}
+              assigned. Adding <span className="font-bold">{pending.v.firstName} {pending.v.lastName}</span> will mean{' '}
+              <span className="font-bold">{current.length + 1} drivers</span> on this pickup — one more than planned.
+            </p>
+            <p className="text-[12px] text-muted mt-2">If you really need more drivers, bump "Drivers needed" first to plan it explicitly, or click below to add this one as an extra.</p>
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={() => setPending(null)}
+                      className="haptic text-[13px] font-bold text-muted px-3 py-2 rounded-[10px] hover:bg-cream">
+                Cancel
+              </button>
+              <button onClick={confirmAdd} disabled={addMut.isPending}
+                      className="haptic text-[13px] font-bold text-paper bg-forest px-3 py-2 rounded-[10px] shadow-ctag disabled:opacity-50">
+                {addMut.isPending ? 'Adding…' : 'Yes, add as extra driver'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Visual section break in the left nav. The horizontal rule + colored,
+ * italicized label make it obvious at a glance where Operations ends and
+ * Chat / Admin begins (the previous flat all-sage layout blurred them).
+ */
+// Oct 2: SectionDivider removed — sidebar is the nine-item menu now (UI plan §1).
+
+const TAB_TITLE: Record<string, string> = {
+  calendar: 'Calendar',
+  live: 'Live Board', pickups: 'Pickups', volunteers: 'Volunteers',
+  suppliers: 'Suppliers', reports: 'Reports',
+  'chat-stores': 'Chat with Stores', 'chat-volunteers': 'Chat with Drivers',
+  steady: 'Steady Pickups', shifts: 'Dispatching Shifts', 'center-help': 'Center Help', 'kiosk-activity': 'Kiosk Activity', 'app-usage': 'App Usage', settings: 'Settings',
+  neighborhoods: 'Neighborhoods', coverage: 'Map View',
+  'change-password': 'Change password',
+  recruiting: 'Recruiting',
+  tasks: 'Task Management',
+  'holiday-sms': 'Holiday & SMS Controls',
+  'my-shift': 'My Shift',
+  'sms-combo': 'SMS Composer & Broadcast',
+  'dispatchers-combo': 'Dispatchers',
+  prospects: 'Prospects',
+};
+// Tier-2 fix #2: `live` subtitle was baked at module init, so the weekday /
+// date string stayed frozen on the value the page had when the module first
+// loaded. Compute it lazily via a getter so every render sees today's date.
+const TAB_SUB: Record<string, string> & { live: string } = {
+  calendar: 'Unified schedule — pickups, dispatcher shifts, center help',
+  get live() {
+    return 'Next 6 hours · ' + new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  },
+  pickups: 'All upcoming pickups', volunteers: 'Roster & availability',
+  suppliers: 'Donors & status', reports: 'Pickup counts & driver activity',
+  'chat-stores': 'In-app direct messages',
+  'chat-volunteers': 'In-app direct messages',
+  steady: 'Recurring pickup templates',
+  shifts: 'Dispatcher & driver shifts — 5-min-before reminders auto-fire',
+  signin: 'Drop-off sign-in sheet',
+  'app-usage': 'Who is actually opening the mobile app — last seen, platform, version',
+  'kiosk-activity': 'Live feed of drop-off kiosk sign-ins — driver, unit, items, labels printed',
+  neighborhoods: 'Wesley Hills, Pomona, Monsey Center, New Square, …',
+  coverage: 'Open and assigned pickups, suppliers and driver coverage',
+  'change-password': 'Update your own portal login',
+  recruiting: 'Calls, texts & follow-ups with volunteers and suppliers',
+  tasks: 'Tasks, recruiting and follow-ups — assignee, due date, priority, history',
+  'holiday-sms': 'Pause all automatic SMS · Shabbos / Yom Tov blackout windows',
+  'my-shift': 'Your dispatching shifts — sign in when your shift starts',
+  'sms-combo': 'Compose · threads · groups · broadcast — all SMS in one place',
+  'dispatchers-combo': 'Roster (On Deck / Assigned) · SMS access · staff roles',
+  settings: 'Admin · option lookups',
+  prospects: 'Potential stores · pipeline · convert to supplier',
+};
+
+function CoordMap({ rows, suppliers, showVolunteers, onOpen }: { rows: PiRow[]; suppliers: any[]; showVolunteers: boolean; onOpen: (id: number) => void }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const layer = useRef<L.LayerGroup | null>(null);
+
+  // Real driver positions reported from the APK via POST /api/me/location.
+  // Polled every 30s while the map is visible.
+  const driverPositions = useQuery({
+    queryKey: ['driver-locations'],
+    queryFn:  () => locationApi.driverLocations(),
+    refetchInterval: showVolunteers ? 30_000 : false,
+    enabled: showVolunteers,
+  });
+
+  useEffect(() => {
+    if (!ref.current || mapRef.current) return;
+    const m = L.map(ref.current, { zoomControl: false, zoomDelta: 0.5, attributionControl: false }).setView([41.115, -74.069], 12);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' }).addTo(m);
+    // Explicit topright placement so zoom controls don't collide with the
+    // topleft legend panel (long-standing overlay bug fix).
+    L.control.zoom({ position: 'topright' }).addTo(m);
+    layer.current = L.layerGroup().addTo(m);
+    mapRef.current = m;
+    return () => { m.remove(); mapRef.current = null; layer.current = null; };
+  }, []);
+
+  useEffect(() => {
+    const m = mapRef.current; const lyr = layer.current;
+    if (!m || !lyr) return;
+    lyr.clearLayers();
+
+    // abc871 (Aug 17): the map used to plot every one of ~300 pickups in the
+    // dataset AND up to 30 suppliers, each at a Math.random() offset. Result
+    // was a wall of pins across Monsey that told the dispatcher nothing.
+    //
+    // Now: only actionable pickups (unresolved, today + tomorrow), and only
+    // suppliers that actually appear in that scoped set. Positions are hashed
+    // from the supplier name so pins are stable across re-renders and the
+    // same donor lands in the same spot every time.
+    const _hash = (s: string) => {
+      let h = 5381;
+      for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+      return h;
+    };
+    const _pinFor = (key: string): [number, number] => {
+      const h = _hash(key || 'x');
+      // Deterministic offset from Monsey center. Two independent axes from
+      // upper and lower halves of the 32-bit hash so lat/lng aren't correlated.
+      const rx = ((h >>> 0) % 10000) / 10000 - 0.5;
+      const ry = ((h >>> 16) % 10000) / 10000 - 0.5;
+      return [41.115 + rx * 0.06, -74.069 + ry * 0.10];
+    };
+    // Tier-3 fix: two suppliers (or two pickups) with the same name-derived
+    // key would land on identical coords — only one pin would appear on the
+    // map because Leaflet stacks them perfectly. Track claims and nudge each
+    // duplicate by a small lat epsilon so all pins stay clickable and visible.
+    const _used = new Map<string, number>();
+    const _uniquePinFor = (key: string): [number, number] => {
+      const [lat, lng] = _pinFor(key);
+      const bucket = `${lat.toFixed(5)},${lng.toFixed(5)}`;
+      const n = _used.get(bucket) ?? 0;
+      _used.set(bucket, n + 1);
+      // ~5.5m per 0.00005 lat — enough to separate markers visually without
+      // moving them off the donor's neighborhood.
+      return [lat + n * 0.00005, lng + n * 0.00005];
+    };
+    const _todayNY = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const _tomorrowNY = new Date(Date.now() + 86_400_000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const _actionable = rows.filter((p) => {
+      const d = String(p.scheduled_date ?? '').slice(0, 10);
+      if (d !== _todayNY && d !== _tomorrowNY) return false;
+      const s = String(p.status ?? '').toLowerCase();
+      if (['completed', 'delivered', 'cancelled', 'missed'].includes(s)) return false;
+      return true;
+    });
+    const _supplierNamesOnMap = new Set(_actionable.map((p) => p.suppliers).filter(Boolean));
+    const _suppliersInScope = suppliers.filter((s: any) => _supplierNamesOnMap.has(s.name));
+
+    // Suppliers (donor sites) — small square markers, colored per supplier so
+    // a single donor has one color identity across Places list, map, and feed.
+    _suppliersInScope.forEach((s: any) => {
+      const color = supplierHue(s.name ?? String(s.id));
+      const initial = String(s.name ?? 'S').trim().slice(0, 1).toUpperCase();
+      const [lat, lng] = _uniquePinFor('supplier:' + (s.name ?? String(s.id)));
+      const html = `<div style="width:22px;height:22px;background:${color};border:2px solid #fff;border-radius:5px;display:grid;place-items:center;color:#fff;font-weight:800;font-size:11px;box-shadow:0 3px 6px rgba(0,0,0,.25)">${initial}</div>`;
+      L.marker([lat, lng], { icon: L.divIcon({ html, className: '', iconSize: [22, 22], iconAnchor: [11, 11] }) }).addTo(lyr);
+    });
+
+    // Pickups — teardrop pins with a "P" label, color = supplier color so
+    // each pickup carries its donor's color identity. Status shows on a
+    // small indicator ring inside the pin.
+    _actionable.forEach((p) => {
+      const color = p.suppliers ? supplierHue(p.suppliers) : '#2C5A3B';
+      const html = `<div style="position:relative;width:30px;height:36px;filter:drop-shadow(0 4px 4px rgba(0,0,0,.28))">
+        <svg width="30" height="36" viewBox="0 0 24 28" fill="${color}"><path d="M12 2C7.5 2 4 5.5 4 10c0 6 8 16 8 16s8-10 8-16c0-4.5-3.5-8-8-8z"/></svg>
+        <span style="position:absolute;inset:2px 0 0 0;display:grid;place-items:center;color:#fff;font-weight:800;font-size:11px">P</span>
+      </div>`;
+      const [lat, lng] = _uniquePinFor('pickup:' + (p.suppliers ?? String(p.id)));
+      L.marker([lat, lng], { icon: L.divIcon({ html, className: '', iconSize: [30, 36], iconAnchor: [15, 36] }) })
+        .on('click', () => onOpen(p.id))
+        .addTo(lyr);
+    });
+
+    // Drivers — circular badge with initials. Color = driverHue(name) so the
+    // same person carries one color across the Places list, the feed pill,
+    // and this marker. Tooltip on hover shows "Reported X min ago".
+    if (showVolunteers) {
+      (driverPositions.data?.data ?? []).forEach((d) => {
+        const fullName = `${d.first_name} ${d.last_name}`;
+        const color = driverHue(fullName);
+        const initials = ((d.first_name?.[0] ?? '') + (d.last_name?.[0] ?? '')).toUpperCase();
+        const lat = Number(d.lat); const lng = Number(d.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+        const ageMin = Math.max(0, Math.round((Date.now() - new Date(d.reported_at).getTime()) / 60000));
+        const stale = ageMin > 10;
+        const html = `<div style="position:relative;width:36px;height:36px">
+          <div style="position:absolute;inset:-6px;border-radius:50%;background:${color};opacity:${stale ? 0.10 : 0.20}"></div>
+          <div style="position:absolute;inset:0;border-radius:50%;background:${color};border:3px solid #fff;display:grid;place-items:center;color:#fff;font-weight:800;font-size:12px;box-shadow:0 3px 8px rgba(0,0,0,.30);${stale ? 'opacity:0.7;filter:grayscale(0.4);' : ''}">${initials}</div>
+        </div>`;
+        L.marker([lat, lng], { icon: L.divIcon({ html, className: '', iconSize: [36, 36], iconAnchor: [18, 18] }) })
+          .bindTooltip(`${fullName} · ${ageMin === 0 ? 'just now' : `${ageMin} min ago`}`, { direction: 'top' })
+          .addTo(lyr);
+      });
+    }
+  }, [rows, suppliers, onOpen, showVolunteers, driverPositions.data]);
+
+  return (
+    <div className="w-full h-full relative" style={{ background: '#F4F8F0' }}>
+      <div ref={ref} className="w-full h-full" />
+      {/* Legend — explains the symbology to the coordinator */}
+      <div className="absolute top-3 left-3 z-[400] bg-paper rounded-[12px] border border-line shadow-card px-3 py-2 text-[11px]">
+        <div className="font-extrabold uppercase tracking-[.05em] text-muted mb-1.5">Legend</div>
+        <div className="flex items-center gap-2 mb-1">
+          <span className="inline-grid place-items-center w-[18px] h-[22px] text-paper font-extrabold text-[10px] rounded-sm" style={{ background: '#2C5A3B', clipPath: 'polygon(50% 100%, 0 40%, 25% 0, 75% 0, 100% 40%)' }}>P</span>
+          <span className="text-ink font-semibold">Pickup</span>
+        </div>
+        <div className="flex items-center gap-2 mb-1">
+          <span className="inline-grid place-items-center w-[18px] h-[18px] text-paper font-extrabold text-[10px] rounded-[4px]" style={{ background: '#3E6F8E' }}>S</span>
+          <span className="text-ink font-semibold">Supplier</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="inline-grid place-items-center w-[18px] h-[18px] text-paper font-extrabold text-[10px] rounded-full border-2 border-white" style={{ background: '#D27A4C' }}>D</span>
+          <span className="text-ink font-semibold">Driver <span className="text-muted italic">(live GPS)</span></span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CoordRow({ p, onAssign, onOpen, onEdit, onDuplicate, allowDriverCancel }: { p: PiRow; onAssign: () => void; onOpen: () => void; onEdit?: () => void; onDuplicate?: () => void; allowDriverCancel?: boolean }) {
+  const time = fmtTime(p.scheduled_time?.slice(0, 5) ?? '');
+  const [showDismiss, setShowDismiss] = useState(false);
+  const [showSendChoice, setShowSendChoice] = useState(false);
+  const [showDriverCancel, setShowDriverCancel] = useState(false);
+  const [showMoreDrivers, setShowMoreDrivers] = useState(false);
+  const qc = useQueryClient();
+  // upsms (Aug 20): per-pickup "Send now" broadcast. Only shows on Needs-a-
+  // Driver cards (no signups, not supplier-posted, not resolved). Confirms
+  // before firing so a mis-tap doesn't blast the group.
+  const sendNowMut = useMutation({
+    mutationFn: (dryRun: boolean) => upcomingSms.pickupSendNow(Number((p as any).id), dryRun),
+    onSuccess: (res, dryRun) => {
+      const d = res.data;
+      if (dryRun) {
+        alert(`Preview (dry run) — would go to ${d.wouldGoTo ?? 0} driver(s):\n\n${d.preview ?? '(no preview body)'}`);
+      } else if (d.reason && !d.sent) {
+        alert(`No SMS sent: ${d.reason}`);
+      } else {
+        alert(`Broadcast fired: ${d.sent ?? 0} of ${d.attempted ?? 0} sent${d.code ? ` (reply code: ${d.code})` : ''}.`);
+      }
+      qc.invalidateQueries({ queryKey: ['admin-pickups'] });
+      qc.invalidateQueries({ queryKey: ['upcoming-drop'] });
+    },
+    onError: (e: Error) => alert(`Send now failed: ${e.message}`),
+  });
+  // Issue #13/14/15 Aug 10 — a pickup with no driver yet isn't "overdue",
+  // it's "looking for a driver". Show wait time in a calm/warm chip.
+  // Truly late (has an assigned driver but past window) keeps the red tone.
+  const _statusLower = String(p.status || '').toLowerCase();
+  const _startMs = new Date(p.scheduled_date.slice(0, 10) + 'T' + (p.scheduled_time || '00:00:00')).getTime();
+  const _resolved = ['completed', 'delivered', 'cancelled'].includes(_statusLower);
+  const _hasPrimary = ((p as any).signups ?? []).some((s: any) => !s.role || s.role === 'primary');
+  const _mustByMs = (p as any).must_pickup_by ? new Date((p as any).must_pickup_by).getTime() : null;
+  const _nowMs = Date.now();
+  // "Wait since" — for supplier-posted, that's when they posted (created_at).
+  // For scheduled pickups, once the scheduled time passes we've been "looking"
+  // since then.
+  //
+  // abc855 → abc863 (Aug 14/16): a pickup whose scheduled_time is in the
+  // future should NEVER show a wait counter — regardless of whether it was
+  // posted by a supplier or a coordinator. Earlier version only guarded
+  // scheduled (non-supplier) pickups; client kept seeing "9h 50m" on
+  // supplier-posted futures.
+  const _isSupplierPosted = !!(p as any).posted_via_supplier;
+  const _isFutureScheduled = _nowMs < _startMs;
+  const _waitStartMs = _isSupplierPosted && (p as any).created_at
+    ? new Date((p as any).created_at).getTime()
+    : _startMs;
+  const _waitMin = _isFutureScheduled ? 0 : Math.max(0, Math.round((_nowMs - _waitStartMs) / 60_000));
+  // abc820 (Aug 11): cap displayed wait time so a stale row from weeks ago
+  // doesn't scream "1445h 37m" — anything > 24h reads as "24h+".
+  const _waitLabel = _isFutureScheduled
+    ? `starts at ${fmtTime((p.scheduled_time || '').slice(0, 5))}`
+    : _waitMin < 60
+    ? `${_waitMin} min`
+    : _waitMin < 24 * 60
+    ? `${Math.floor(_waitMin / 60)}h ${_waitMin % 60}m`
+    : '24h+';
+  // Issue #17 Aug 10: fully-covered pickups get NO warning, no red border —
+  // if the coordinator has already filled the slots, dispatch is done.
+  // Truly late fires only when there's a driver AND the drop-off must-by is
+  // past AND still not picked up (a real problem the dispatcher can act on).
+  // Any past-scheduled + assigned pickup that hasn't hit must_pickup_by yet
+  // reads calm.
+  const _slotsNeeded = Number((p as any).slots_capacity ?? 1) || 1;
+  const _slotsFilled = ((p as any).signups ?? []).length;
+  const isFullyCovered = _slotsFilled >= _slotsNeeded;
+  const isTrulyLate = !_resolved && !isFullyCovered && !(p as any).posted_via_supplier
+    && _mustByMs != null && _nowMs > _mustByMs
+    && _hasPrimary && !['picked_up', 'delivered'].includes(_statusLower);
+  // Looking for a driver = unassigned + past the scheduled start.
+  const isLookingForDriver = !_resolved && !isFullyCovered && !(p as any).posted_via_supplier
+    && _nowMs > _startMs;
+  // (isTrulyLate + isLookingForDriver together replace the old single "isOverdue"
+  // flag — each drives its own visual treatment below.)
+  const filled = (p.signups ?? []).map((s) => ({
+    initials: (s.first_name?.[0] ?? '') + (s.last_name?.[0] ?? ''),
+    full: `${s.first_name} ${s.last_name}${s.unit_number != null ? ` #${s.unit_number}` : ''}`,
+  }));
+  // §1: the row's status pill uses the office-facing label ("Volunteer Needed"
+  // etc.) instead of the raw DB status ("scheduled" / "confirmed" / ...).
+  const office = officeStatusOf(p);
+  const spill = OFFICE_SPILL[office];
+  // Left stripe = supplier color (same as map marker + Places list dot) so
+  // every visual surface uses one identity per donor.
+  const stripeColor = p.suppliers ? supplierHue(p.suppliers) : null;
+  // Prefer donor identity for the headline; then the steady_pickups template
+  // name (e.g. "Bites cafe" for instances materialized from a template that
+  // has no supplier attached yet); then contact_name / pickup_address so
+  // one-time pickups don't read as anonymous "Pickup".
+  const primaryLabel = p.suppliers || p.steady_name || p.contact_name || p.pickup_address || 'One-time pickup';
+  // Secondary line: food description, then address/notes. Address is worth
+  // its own line when different from the primary label, so the driver knows
+  // WHERE to go at a glance.
+  const foodLine = p.food_description || null;
+  const contactLine = !p.suppliers && p.contact_phone && p.contact_name !== primaryLabel
+    ? `${p.contact_name ? p.contact_name + ' · ' : ''}${p.contact_phone}`
+    : null;
+  // Pickup window — combine scheduled_time and must_pickup_by into a
+  // human-readable range, e.g. "2:00 PM - 4:00 PM".
+  const windowLine = (() => {
+    if (!p.must_pickup_by) return null;
+    const start = fmtTime(p.scheduled_time?.slice(0, 5) ?? '');
+    try {
+      const end = new Date(p.must_pickup_by).toLocaleTimeString('en-US',
+        { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' });
+      return start && end ? `${start} - ${end}` : null;
+    } catch { return null; }
+  })();
+  // Address for the card: xyz126 (Aug 20) — a user-specified pickup_address
+  // ALWAYS wins over the supplier's stored address. Reason: for one-off
+  // events (e.g. a supplier-anchored hall booking a specific venue for one
+  // pickup), the coordinator picks a Google Places result that differs from
+  // the supplier's default address. Previously the render short-circuited on
+  // supplier_address and hid the manually-picked address entirely.
+  const displayAddress = (() => {
+    if (p.pickup_address && p.pickup_address.trim()) return p.pickup_address;
+    if (p.supplier_address) {
+      return p.supplier_city ? `${p.supplier_address}, ${p.supplier_city}` : p.supplier_address;
+    }
+    return null;
+  })();
+  const showAddress = displayAddress && displayAddress !== primaryLabel;
+  // Oct 2 client fix (UI plan §1–§2 "neater cards"): info on the left, every
+  // action in one fixed right-hand column in the same order on every card
+  // (Assign driver · Edit · Send SMS · Dismiss, + Driver cancel / Duplicate on
+  // Pickups views). On phones the actions drop below as a 2-column grid.
+  const btn = 'w-full text-[12px] font-bold border px-2.5 py-1.5 rounded-[9px] haptic text-center whitespace-nowrap';
+  const needDrivers = !isFullyCovered && !_resolved ? _slotsNeeded - _slotsFilled : 0;
+  return (
+    <div onClick={onOpen} className={cx(
+        'haptic cursor-pointer bg-paper rounded-[14px] overflow-hidden hover:shadow-card transition',
+        isTrulyLate ? 'border-2 border-clay' : needDrivers > 0 ? 'border border-amber/60' : 'border border-line')}>
+      <div className="flex">
+        {stripeColor && <div className="w-1.5 shrink-0" style={{ background: stripeColor }} />}
+        <div className="flex-1 min-w-0 p-3.5 sm:grid sm:grid-cols-[1fr_136px] sm:gap-4">
+          {/* LEFT — what / where / when / who */}
+          <div className="min-w-0 space-y-1">
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+              <span className="font-display font-bold text-[14px] text-forest">
+                {time}{windowLine ? `–${windowLine.split(' - ')[1]}` : ''}
+              </span>
+              {p.ref_number && <span className="font-extrabold tracking-wider text-muted">#{p.ref_number}</span>}
+              {p.steady_pickup_id != null
+                ? <span className="font-extrabold tracking-wider bg-sky-soft text-sky-deep px-1.5 py-0.5 rounded-full">STEADY</span>
+                : <span className="font-extrabold tracking-wider bg-amber-soft text-[#9a7415] px-1.5 py-0.5 rounded-full">ONE-TIME</span>}
+              {p.is_test && <span className="font-extrabold tracking-wider bg-amber/20 text-forest-deep px-1.5 py-0.5 rounded-full">🧪 TEST</span>}
+              {office !== 'need' && office !== 'assigned' && (
+                <span className={cx('font-bold px-2 py-0.5 rounded-full', spill.bg, spill.fg)}>{spill.label}</span>
+              )}
+              {isTrulyLate && (
+                <span className="font-bold uppercase tracking-wide bg-clay text-paper px-2 py-0.5 rounded-full">Late · {_waitLabel}</span>
+              )}
+            </div>
+            <div className="font-display font-bold text-[16px] text-ink leading-tight truncate">{primaryLabel}</div>
+            {showAddress && <div className="text-[12px] text-muted truncate">📍 {displayAddress}</div>}
+            {contactLine && <div className="text-[12px] text-muted truncate">☎ {contactLine}</div>}
+            {foodLine && <div className="text-[12px] text-ink truncate">{foodLine}{p.estimated_quantity ? ` · ${p.estimated_quantity}` : ''}</div>}
+            {(p as any).special_instructions && (
+              <div className="text-[12px] text-forest-deep font-semibold line-clamp-2">⚠ {(p as any).special_instructions}</div>
+            )}
+            {!foodLine && !showAddress && !contactLine && p.notes && (
+              <div className="text-[12px] text-muted line-clamp-2">{p.notes}</div>
+            )}
+            <div className="pt-0.5 text-[12px] font-bold">
+              {filled.length > 0 && (
+                <span className="inline-flex items-center gap-1.5 text-forest">
+                  <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: driverHue(filled[0]!.full) }} />
+                  {filled.map((f) => f.full).join(', ')}
+                </span>
+              )}
+              {needDrivers > 0 && (
+                <span className={cx('text-clay', filled.length > 0 && 'ml-2')}>
+                  Needs {needDrivers} {needDrivers === 1 ? 'driver' : 'drivers'}
+                  {isLookingForDriver && !isTrulyLate ? ` · waiting ${_waitLabel}` : ''}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* RIGHT — actions, fixed order */}
+          <div onClick={(e) => e.stopPropagation()}
+               className="mt-3 sm:mt-0 grid grid-cols-2 sm:grid-cols-1 gap-1.5 content-start">
+            {(filled.length === 0 || (!isFullyCovered && !_resolved)) && (
+              <button onClick={onAssign} className={cx(btn, 'text-forest border-sage-line bg-sage')}>
+                {filled.length === 0 ? 'Assign driver' : '+ Add driver'}
+              </button>
+            )}
+            {/* Oct 2 client: ask for more drivers even when the pickup is covered. */}
+            {!_resolved && !(p as any).posted_via_supplier && (
+              <button onClick={() => setShowMoreDrivers(true)} className={cx(btn, 'border-sage-line text-forest hover:bg-sage/60')}
+                      title="Add another driver or open more driver slots">Need more drivers</button>
+            )}
+            {onEdit && (
+              <button onClick={onEdit} className={cx(btn, 'border-line text-ink hover:bg-cream')} title="Edit, reschedule, reassign">Edit</button>
+            )}
+            {needDrivers > 0 && !(p as any).posted_via_supplier && (
+              <button onClick={() => setShowSendChoice(true)} disabled={sendNowMut.isPending}
+                      className={cx(btn, 'border-sky/40 text-sky hover:bg-sky/10')}
+                      title="Text drivers about this pickup, or about every open pickup">
+                {sendNowMut.isPending ? '…' : 'Send SMS'}
+              </button>
+            )}
+            {!_resolved && (
+              <button onClick={() => setShowDismiss(true)} className={cx(btn, 'border-clay/40 text-clay hover:bg-clay/10')}
+                      title="Close this pickup with a reason">Dismiss</button>
+            )}
+            {allowDriverCancel && filled.length > 0 && !_resolved && (
+              <button onClick={() => setShowDriverCancel(true)} className={cx(btn, 'border-clay/40 text-clay hover:bg-clay/10')}
+                      title="A driver can't make it — record why and reopen their slot">Driver cancel</button>
+            )}
+            {onDuplicate && (
+              <button onClick={onDuplicate} className={cx(btn, 'border-line text-ink hover:bg-cream')}
+                      title="Copy this pickup to a new date / time">Duplicate</button>
+            )}
+          </div>
+        </div>
+      </div>
+      {showDismiss && createPortal(
+        <DismissPickupModal p={p} onClose={() => setShowDismiss(false)} />,
+        document.body,
+      )}
+      {showMoreDrivers && createPortal(
+        <NeedMoreDriversModal p={p}
+          onAddSpecific={() => { setShowMoreDrivers(false); onAssign(); }}
+          onOpened={(textNow) => { setShowMoreDrivers(false); if (textNow) setShowSendChoice(true); }}
+          onClose={() => setShowMoreDrivers(false)} />,
+        document.body,
+      )}
+      {showDriverCancel && createPortal(
+        <DriverCancelModal p={p} onClose={() => setShowDriverCancel(false)} />,
+        document.body,
+      )}
+      {showSendChoice && createPortal(
+        <SendSmsChoiceModal p={p}
+                            onSendThis={() => { setShowSendChoice(false); sendNowMut.mutate(false); }}
+                            onClose={() => setShowSendChoice(false)} />,
+        document.body,
+      )}
+    </div>
+  );
+}
+
+// Oct 2 client fix (UI plan §2): Send SMS asks what to send. "All open" is a
+// mass text, so it shows a dry-run count first and needs a second OK.
+function SendSmsChoiceModal({ p, onSendThis, onClose }: { p: any; onSendThis: () => void; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const ref = p.ref_number ? `#${p.ref_number}` : `id ${p.id}`;
+  async function sendAll() {
+    setBusy(true); setErr(null);
+    try {
+      const preview = (await upcomingSms.sendNow(true)).data;
+      if (!preview.pickups) { alert('There are no open pickups to send right now.'); onClose(); return; }
+      const who = preview.recipients != null ? ` to ${preview.recipients} driver(s)` : '';
+      if (!confirm(`Send ${preview.pickups} open pickup(s)${who} now?`)) { setBusy(false); return; }
+      const d = (await upcomingSms.sendNow(false)).data;
+      alert(d.skipped ? `No SMS sent: ${d.skipped}` : `Sent ${d.pickups} open pickup(s) — ${d.sent} message(s).`);
+      qc.invalidateQueries({ queryKey: ['admin-pickups'] });
+      qc.invalidateQueries({ queryKey: ['upcoming-drop'] });
+      onClose();
+    } catch (e: any) {
+      setErr(e?.message || 'Send failed'); setBusy(false);
+    }
+  }
+  return (
+    <div onClick={onClose} className="fixed inset-0 z-[2100] bg-ink/50 flex items-start justify-center pt-16 px-4">
+      <div onClick={(e) => e.stopPropagation()} className="relative z-[2101] bg-paper rounded-[18px] shadow-lift border border-line w-full max-w-sm p-5 space-y-3">
+        <div className="font-display font-semibold text-[16px]">Send SMS</div>
+        <div className="text-[12.5px] text-muted">What should drivers be texted about?</div>
+        <button disabled={busy} onClick={onSendThis}
+                className="haptic w-full text-left rounded-[12px] border border-sky/40 px-4 py-3 hover:bg-sky/10">
+          <div className="text-[13px] font-extrabold text-sky-deep">Send only this pickup</div>
+          <div className="text-[11px] text-muted">Pickup {ref}</div>
+        </button>
+        <button disabled={busy} onClick={sendAll}
+                className="haptic w-full text-left rounded-[12px] border border-sky/40 px-4 py-3 hover:bg-sky/10">
+          <div className="text-[13px] font-extrabold text-sky-deep">{busy ? 'Checking…' : 'Send all currently open pickups'}</div>
+          <div className="text-[11px] text-muted">Shows how many first and asks again before sending.</div>
+        </button>
+        {err && <div className="text-[12px] text-clay">{err}</div>}
+        <button onClick={onClose} className="haptic w-full rounded-[12px] border border-line px-4 py-2.5 text-[13px] font-bold text-muted hover:bg-cream">Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+// Oct 2 client fix (UI plan §4 "Driver cancellation"): cancel ONE driver,
+// record why, keep the history, reopen only that slot (backend:
+// POST /pickup-instances/:id/driver-cancel).
+const DRIVER_CANCEL_REASONS = ['Driver unavailable / sick', 'Car trouble', 'Schedule conflict', 'No reason given', 'Other'];
+function RecurringEditChoiceModal({ p, loading, onOccurrence, onSchedule, onClose }: {
+  p: PiRow; loading: boolean;
+  onOccurrence: () => void; onSchedule: (fromThisDate: boolean) => void; onClose: () => void;
+}) {
+  const day = new Date(String(p.scheduled_date).slice(0, 10) + 'T12:00:00')
+    .toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+  const opt = 'haptic w-full text-left rounded-[12px] border border-line px-4 py-3 hover:bg-cream/60 disabled:opacity-50';
+  return (
+    <div onClick={onClose} className="fixed inset-0 z-[2100] bg-ink/50 flex items-start justify-center pt-16 px-4">
+      <div onClick={(e) => e.stopPropagation()} className="relative z-[2101] bg-paper rounded-[18px] shadow-lift border border-line w-full max-w-sm p-5 space-y-3">
+        <div className="font-display font-semibold text-[16px]">Edit recurring pickup</div>
+        <div className="text-[12.5px] text-muted">{p.steady_name || p.suppliers || 'Recurring pickup'} · {day}</div>
+        <button onClick={onOccurrence} className={opt}>
+          <div className="text-[13px] font-extrabold text-forest">This occurrence only</div>
+          <div className="text-[11px] text-muted">Change just the {day} pickup.</div>
+        </button>
+        {/* Oct 2 client: for today's pickup the two schedule options were
+            identical, so only one shows; for a later pickup the wording says
+            exactly which pickups change. */}
+        {String(p.scheduled_date).slice(0, 10) > nyToday() && (
+          <button disabled={loading} onClick={() => onSchedule(true)} className={opt}>
+            <div className="text-[13px] font-extrabold text-forest">This and all future occurrences</div>
+            <div className="text-[11px] text-muted">Changes pickups from {day} on. Pickups before {day} stay as they are.</div>
+          </button>
+        )}
+        <button disabled={loading} onClick={() => onSchedule(false)} className={opt}>
+          <div className="text-[13px] font-extrabold text-forest">
+            {String(p.scheduled_date).slice(0, 10) > nyToday() ? 'Complete recurring schedule' : 'This and all future occurrences'}
+          </div>
+          <div className="text-[11px] text-muted">Changes the recurring schedule and every upcoming pickup, starting today.</div>
+        </button>
+        <button onClick={onClose} className="haptic w-full rounded-[12px] border border-line px-4 py-2.5 text-[13px] font-bold text-muted hover:bg-cream">Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+// Oct 2 client: "need more drivers" — add a specific driver now, or open
+// N more slots (pickup goes back to needing drivers; optionally text drivers).
+function NeedMoreDriversModal({ p, onAddSpecific, onOpened, onClose }: {
+  p: PiRow; onAddSpecific: () => void; onOpened: (textNow: boolean) => void; onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const current = Number((p as any).slots_capacity ?? 1) || 1;
+  const [more, setMore] = useState(1);
+  const [textNow, setTextNow] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const mut = useMutation({
+    mutationFn: () => adminCRUD.patchPickup(Number(p.id), { slotsCapacity: Math.min(20, current + more) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin-pickups'] });
+      qc.invalidateQueries({ queryKey: ['admin-pickups-range'] });
+      onOpened(textNow);
+    },
+    onError: (e: any) => setErr(e?.message || 'Could not update the pickup'),
+  });
+  return (
+    <div onClick={onClose} className="fixed inset-0 z-[2100] bg-ink/50 flex items-start justify-center pt-16 px-4">
+      <div onClick={(e) => e.stopPropagation()} className="relative z-[2101] bg-paper rounded-[18px] shadow-lift border border-line w-full max-w-sm p-5 space-y-3">
+        <div className="font-display font-semibold text-[16px]">Need more drivers</div>
+        <div className="text-[12.5px] text-muted">{p.suppliers || p.steady_name || 'Pickup'} · now needs {current} {current === 1 ? 'driver' : 'drivers'}</div>
+        <button onClick={onAddSpecific}
+                className="haptic w-full text-left rounded-[12px] border border-line px-4 py-3 hover:bg-cream/60">
+          <div className="text-[13px] font-extrabold text-forest">Add a specific driver now</div>
+          <div className="text-[11px] text-muted">Pick the driver from the list.</div>
+        </button>
+        <div className="rounded-[12px] border border-line px-4 py-3 space-y-2">
+          <div className="text-[13px] font-extrabold text-forest">Open more driver slots</div>
+          <label className="flex items-center gap-2 text-[12.5px]">
+            Add
+            <select value={more} onChange={(e) => setMore(Number(e.target.value))}
+                    className="rounded-[8px] border border-line bg-paper px-2 py-1">
+              {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+            more → needs {Math.min(20, current + more)} in total
+          </label>
+          <label className="flex items-center gap-2 text-[12.5px]">
+            <input type="checkbox" checked={textNow} onChange={(e) => setTextNow(e.target.checked)} className="h-4 w-4 accent-forest" />
+            Text drivers about it right after
+          </label>
+          {err && <div className="text-[12px] text-clay">{err}</div>}
+          <button disabled={mut.isPending} onClick={() => mut.mutate()}
+                  className="haptic w-full rounded-[10px] bg-forest px-4 py-2 text-[13px] font-bold text-paper disabled:opacity-50">
+            {mut.isPending ? 'Saving…' : `Open ${more} more ${more === 1 ? 'slot' : 'slots'}`}
+          </button>
+        </div>
+        <button onClick={onClose} className="haptic w-full rounded-[12px] border border-line px-4 py-2.5 text-[13px] font-bold text-muted hover:bg-cream">Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function DriverCancelModal({ p, onClose }: { p: PiRow; onClose: () => void }) {
+  const qc = useQueryClient();
+  const drivers = (p.signups ?? []).map((s: any) => ({
+    id: Number(s.volunteer_id),
+    name: `${s.first_name ?? ''} ${s.last_name ?? ''}`.trim() + (s.unit_number != null ? ` #${s.unit_number}` : ''),
+  })).filter((d) => Number.isFinite(d.id));
+  const [vid, setVid] = useState<number | ''>(drivers.length === 1 ? drivers[0]!.id : '');
+  const [reason, setReason] = useState(DRIVER_CANCEL_REASONS[0]!);
+  const [note, setNote] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const fullReason = reason === 'Other' ? note.trim() : (note.trim() ? `${reason} — ${note.trim()}` : reason);
+  const canSubmit = vid !== '' && fullReason.length > 0;
+  const mut = useMutation({
+    mutationFn: () => api<{ data: { reopened: boolean } }>(`/api/pickup-instances/${p.id}/driver-cancel`, {
+      method: 'POST', body: JSON.stringify({ volunteerId: vid, reason: fullReason }),
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin-pickups'] });
+      qc.invalidateQueries({ queryKey: ['admin-pickups-range'] });
+      onClose();
+    },
+    onError: (e: any) => setErr(e?.message || 'Driver cancel failed'),
+  });
+  return (
+    <div onClick={onClose} className="fixed inset-0 z-[2100] bg-ink/50 flex items-start justify-center pt-16 px-4">
+      <div onClick={(e) => e.stopPropagation()} className="relative z-[2101] bg-paper rounded-[18px] shadow-lift border border-line w-full max-w-md p-5 space-y-4">
+        <div className="font-display font-semibold text-[16px]">Driver cancel</div>
+        <div className="text-[12.5px] text-muted">
+          The driver comes off this pickup, their slot reopens on the Live Board and for the next SMS broadcast,
+          and the cancellation is kept in the pickup's history.
+        </div>
+        <label className="block text-[12px] font-bold">Driver
+          <select value={vid} onChange={(e) => setVid(e.target.value ? Number(e.target.value) : '')}
+                  className="mt-1 w-full rounded-[10px] border border-line bg-paper px-3 py-2 text-[13px] font-normal">
+            {drivers.length !== 1 && <option value="">Choose driver…</option>}
+            {drivers.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+        </label>
+        <label className="block text-[12px] font-bold">Reason
+          <select value={reason} onChange={(e) => setReason(e.target.value)}
+                  className="mt-1 w-full rounded-[10px] border border-line bg-paper px-3 py-2 text-[13px] font-normal">
+            {DRIVER_CANCEL_REASONS.map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </label>
+        <label className="block text-[12px] font-bold">{reason === 'Other' ? 'Details (required)' : 'Details (optional)'}
+          <input value={note} onChange={(e) => setNote(e.target.value)}
+                 className="mt-1 w-full rounded-[10px] border border-line bg-paper px-3 py-2 text-[13px] font-normal" />
+        </label>
+        {err && <div className="text-[12px] text-clay">{err}</div>}
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="haptic rounded-[10px] border border-line px-4 py-2 text-[13px] font-bold text-muted hover:bg-cream">Back</button>
+          <button disabled={!canSubmit || mut.isPending} onClick={() => mut.mutate()}
+                  className="haptic rounded-[10px] bg-clay px-4 py-2 text-[13px] font-bold text-paper disabled:opacity-50">
+            {mut.isPending ? 'Saving…' : 'Cancel this driver'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DismissPickupModal({ p, onClose }: { p: any; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [reason, setReason] = useState<'no_longer_needed' | 'food_dropped_off' | 'other'>('no_longer_needed');
+  const [note, setNote] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const canSubmit = reason !== 'other' || note.trim().length > 0;
+  const mut = useMutation({
+    mutationFn: () => api(`/api/pickup-instances/${p.id}/dismiss`, {
+      method: 'POST',
+      body: JSON.stringify({ reason, note: note.trim() || null }),
+    }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin-pickups'] }); onClose(); },
+    onError: (e: any) => setErr(e?.message || 'Dismiss failed'),
+  });
+  return (
+    <div onClick={onClose} className="fixed inset-0 z-[2100] bg-ink/50 flex items-start justify-center pt-16 px-4">
+      <div onClick={(e) => e.stopPropagation()} className="relative z-[2101] bg-paper rounded-[18px] shadow-lift border border-line w-full max-w-md">
+        <div className="sticky top-0 bg-paper border-b border-line px-5 py-3 flex items-center justify-between">
+          <div className="font-display font-semibold text-[16px]">Dismiss pickup</div>
+          <button onClick={onClose} className="haptic grid h-8 w-8 place-items-center rounded-full hover:bg-cream text-muted">✕</button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="text-[13px] text-muted">Closes this pickup and stops texting for a driver. Stays in history with your reason.</div>
+          <fieldset className="space-y-2">
+            <legend className="text-[12px] font-extrabold uppercase tracking-[.05em] text-muted mb-1">Reason</legend>
+            {([
+              ['no_longer_needed', 'No longer needed'],
+              ['food_dropped_off', 'Food was dropped off'],
+              ['other', 'Other (add a note)'],
+            ] as const).map(([val, label]) => (
+              <label key={val} className={cx('flex items-center gap-2 rounded-[10px] border px-3 py-2 cursor-pointer',
+                reason === val ? 'border-forest bg-sage/40' : 'border-line hover:bg-cream/60')}>
+                <input type="radio" name="dismiss-reason" checked={reason === val}
+                       onChange={() => setReason(val)} />
+                <span className="text-[13.5px] font-bold text-ink">{label}</span>
+              </label>
+            ))}
+          </fieldset>
+          <div>
+            <label className="block text-[11px] font-extrabold uppercase tracking-[.05em] text-muted mb-1">
+              Note {reason === 'other' && <span className="text-clay normal-case">(required)</span>}
+            </label>
+            <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3}
+                      placeholder={reason === 'other' ? 'Please explain…' : 'Optional detail'}
+                      className="w-full border border-line rounded-[10px] px-3 py-2 bg-paper text-[13.5px]" />
+          </div>
+          {err && <div className="text-[12px] text-clay font-bold">{err}</div>}
+          <div className="flex items-center justify-between pt-1">
+            <button onClick={onClose} className="haptic text-[12.5px] font-bold text-muted px-3 py-2">Cancel</button>
+            <button onClick={() => mut.mutate()} disabled={!canSubmit || mut.isPending}
+                    className="haptic text-[12.5px] font-bold bg-clay text-paper px-3 py-2 rounded-[10px] disabled:opacity-40">
+              {mut.isPending ? 'Dismissing…' : 'Dismiss pickup'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Sidebar context list — its content depends on the active tab so the
+ * coordinator's left rail is always relevant to what they're looking at.
+ *  - Live Board: Places (donors)
+ *  - Pickups:    upcoming pickup names (within the day window)
+ *  - Volunteers: volunteer roster
+ *  - Suppliers:  donor list
+ *  - Chats:      whomever's in that conversation list
+ */
+function SidebarContextList({
+  tab, suppliers, suppliersLoading, volunteers, volunteersLoading, livePickups,
+}: {
+  tab: TabKey;
+  suppliers: Place[]; suppliersLoading: boolean;
+  volunteers: any[]; volunteersLoading: boolean;
+  livePickups: PiRow[];
+  onPick: (t: TabKey) => void;
+}) {
+  // Tier-2 fix #11: the old code fell through to a "Places" header on every
+  // tab that didn't match a specific case (steady / shifts / center-help /
+  // coverage / signin / kiosk-activity / settings / etc.), which read as
+  // "suppliers panel is loading" even though nothing beneath it ever rendered.
+  // Only show the sidebar list block for tabs it actually belongs on.
+  const LIST_TABS: TabKey[] = [
+    'live', 'pickups', 'volunteers', 'suppliers',
+    'chat-stores', 'chat-volunteers', 'reports',
+  ];
+  if (!LIST_TABS.includes(tab)) return null;
+
+  const head =
+    tab === 'pickups'         ? 'Active pickups' :
+    tab === 'volunteers'      ? 'Drivers' :
+    tab === 'suppliers'       ? 'Donors' :
+    tab === 'chat-stores'     ? 'Stores' :
+    tab === 'chat-volunteers' ? 'Drivers' :
+    tab === 'reports'         ? 'Reports' :
+    'Places';
+
+  return (
+    <>
+      <div className="text-[10px] font-extrabold uppercase tracking-[.08em] text-[#7fa078] mt-5 mb-2 px-3">{head}</div>
+
+      {/* Tier-3: scroll instead of 14-row silent cap. */}
+      <div className="max-h-[42vh] overflow-y-auto">
+        {(tab === 'pickups' || tab === 'live') && (
+          <PickupSidebar pickups={livePickups} loading={false} />
+        )}
+        {(tab === 'volunteers' || tab === 'chat-volunteers') && (
+          <PeopleSidebar people={volunteers} loading={volunteersLoading} kind="volunteer" />
+        )}
+        {(tab === 'suppliers' || tab === 'chat-stores') && (
+          <PeopleSidebar people={[]} loading={false} kind="supplier" suppliers={suppliers} suppliersLoading={suppliersLoading} />
+        )}
+        {tab === 'reports' && (
+          <div className="text-[11.5px] text-[#7fa078] px-3">Coming soon</div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function PickupSidebar({ pickups, loading }: { pickups: PiRow[]; loading: boolean }) {
+  if (loading) return <div className="text-[11.5px] text-[#7fa078] px-3">Loading…</div>;
+  if (pickups.length === 0) return <div className="text-[11.5px] text-[#7fa078] px-3">No active pickups</div>;
+  return <>{pickups.slice(0, 200).map((p) => {
+    const color = p.suppliers ? supplierHue(p.suppliers) : '#C7CEC2';
+    return (
+      <div key={p.id} className="flex items-center gap-2 px-3 py-1.5 text-[12.5px]">
+        <span className="h-2.5 w-2.5 rounded-sm shrink-0 ring-1 ring-white/20" style={{ background: color }} />
+        <span className="truncate flex-1 text-paper">{p.suppliers || 'Pickup'}</span>
+        <span className="text-[10.5px] text-[#7fa078] font-bold tabular-nums">{fmtTime(p.scheduled_time?.slice(0,5) ?? '')}</span>
+      </div>
+    );
+  })}</>;
+}
+
+function PeopleSidebar({ people, loading, kind, suppliers, suppliersLoading }: {
+  people: any[]; loading: boolean; kind: 'volunteer' | 'supplier';
+  suppliers?: Place[]; suppliersLoading?: boolean;
+}) {
+  if (kind === 'supplier') {
+    if (suppliersLoading) return <div className="text-[11.5px] text-[#7fa078] px-3">Loading…</div>;
+    return <>{(suppliers ?? []).map((p) => {
+      const dotColor = supplierHue(p.name);
+      const nameClass = p.status === 'paused'
+        ? 'text-[#7fa078] line-through opacity-70'
+        : p.status === 'pending'
+        ? 'text-amber'
+        : 'text-paper';
+      const label = p.status === 'paused' ? 'paused' : p.status === 'pending' ? 'pending' : '';
+      return (
+        <div key={p.id} className="flex items-center gap-2 px-3 py-1.5 text-[12.5px]">
+          <span className="h-2.5 w-2.5 rounded-sm shrink-0 ring-1 ring-white/20" style={{ background: dotColor }} />
+          <span className={cx('truncate flex-1', nameClass)}>{p.name}</span>
+          {label && <span className="text-[9.5px] uppercase tracking-wider text-[#7fa078] font-bold">{label}</span>}
+        </div>
+      );
+    })}</>;
+  }
+  if (loading) return <div className="text-[11.5px] text-[#7fa078] px-3">Loading…</div>;
+  return <>{people.slice(0, 20).map((v) => (
+    <div key={v.id} className="flex items-center gap-2 px-3 py-1.5 text-[12.5px]">
+      <span className="h-2.5 w-2.5 rounded-full shrink-0 ring-1 ring-white/20"
+            style={{ background: driverHue(`${v.firstName} ${v.lastName}`) }} />
+      <span className="truncate flex-1 text-paper">
+        {v.firstName} {v.lastName}
+        {(v as any).unitNumber != null && <span className="ml-1 text-[#a5c69d] font-semibold text-[11.5px]">#{(v as any).unitNumber}</span>}
+      </span>
+    </div>
+  ))}</>;
+}
+
+/**
+ * In-app chat list — coordinator picks a store or driver from the left list,
+ * the right pane shows the live ChatThread. **In-app only** — no SMS, phone,
+ * or email shortcuts (per product spec: communication must round-trip through
+ * the app so it's logged and visible on both ends).
+ */
+/**
+ * Compact unread-count pill for sidebar tabs. Polls /me/dm/unread every 20s
+ * so a new incoming message shows up without a hard refresh. When kind is
+ * provided we filter to that contact list's peers; without kind it shows the
+ * total. Returns null when there's nothing unread.
+ */
+// Consolidated brief #15 (Aug 18): dispatcher-on-duty action summary at the
+// top of the Live Board. Answers "what requires my attention right now?" —
+// uncovered pickups, pickups within 30 min, unread SMS, pending
+// confirmations. Only shows when there's actually something to act on.
+function OnDutyBanner({ setTab, setPickupsSubTab }: { setTab: (t: TabKey) => void; setPickupsSubTab: (t: PickupsSubTab) => void }) {
+  const q = useQuery({
+    queryKey: ['on-duty-summary'],
+    queryFn: () => onDuty.summary(),
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+  });
+  const s = q.data?.data;
+  if (!s) return null;
+  const total = Number(s.pickups_need_driver) + Number(s.unread_sms) + Number(s.pickups_within_30m) + Number(s.pending_confirmation);
+  if (total === 0) return null;
+  // abc900 (Aug 20): each chip is a button that jumps to the relevant surface.
+  // Prior version was a plain <span> — clicking it did nothing.
+  // abc901 (Aug 21): the "within 30 min" chip was pointed at the confirmation
+  // anchor, which is unrelated — it should scroll to the Live Board's
+  // "rest of today" pickup list where imminent pickups actually appear.
+  const scrollToConfirm = () => {
+    document.getElementById('needs-confirmation-anchor')
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  const scrollToLiveFeed = () => {
+    document.getElementById('live-pickups-feed')
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  const chips: Array<[string, number, string, () => void]> = [
+    ['🚨 within 30 min',    Number(s.pickups_within_30m),  'bg-clay text-paper',                                  scrollToLiveFeed],
+    // Aug 23 xyz127: the "need driver" chip counts TODAY's uncovered pickups
+    // (server-side, includes future-today slots). Landing on the default
+    // Attention sub-tab (past-window only) showed "0" because a 6pm pickup
+    // hasn't hit its window yet — chip pointed to nothing. Route to Upcoming
+    // where the count matches what the sub-tab actually renders.
+    ['🔴 need driver',      Number(s.pickups_need_driver), 'bg-clay/10 text-clay border border-clay/30',          () => { setTab('pickups'); setPickupsSubTab('list'); }],
+    ['✉️ unread SMS',       Number(s.unread_sms),          'bg-amber/15 text-forest-deep border border-amber/40', () => setTab('sms-combo')],
+    ['❓ pending confirm',  Number(s.pending_confirmation),'bg-sky/10 text-sky border border-sky/30',             scrollToConfirm],
+  ];
+  return (
+    <div className="mb-3 rounded-[14px] border border-clay/30 bg-clay/5 px-4 py-3">
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className="text-[11px] font-extrabold uppercase tracking-[.08em] text-clay">Needs attention</span>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {chips.filter(([, n]) => n > 0).map(([label, n, cls, onClick]) => (
+          <button key={label} type="button" onClick={onClick}
+                  className={cx('px-2.5 py-1 rounded-full text-[12px] font-bold cursor-pointer transition hover:brightness-95 active:scale-[0.98]', cls)}>
+            <span className="font-extrabold">{n}</span> {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Consolidated brief #1 (Aug 18): SMS Threads unread count for the sidebar
+// SMS Composer tab. Polls every 30s.
+function SmsUnreadBadge() {
+  const q = useQuery({
+    queryKey: ['sms-unread-count'],
+    queryFn: () => smsThreads.unreadCount(),
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+  });
+  const total = q.data?.data?.total ?? 0;
+  if (!total) return null;
+  return <span className="ml-auto inline-grid place-items-center min-w-[20px] h-[20px] px-1.5 rounded-full bg-red-500 text-paper text-[11px] font-extrabold">{total > 99 ? '99+' : total}</span>;
+}
+
+function UnreadBadge({ kind, peerUserId }: { kind?: 'stores' | 'volunteers'; peerUserId?: number }) {
+  const unread = useQuery<{ data: { total: number; byPeer: Array<{ peerUserId: number; unread: number }> } }>({
+    queryKey: ['dm-unread'],
+    queryFn:  () => dm.unread(),
+    refetchInterval: 20_000,
+  });
+  // Peer-specific badge (one row in the chat list).
+  if (peerUserId != null) {
+    const row = unread.data?.data?.byPeer?.find((p) => Number(p.peerUserId) === peerUserId);
+    if (!row || !row.unread) return null;
+    return <span className="inline-grid place-items-center min-w-[18px] h-[18px] px-1.5 rounded-full bg-red-500 text-paper text-[10.5px] font-extrabold">{row.unread > 99 ? '99+' : row.unread}</span>;
+  }
+  // Filtered-to-kind badge needs to know which peers count. We don't have that
+  // detail in the unread payload alone, so fall back to total. (Refining
+  // per-kind would require joining peer role on the server — fine to add later.)
+  const total = unread.data?.data?.total ?? 0;
+  void kind;
+  if (!total) return null;
+  return <span className="ml-auto inline-grid place-items-center min-w-[20px] h-[20px] px-1.5 rounded-full bg-red-500 text-paper text-[11px] font-extrabold">{total > 99 ? '99+' : total}</span>;
+}
+
+/** Human-friendly relative time like "2m", "45m", "3h", "yesterday", "Mar 4" */
+function relTime(iso: string): string {
+  const d = new Date(iso);
+  const ms = Date.now() - d.getTime();
+  if (isNaN(ms)) return '';
+  const min = Math.floor(ms / 60_000);
+  if (min < 1) return 'now';
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h`;
+  const day = Math.floor(hr / 24);
+  if (day < 2) return 'yesterday';
+  if (day < 7) return `${day}d`;
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function ChatList({ kind }: { kind: 'stores' | 'volunteers' }) {
+  const [selected, setSelected] = useState<{ userId: number; name: string; color: string } | null>(null);
+  const contacts = useQuery<{ data: any[] }>({
+    queryKey: ['dm-contacts', kind],
+    queryFn:  () => (kind === 'stores' ? dm.suppliers() : dm.volunteers()) as Promise<{ data: any[] }>,
+  });
+  // Last-message preview per peer for the chat list (replaces "Tap to open chat").
+  const threadsQ = useQuery({ queryKey: ['dm-threads'], queryFn: dm.threads, refetchInterval: 20_000 });
+  const threadByPeer = (threadsQ.data?.data?.threads ?? []).reduce(
+    (acc: Record<number, { lastBody: string; lastAt: string; lastFromMe: boolean; unread: number }>, t) => {
+      acc[Number(t.peerUserId)] = t; return acc;
+    }, {} as Record<number, { lastBody: string; lastAt: string; lastFromMe: boolean; unread: number }>);
+  // API returns rows with snake_case (first_name/last_name) for office/volunteer kinds.
+  // user_id can be null for volunteers/suppliers not yet linked to a user — filter those
+  // out so the row is never rendered as "undefined undefined" and never produces a dead click.
+  const allRows = contacts.data?.data ?? [];
+  // Sort so the most recently active conversations float to the top. Rows the
+  // coordinator has never exchanged messages with drop to the bottom in stable
+  // alphabetical order. Unread bumps to the very top so a fresh message from
+  // driver #4 doesn't get lost behind a stale conversation with driver #1.
+  const rows = allRows
+    .filter((r: any) => r.user_id != null)
+    .slice()
+    .sort((a: any, b: any) => {
+      const ta = threadByPeer[a.user_id];
+      const tb = threadByPeer[b.user_id];
+      const aUnread = (ta?.unread ?? 0) > 0 ? 1 : 0;
+      const bUnread = (tb?.unread ?? 0) > 0 ? 1 : 0;
+      if (aUnread !== bUnread) return bUnread - aUnread;   // unread first
+      const atA = ta?.lastAt ?? '';
+      const atB = tb?.lastAt ?? '';
+      if (atA && !atB) return -1;                          // any activity first
+      if (!atA && atB) return 1;
+      if (atA && atB && atA !== atB) return atB.localeCompare(atA); // newest first
+      const na = ((a.first_name ?? a.firstName ?? a.name ?? '') + ' ' + (a.last_name ?? a.lastName ?? '')).trim().toLowerCase();
+      const nb = ((b.first_name ?? b.firstName ?? b.name ?? '') + ' ' + (b.last_name ?? b.lastName ?? '')).trim().toLowerCase();
+      return na.localeCompare(nb);
+    });
+  const unlinkedCount = allRows.length - rows.length;
+  // Oct 2 client fix: page search.
+  const [cq, setCq] = useState('');
+  const shownRows = cq.trim() ? rows.filter((r: any) => JSON.stringify(r).toLowerCase().includes(cq.trim().toLowerCase())) : rows;
+
+  if (contacts.isLoading) return <div className="text-[13px] text-muted">Loading…</div>;
+  if (rows.length === 0) return <div className="text-[13px] text-muted">No {kind === 'stores' ? 'stores' : 'drivers'} linked to a user account yet.</div>;
+
+  if (selected) {
+    return (
+      <div className="flex flex-col h-[calc(100vh-180px)]">
+        <button onClick={() => setSelected(null)} className="self-start text-[12px] text-forest font-bold mb-2 hover:underline">
+          ← Back to {kind === 'stores' ? 'stores' : 'drivers'}
+        </button>
+        <ChatThread userId={selected.userId} title={selected.name}
+                    subtitle={kind === 'stores' ? 'Store contact' : 'Driver'} color={selected.color} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="text-[11px] font-extrabold uppercase tracking-[.05em] text-muted mb-1">
+        {kind === 'stores' ? 'In-app messages · stores' : 'In-app messages · drivers'}
+      </div>
+      <input value={cq} onChange={(e) => setCq(e.target.value)} placeholder="Search by name…" className="w-full rounded-[12px] border border-line bg-paper px-3 py-2 text-[13.5px] outline-none focus:border-forest" />
+      <div className="rounded-[14px] border border-sage-line bg-sage/40 p-3 text-[12px] text-forest font-bold mb-3">
+        In-app only — messages appear in the recipient's app inbox. No SMS, phone, or email.
+      </div>
+      {shownRows.map((r: any) => {
+        const first = r.first_name ?? r.firstName ?? '';
+        const last  = r.last_name  ?? r.lastName  ?? '';
+        const name  = kind === 'stores' ? (r.name ?? `${first} ${last}`.trim()) : `${first} ${last}`.trim();
+        const color = kind === 'stores' ? supplierHue(name) : driverHue(name);
+        const initials = kind === 'stores'
+          ? (name.split(' ').map((w: string) => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() || '?')
+          : ((first[0] ?? '') + (last[0] ?? '') || '?');
+        const rowKey = `${kind}-${r.id ?? r.user_id ?? r.supplier_id ?? r.volunteer_id ?? name}`;
+        const thread = threadByPeer[r.user_id];
+        const preview = thread?.lastBody ? `${thread.lastFromMe ? 'You: ' : ''}${thread.lastBody}` : 'Tap to open chat';
+        const hasUnread = (thread?.unread ?? 0) > 0;
+        // "when" text next to preview — relative time for chat rows
+        const whenText = thread?.lastAt ? relTime(thread.lastAt) : '';
+        return (
+          <button key={rowKey} onClick={() => setSelected({ userId: r.user_id, name, color })}
+                  className={cx('w-full text-left border rounded-[14px] overflow-hidden haptic transition',
+                                hasUnread ? 'border-red-400 bg-red-50/70 hover:bg-red-50' : 'border-line bg-paper hover:bg-cream/40')}>
+            <div className="flex">
+              <div className="w-1.5 shrink-0" style={{ background: color }} />
+              <div className="flex-1 px-3.5 py-2.5 flex items-center justify-between gap-2">
+                <div className="min-w-0 flex items-center gap-2">
+                  <div className="relative shrink-0">
+                    {kind === 'stores' && r.logo_url
+                      ? <img src={r.logo_url} alt="" className="h-9 w-9 rounded-full object-cover border border-line bg-paper" />
+                      : <span className="grid h-9 w-9 place-items-center rounded-full text-paper text-[11px] font-bold"
+                              style={{ background: color }}>
+                          {initials}
+                        </span>}
+                    {hasUnread && (
+                      <span aria-label="unread" className="absolute -top-0.5 -right-0.5 h-3 w-3 rounded-full bg-red-500 ring-2 ring-paper" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="font-bold text-[13.5px] truncate flex items-center gap-1.5">
+                      {name || 'Unknown'}
+                      <UnreadBadge peerUserId={r.user_id} />
+                    </div>
+                    <div className={cx('text-[11px] truncate', hasUnread ? 'text-ink font-semibold' : 'text-muted')}>{preview}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {whenText && <span className={cx('text-[10.5px] font-semibold', hasUnread ? 'text-red-600' : 'text-muted')}>{whenText}</span>}
+                  <MessageSquare size={16} className={hasUnread ? 'text-red-500' : 'text-forest'} />
+                </div>
+              </div>
+            </div>
+          </button>
+        );
+      })}
+      {unlinkedCount > 0 && (
+        <div className="text-[11px] text-muted pt-2">
+          {unlinkedCount} {kind === 'stores' ? 'store' : 'driver'}{unlinkedCount === 1 ? '' : 's'} not yet linked to a user account — invite them from {kind === 'stores' ? 'Suppliers' : 'Drivers'} to enable chat.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Supplier color identity — same name → same color, anywhere. */
+const SUPPLIER_PALETTE = [
+  '#D27A4C', // clay
+  '#3E6F8E', // sky
+  '#7C3AED', // amethyst
+  '#0F766E', // teal-deep
+  '#CA8A04', // amber
+  '#DB2777', // rose
+  '#0E7490', // ocean
+  '#854D0E', // copper
+  '#16A34A', // emerald
+  '#9333EA', // violet
+  '#E11D48', // rose-dark
+  '#0284C7', // sky-deep
+];
+function supplierHue(name: string) {
+  let h = 0; for (let i = 0; i < (name ?? '').length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return SUPPLIER_PALETTE[h % SUPPLIER_PALETTE.length]!;
+}
+
+/** Driver color (a separate palette so it's distinguishable from suppliers). */
+const DRIVER_PALETTE = [
+  '#2C5A3B', // forest
+  '#1E40AF', // indigo-deep
+  '#92400E', // brown
+  '#155E75', // teal-dark
+  '#831843', // wine
+  '#3F6212', // moss
+  '#7E22CE', // violet-deep
+  '#0F172A', // ink-blue
+];
+function driverHue(name: string) {
+  let h = 0; for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return DRIVER_PALETTE[h % DRIVER_PALETTE.length]!;
+}
+
+// Office-facing status labels from the "Volunteer Portal Improvement Requests"
+// PDF (§1). Derived from the DB lifecycle + signup count. Keep the DB `status`
+// column untouched — office labels are a pure UI derivation so we don't have
+// to migrate anything and drivers still see their own status pipeline.
+//
+// - Volunteer Needed: still open, nobody signed up.
+// - Assigned:         at least one driver on it.
+// - On the Way:       en_route or picked_up (per the user's call — in_progress
+//                     doesn't count; the app writes it before the driver has
+//                     actually departed).
+// - Completed:        completed or delivered.
+type OfficeStatus = 'need' | 'assigned' | 'onway' | 'complete' | 'complete_nokiosk' | 'review' | 'expired' | 'missed';
+const CLOSED_OFFICE_STATUSES: OfficeStatus[] = ['complete', 'complete_nokiosk', 'review', 'expired', 'missed'];
+function officeStatusOf(p: PiRow): OfficeStatus {
+  const s = String(p.status || '').toLowerCase();
+  // client Aug 12 — 'missed' gets its own muted-red chip so History rows
+  // read at a glance. It still counts as closed everywhere else via
+  // DONE_STATUSES.
+  // Oct 2 client fix (UI plan §4): the auto-missed sweeper keeps these rows
+  // in 'missed' internally so SMS paths treat them as closed, but only a
+  // confirmed miss should read "Missed" — roster-only rows read "Needs
+  // review" and no-driver rows read "Expired – no driver".
+  if (s === 'missed') {
+    const reason = String(p.cancellation_reason || '').toLowerCase();
+    if (reason.startsWith('needs review'))                          return 'review';
+    if (reason.startsWith('expired') || reason.includes('no driver claimed')) return 'expired';
+    return 'missed';
+  }
+  if (s === 'completed' || s === 'delivered') {
+    return String(p.completion_notes || '').startsWith('auto: accepted') ? 'complete_nokiosk' : 'complete';
+  }
+  if (s === 'en_route' || s === 'picked_up')  return 'onway';
+  return (p.signups?.length ?? 0) > 0 ? 'assigned' : 'need';
+}
+const OFFICE_SPILL: Record<OfficeStatus, { bg: string; fg: string; label: string }> = {
+  need:     { bg: 'bg-clay-soft',  fg: 'text-clay',       label: 'Volunteer Needed' },
+  assigned: { bg: 'bg-sky-soft',   fg: 'text-sky-deep',   label: 'Assigned' },
+  onway:    { bg: 'bg-amber-soft', fg: 'text-[#9a7415]',  label: 'On the Way' },
+  complete: { bg: 'bg-sage',       fg: 'text-forest',     label: 'Completed' },
+  complete_nokiosk: { bg: 'bg-sage', fg: 'text-forest',   label: 'Completed – no kiosk sign-in' },
+  review:   { bg: 'bg-amber-soft', fg: 'text-[#9a7415]',  label: 'Needs review' },
+  expired:  { bg: 'bg-clay/10',    fg: 'text-clay',       label: 'Expired – no driver' },
+  missed:   { bg: 'bg-clay/10',    fg: 'text-clay',       label: 'Missed' },
+};
+
+/**
+ * batch abc820 · Pickups-tab sub-tab strip. Always visible so tabs stay
+ * clickable even when the current bucket is empty. Each tab shows its
+ * count as a small badge; per-tab empty state is a quiet card rendered
+ * by the parent (see PICKUPS_SUB_EMPTY).
+ */
+// Oct 2 client fix (UI plan §3): unified Pickups views.
+type PickupsSubTab = 'today' | 'list' | 'calendar' | 'history' | 'recurring' | 'attention';
+const PICKUPS_SUB_EMPTY: Record<PickupsSubTab, string> = {
+  today:     'No pickups scheduled for today.',
+  list:      'No pickups match these dates and filters.',
+  calendar:  '',
+  history:   'No past pickups match these dates and filters.',
+  recurring: '',
+  attention: 'No pickups need attention right now.',
+};
+// Oct 2 client fix (UI plan §3): List / History views of the unified Pickups
+// section. Any date range (own fetch, not limited to the shared 60-day cache),
+// search across every field shown on the row, filters, and CSV export of
+// exactly what is filtered.
+function shiftDay(iso: string, days: number): string {
+  const d = new Date(iso + 'T12:00:00');
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+function rowDrivers(p: PiRow): string[] {
+  return (p.signups ?? []).map((s) => `${s.first_name ?? ''} ${s.last_name ?? ''}`.trim()).filter(Boolean);
+}
+function rowLabel(p: PiRow): string {
+  return p.suppliers || p.steady_name || p.contact_name || p.pickup_address || 'One-time pickup';
+}
+// Everything shown on a pickup card, lower-cased, for search.
+function pickupHaystack(p: PiRow): string {
+  const os = String(p.status || '').toLowerCase() === 'cancelled' ? 'cancelled' : officeStatusOf(p);
+  return [
+    p.ref_number, p.id, p.suppliers, p.steady_name, p.supplier_address, p.supplier_city,
+    p.pickup_address, p.contact_name, p.contact_phone, p.food_description, p.estimated_quantity,
+    p.notes, (p as any).special_instructions, (p as any).pickup_instructions,
+    os === 'cancelled' ? 'Cancelled' : OFFICE_SPILL[os].label,
+    ...(p.signups ?? []).map((s) => `${s.first_name ?? ''} ${s.last_name ?? ''} ${s.unit_number ?? ''}`),
+    p.steady_pickup_id != null ? 'steady' : 'one-time', p.scheduled_date, fmtTime(String(p.scheduled_time ?? '').slice(0, 5)),
+  ].filter((v) => v != null && v !== '').join(' ').toLowerCase();
+}
+function PickupSearchBar({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="mb-3 relative">
+      <input value={value} onChange={(e) => onChange(e.target.value)}
+             placeholder="Search pickups — store, address, driver, ref #, food, notes…"
+             className="w-full rounded-[12px] border border-line bg-paper pl-9 pr-9 py-2.5 text-[14px] outline-none focus:border-forest" />
+      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted">🔍</span>
+      {value && (
+        <button onClick={() => onChange('')} title="Clear search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 haptic grid h-6 w-6 place-items-center rounded-full text-muted hover:bg-cream">✕</button>
+      )}
+    </div>
+  );
+}
+
+function PickupsRangeView({ mode, search, onOpen, onAssign, onEdit, onDuplicate, onAdd }: {
+  mode: 'list' | 'history';
+  search: string;
+  onOpen: (id: number) => void;
+  onAssign?: (p: PiRow) => void;
+  onEdit?: (p: PiRow) => void;
+  onDuplicate?: (p: PiRow) => void;
+  onAdd?: () => void;
+}) {
+  const today = nyToday();
+  const [from, setFrom] = useState(mode === 'list' ? today : shiftDay(today, -30));
+  const [to, setTo]     = useState(mode === 'list' ? shiftDay(today, 7) : shiftDay(today, -1));
+  const q = search;
+  const [status, setStatus] = useState<'' | OfficeStatus | 'cancelled'>('');
+  const [kind, setKind] = useState<'' | 'steady' | 'one-time'>('');
+  const [supplier, setSupplier] = useState('');
+  const [driver, setDriver] = useState('');
+  const [verify, setVerify] = useState<'' | 'kiosk' | 'nokiosk'>('');
+  const rangeQ = useQuery({
+    queryKey: ['admin-pickups-range', from, to],
+    queryFn: () => api<{ data: PiRow[] }>(`/api/pickup-instances?from=${from}&to=${to}`),
+    enabled: !!from && !!to && from <= to,
+  });
+  const rows = useMemo(() => (rangeQ.data?.data ?? []).filter((p) => !p.is_test), [rangeQ.data]);
+  const supplierOptions = useMemo(() => [...new Set(rows.map(rowLabel))].sort(), [rows]);
+  const driverOptions = useMemo(() => [...new Set(rows.flatMap(rowDrivers))].sort(), [rows]);
+  const statusOf = (p: PiRow) => String(p.status || '').toLowerCase() === 'cancelled' ? 'cancelled' : officeStatusOf(p);
+  const statusLabelOf = (p: PiRow) => { const s = statusOf(p); return s === 'cancelled' ? 'Cancelled' : OFFICE_SPILL[s].label; };
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    const out = rows.filter((p) => {
+      const os = statusOf(p);
+      if (status && os !== status) return false;
+      if (kind === 'steady' && p.steady_pickup_id == null) return false;
+      if (kind === 'one-time' && p.steady_pickup_id != null) return false;
+      if (supplier && rowLabel(p) !== supplier) return false;
+      if (driver && !rowDrivers(p).includes(driver)) return false;
+      if (verify === 'nokiosk' && os !== 'complete_nokiosk') return false;
+      if (verify === 'kiosk' && os !== 'complete') return false;
+      if (!needle) return true;
+      return pickupHaystack(p).includes(needle);
+    });
+    const key = (p: PiRow) => String(p.scheduled_date).slice(0, 10) + String(p.scheduled_time);
+    return out.sort((a, b) => mode === 'list' ? key(a).localeCompare(key(b)) : key(b).localeCompare(key(a)));
+  }, [rows, q, status, kind, supplier, driver, verify, mode]);
+  const byDay = useMemo(() => {
+    const m = new Map<string, PiRow[]>();
+    for (const p of filtered) {
+      const d = String(p.scheduled_date).slice(0, 10);
+      if (!m.has(d)) m.set(d, []);
+      m.get(d)!.push(p);
+    }
+    return [...m.entries()];
+  }, [filtered]);
+  function exportCsv() {
+    const esc = (v: unknown) => { const t = String(v ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+    const head = ['Ref #', 'Date', 'Time', 'Supplier / pickup', 'Type', 'Status', 'Drivers', 'Address', 'Food', 'Instructions', 'Notes'];
+    const lines = filtered.map((p) => [
+      p.ref_number ?? p.id, String(p.scheduled_date).slice(0, 10), String(p.scheduled_time ?? '').slice(0, 5),
+      rowLabel(p), p.steady_pickup_id != null ? 'Steady' : 'One-Time', statusLabelOf(p), rowDrivers(p).join('; '),
+      p.pickup_address || [p.supplier_address, p.supplier_city].filter(Boolean).join(', '),
+      p.food_description, (p as any).special_instructions, p.notes,
+    ].map(esc).join(','));
+    const blob = new Blob(['﻿' + [head.join(','), ...lines].join('\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `pickups-${mode}-${from}-to-${to}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+  const sel = 'rounded-[9px] border border-line bg-paper px-2 py-1.5 text-[12px]';
+  const dayLabel = (d: string) => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <label className="text-[11.5px] text-muted flex items-center gap-1">From
+          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className={sel} /></label>
+        <label className="text-[11.5px] text-muted flex items-center gap-1">To
+          <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className={sel} /></label>
+        <button onClick={exportCsv} disabled={filtered.length === 0}
+                className="haptic rounded-[10px] border border-line bg-paper px-3 py-1.5 text-[12px] font-bold text-forest-deep hover:bg-cream disabled:opacity-50">
+          ↓ Export
+        </button>
+        {onAdd && (
+          <button onClick={onAdd}
+                  className="haptic inline-flex items-center gap-1 rounded-[10px] bg-forest px-3 py-1.5 text-[12px] font-bold text-paper shadow-ctag hover:brightness-110">
+            <Plus size={13} /> Add Pickup
+          </button>
+        )}
+      </div>
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <select value={status} onChange={(e) => setStatus(e.target.value as any)} className={sel}>
+          <option value="">All statuses</option>
+          {(Object.keys(OFFICE_SPILL) as OfficeStatus[]).map((k) => <option key={k} value={k}>{OFFICE_SPILL[k].label}</option>)}
+          <option value="cancelled">Cancelled</option>
+        </select>
+        <select value={kind} onChange={(e) => setKind(e.target.value as any)} className={sel}>
+          <option value="">Steady + One-Time</option>
+          <option value="steady">Steady only</option>
+          <option value="one-time">One-Time only</option>
+        </select>
+        <select value={supplier} onChange={(e) => setSupplier(e.target.value)} className={cx(sel, 'max-w-[200px]')}>
+          <option value="">All suppliers</option>
+          {supplierOptions.map((x) => <option key={x} value={x}>{x}</option>)}
+        </select>
+        <select value={driver} onChange={(e) => setDriver(e.target.value)} className={cx(sel, 'max-w-[200px]')}>
+          <option value="">All drivers</option>
+          {driverOptions.map((x) => <option key={x} value={x}>{x}</option>)}
+        </select>
+        <select value={verify} onChange={(e) => setVerify(e.target.value as any)} className={sel}>
+          <option value="">Any verification</option>
+          <option value="kiosk">Completed – verified</option>
+          <option value="nokiosk">Completed – no kiosk sign-in</option>
+        </select>
+        <span className="text-[11.5px] text-muted ml-auto">{rangeQ.isFetching ? 'Loading…' : `${filtered.length} of ${rows.length} pickups`}</span>
+      </div>
+      {from > to ? (
+        <div className="rounded-[14px] border border-line bg-paper px-4 py-3 text-[13px] text-clay">The From date is after the To date.</div>
+      ) : rangeQ.isError ? (
+        <div className="rounded-[14px] border border-line bg-paper px-4 py-3 text-[13px] text-clay">
+          Couldn't load pickups. <button onClick={() => rangeQ.refetch()} className="font-bold underline">Try again</button>
+        </div>
+      ) : !rangeQ.isFetching && byDay.length === 0 ? (
+        <div className="rounded-[14px] border border-line bg-paper px-4 py-3 text-[13px] text-muted">{PICKUPS_SUB_EMPTY[mode]}</div>
+      ) : (
+        byDay.map(([d, items]) => (
+          <section key={d} className="mb-5">
+            <div className="text-[11px] font-extrabold uppercase tracking-[.05em] mb-2.5 text-muted">{dayLabel(d)} · {items.length}</div>
+            <div className="space-y-2.5">
+              {items.map((p) => (
+                <CoordRow key={p.id} p={p}
+                          onAssign={onAssign ? () => onAssign(p) : () => {}}
+                          onOpen={() => onOpen(Number(p.id))}
+                          onEdit={onEdit ? () => onEdit(p) : undefined}
+                          onDuplicate={onDuplicate ? () => onDuplicate(p) : undefined}
+                          allowDriverCancel={!!onEdit} />
+              ))}
+            </div>
+          </section>
+        ))
+      )}
+    </div>
+  );
+}
+
+function PickupsSubTabStrip({
+  current, onChange, counts,
+}: {
+  current: PickupsSubTab;
+  onChange: (t: PickupsSubTab) => void;
+  counts: { attention: number; upcoming: number; completed: number; history: number; today: number };
+}) {
+  const tabs: { key: PickupsSubTab; label: string; count?: number; accent?: boolean }[] = [
+    { key: 'today',     label: 'Today',              count: counts.today },
+    { key: 'list',      label: 'List' },
+    { key: 'calendar',  label: 'Calendar' },
+    { key: 'history',   label: 'History' },
+    { key: 'recurring', label: 'Recurring Templates' },
+    { key: 'attention', label: 'Needs attention',    count: counts.attention, accent: counts.attention > 0 },
+  ];
+  return (
+    <div className="mb-4 flex items-center gap-1.5 border-b border-line overflow-x-auto">
+      {tabs.map((t) => {
+        const on = current === t.key;
+        return (
+          <button key={t.key} onClick={() => onChange(t.key)}
+                  className={cx('haptic px-3 py-2 text-[13px] font-bold border-b-2 -mb-px transition inline-flex items-baseline gap-1.5',
+                    on
+                      ? t.key === 'attention'
+                        ? 'border-clay text-clay'
+                        : 'border-forest text-forest'
+                      : t.accent
+                        ? 'border-transparent text-clay hover:text-clay'
+                        : 'border-transparent text-muted hover:text-ink')}>
+            <span className="whitespace-nowrap">{t.label}</span>
+            {t.count != null && (
+              <span className={cx('text-[10.5px] font-extrabold px-1.5 rounded-full',
+                                  on
+                                    ? t.key === 'attention' ? 'bg-clay/10 text-clay' : 'bg-forest/10 text-forest'
+                                    : t.accent ? 'bg-clay/10 text-clay' : 'bg-line/70 text-muted')}>
+                {t.count}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function groupByDate(items: PiRow[]) {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
+  const now = Date.now();
+  // "Overdue / Needs attention" — pickups whose scheduled start has passed and
+  // are still open (not completed / cancelled). Surfaced above the date groups
+  // so dispatch never misses one.
+  const overdue: PiRow[] = [];
+  const dated: PiRow[] = [];
+  for (const it of items) {
+    const status = String(it.status || '').toLowerCase();
+    const closed = status === 'completed' || status === 'delivered' || status === 'cancelled';
+    const hasDriver = (it.signups?.length ?? 0) > 0;
+    if (!closed && !hasDriver && !it.posted_via_supplier) {
+      const startMs = new Date(it.scheduled_date.slice(0, 10) + 'T' +
+        (it.scheduled_time || '00:00:00')).getTime();
+      const windowEnd = it.must_pickup_by ? new Date(it.must_pickup_by).getTime() : startMs + 60 * 60_000;
+      if (windowEnd < now) { overdue.push(it); continue; }
+    }
+    dated.push(it);
+  }
+  const groups = new Map<string, { key: string; label: string; items: PiRow[]; overdue?: boolean }>();
+  if (overdue.length) {
+    groups.set('__overdue__', { key: '__overdue__', label: `Looking for a driver · ${overdue.length} pending`, items: overdue, overdue: true });
+  }
+  for (const it of dated) {
+    const d = new Date(it.scheduled_date.slice(0, 10) + 'T00:00:00');
+    let label: string;
+    if (sameDay(d, today)) label = 'Today · ' + d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    else if (sameDay(d, tomorrow)) label = 'Tomorrow · ' + d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    else label = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    const key = d.toISOString().slice(0, 10);
+    (groups.get(key) ?? groups.set(key, { key, label, items: [] }).get(key)!).items.push(it);
+  }
+  return Array.from(groups.values());
+}
+function sameDay(a: Date, b: Date) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
+function fmtTime(t: string) {
+  if (!t || !t.includes(':')) return t;
+  const [hh, mm] = t.split(':'); const h = parseInt(hh ?? '0', 10);
+  const ampm = h >= 12 ? 'PM' : 'AM'; const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return `${h12}:${mm} ${ampm}`;
+}
+
+/**
+ * SmsComboPanel — one nav entry ("SMS Composer & Broadcast") with an internal
+ * tabstrip that surfaces the four previously-separate items:
+ *   Compose | Threads | Groups | Broadcast
+ * Each tab renders the existing panel component unchanged (no rewrite).
+ */
+type SmsSubTab = 'upcoming' | 'compose' | 'threads' | 'groups' | 'broadcast' | 'whatsapp' | 'wa-threads' | 'jewish-calendar';
+function SmsComboPanel() {
+  // upsms (Aug 20): "Upcoming" surfaces the next scheduled consolidated drop
+  // and the four controls (Send Now / Cancel / Send Earlier / Send Later).
+  // It's the first tab so coordinators land on the pending broadcast state
+  // rather than the compose textarea.
+  // Refresh-persistence: restore the SMS sub-tab from the URL hash and keep it
+  // in sync. On a sub-tab CHANGE we clear the deeper thread segment (the new
+  // sub-tab has no open conversation); on the initial mount (prevSubRef starts
+  // equal) we leave the thread segment alone so SmsThreadsPanel can restore it.
+  const [sub, setSub] = useState<SmsSubTab>(() => {
+    const n = readCoordNav();
+    const valid: SmsSubTab[] = ['upcoming', 'compose', 'threads', 'groups', 'broadcast', 'whatsapp', 'wa-threads', 'jewish-calendar'];
+    return (n.tab === 'sms-combo' && valid.includes(n.sub as SmsSubTab))
+      ? (n.sub as SmsSubTab) : 'upcoming';
+  });
+  const prevSubRef = useRef<SmsSubTab>(sub);
+  useEffect(() => {
+    const changed = prevSubRef.current !== sub;
+    prevSubRef.current = sub;
+    patchCoordNav(changed ? { sub, thread: undefined } : { sub });
+  }, [sub]);
+  const tabs: { key: SmsSubTab; label: string }[] = [
+    { key: 'upcoming',   label: 'Upcoming' },
+    { key: 'compose',    label: 'Compose' },
+    { key: 'threads',    label: 'SMS threads' },
+    { key: 'groups',     label: 'Groups' },
+    { key: 'broadcast',  label: 'Broadcast (push)' },
+    { key: 'whatsapp',   label: 'WhatsApp' },
+    { key: 'wa-threads', label: 'WA threads' },
+  ];
+  return (
+    <div className="space-y-3">
+      <SmsPauseBanner />
+      <div className="flex items-center gap-1.5 border-b border-line">
+        {tabs.map((t) => (
+          <button key={t.key} onClick={() => setSub(t.key)}
+                  className={cx('px-3 py-2 text-[13px] font-bold border-b-2 -mb-px transition haptic',
+                    sub === t.key
+                      ? 'border-forest text-forest'
+                      : 'border-transparent text-muted hover:text-ink')}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div>
+        {sub === 'upcoming'  && <UpcomingSmsPanel />}
+        {sub === 'compose'   && <SmsComposerPanel />}
+        {sub === 'threads'   && <SmsThreadsPanel />}
+        {sub === 'groups'    && <SmsGroupsPanel />}
+        {sub === 'broadcast' && <BroadcastPanel />}
+        {sub === 'whatsapp'  && <WhatsappAdminPanel />}
+        {sub === 'wa-threads' && <WaThreadsPanel />}
+        {sub === 'jewish-calendar' && <JewishCalendarPanel />}
+      </div>
+    </div>
+  );
+}
+
+// Sep 15 client #2 — master pause switch shown at the top of every SMS
+// Composer tab. Red banner + Resume button when paused; small calm strip
+// with a Pause button when live. Manual "Send Now" from the office is
+// unaffected by the pause — this only stops the automatic sweepers.
+// Oct 2 client fix (UI plan §9): while automatic SMS is paused, every page
+// shows it — who paused, when, and where to resume. Silent for roles that
+// can't read the pause status.
+function SmsPausedGlobalBanner({ onOpen }: { onOpen: () => void }) {
+  const q = useQuery({
+    queryKey: ['admin-sms-pause'],
+    queryFn: () => adminSmsPause.status(),
+    refetchInterval: 20_000,
+    retry: false,
+  });
+  if (!q.data?.paused) return null;
+  const at = q.data.pausedAt ? new Date(q.data.pausedAt).toLocaleString() : null;
+  return (
+    <div className="bg-clay text-paper px-4 py-2 text-[13px] font-bold flex flex-wrap items-center gap-x-3 gap-y-1">
+      <span>⏸ Automatic SMS is PAUSED{at ? ` since ${at}` : ''}{q.data.pausedBy ? ` by ${q.data.pausedBy}` : ''}.</span>
+      <button onClick={onOpen} className="haptic underline">Open Holiday &amp; SMS Controls to resume</button>
+    </div>
+  );
+}
+
+function SmsPauseBanner() {
+  const qc = useQueryClient();
+  const q = useQuery({
+    queryKey: ['admin-sms-pause'],
+    queryFn: () => adminSmsPause.status(),
+    refetchInterval: 20_000,
+  });
+  const m = useMutation({
+    mutationFn: (paused: boolean) => adminSmsPause.set(paused),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin-sms-pause'] }),
+  });
+  if (q.isLoading || !q.data) {
+    return <div className="text-[11.5px] text-muted px-2">Checking auto-SMS status…</div>;
+  }
+  const paused = q.data.paused;
+  const pausedAt = q.data.pausedAt ? new Date(q.data.pausedAt) : null;
+  const confirmMsg = paused
+    ? 'Resume automatic SMS? Sweepers will send again on their next tick.'
+    : 'Pause every automatic SMS immediately? Manual sends still work.';
+  const onClick = () => { if (window.confirm(confirmMsg)) m.mutate(!paused); };
+  if (paused) {
+    return (
+      <div className="rounded-[12px] border-2 border-clay bg-clay/10 p-3 flex items-center gap-3">
+        <div className="flex-1">
+          <div className="font-display font-bold text-[15px] text-clay">Auto SMS is PAUSED</div>
+          <div className="text-[12px] text-ink mt-0.5">
+            Every scheduled sweeper is skipping.{' '}
+            {pausedAt && <>Paused since {pausedAt.toLocaleString()}{q.data.pausedBy ? ` by ${q.data.pausedBy}` : ''}.</>}{' '}
+            Manual sends from this panel still work.
+          </div>
+        </div>
+        <button onClick={onClick} disabled={m.isPending}
+                className="haptic bg-forest text-paper font-bold text-[13px] rounded-[8px] px-4 py-2 disabled:opacity-40">
+          {m.isPending ? 'Resuming…' : 'Resume auto SMS'}
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-[10px] border border-line bg-cream/40 px-3 py-2 flex items-center gap-3">
+      <div className="flex-1 text-[12px] text-muted">
+        <span className="font-bold text-forest">Auto SMS is LIVE</span> — sweepers are running normally.
+      </div>
+      <button onClick={onClick} disabled={m.isPending}
+              title="Emergency stop — pauses every automatic sweeper. Manual sends still work."
+              className="haptic bg-paper border border-clay text-clay font-bold text-[12px] rounded-[8px] px-3 py-1 disabled:opacity-40 hover:bg-clay/10">
+        {m.isPending ? 'Pausing…' : 'Pause all auto SMS'}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * DispatchersComboPanel — one nav entry ("Dispatchers").
+ *
+ * Restructured Aug 20 per client spec: the top-of-panel view is now the
+ * *dispatcher roster* — a person-first list you can add to independent of
+ * any shift. Below the roster we keep the Driver-reply SMS access list.
+ * The old "Staff & roles" grid (role changes, disable) is preserved as a
+ * secondary tab; it manages login accounts, which is a distinct concern.
+ *
+ *   Roster & SMS  →  DispatchersRosterPanel  +  SmsDispatchersPanel
+ *   Staff & roles →  DispatchersPanel        (login-account admin)
+ */
+type DispSubTab = 'roster' | 'attendance' | 'calendar' | 'template' | 'alerts' | 'staff';
+function DispatchersComboPanel() {
+  // Refresh-persistence: restore the Dispatchers sub-tab from the URL hash.
+  const [sub, setSub] = useState<DispSubTab>(() => {
+    const n = readCoordNav();
+    const valid: DispSubTab[] = ['roster', 'attendance', 'calendar', 'template', 'alerts', 'staff'];
+    return (n.tab === 'dispatchers-combo' && valid.includes(n.sub as DispSubTab))
+      ? (n.sub as DispSubTab) : 'roster';
+  });
+  useEffect(() => { patchCoordNav({ sub }); }, [sub]);
+  const tabs: { key: DispSubTab; label: string }[] = [
+    { key: 'roster',   label: 'Roster & SMS' },
+    { key: 'calendar', label: 'Weekly calendar' },
+    { key: 'template', label: 'Shift template' },
+    { key: 'alerts',   label: '90-min alerts' },
+    { key: 'staff',    label: 'Staff & roles' },
+    { key: 'attendance', label: 'Attendance' }, // Oct 2 (UI plan §6)
+  ];
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-1.5 border-b border-line">
+        {tabs.map((t) => (
+          <button key={t.key} onClick={() => setSub(t.key)}
+                  className={cx('px-3 py-2 text-[13px] font-bold border-b-2 -mb-px transition haptic',
+                    sub === t.key
+                      ? 'border-forest text-forest'
+                      : 'border-transparent text-muted hover:text-ink')}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {sub === 'roster' && (
+        <div className="space-y-6">
+          <DispatchersRosterPanel />
+          <div className="pt-4 border-t border-line">
+            <div className="mb-2">
+              <h3 className="font-display font-bold text-[15px] text-ink">Driver-reply SMS access</h3>
+              <div className="text-[11.5px] text-muted">
+                Phones that receive driver replies and can respond privately via <code>*NN &lt;msg&gt;</code>.
+              </div>
+            </div>
+            <SmsDispatchersPanel />
+          </div>
+        </div>
+      )}
+      {sub === 'calendar' && <DispatcherWeeklyCalendar />}
+      {sub === 'template' && <DispatcherShiftTemplate />}
+      {sub === 'alerts'   && <UncoveredAlertsPanel />}
+      {sub === 'staff' && <DispatchersPanel />}
+      {sub === 'attendance' && <DispatcherAttendancePanel />}
+    </div>
+  );
+}
+
+// Sep 4 client feature: manage the 90-min uncovered pickup alert group.
+function UncoveredAlertsPanel() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['uncovered-alert-members'], queryFn: uncoveredAlerts.list });
+  const rows = q.data?.data ?? [];
+  const [addQuery, setAddQuery] = useState('');
+  const [showPicker, setShowPicker] = useState(false);
+  const allVols = useQuery({
+    queryKey: ['admin-volunteers'],
+    queryFn: () => api<{ data: any[] }>('/api/volunteers'),
+    enabled: showPicker,
+  });
+  const existingIds = new Set(rows.map((r) => Number(r.volunteerId)));
+  const searchable = ((allVols.data?.data ?? []) as any[])
+    .filter((v: any) => !existingIds.has(Number(v.id)))
+    .filter((v: any) => !addQuery || `${v.firstName ?? ''} ${v.lastName ?? ''} ${v.phonePrimary ?? ''}`.toLowerCase().includes(addQuery.toLowerCase()))
+    .slice(0, 30);
+  const addM = useMutation({
+    mutationFn: (id: number) => uncoveredAlerts.add(id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['uncovered-alert-members'] }); setAddQuery(''); },
+  });
+  const removeM = useMutation({
+    mutationFn: (id: number) => uncoveredAlerts.remove(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['uncovered-alert-members'] }),
+  });
+
+  return (
+    <div className="space-y-3">
+      <div className="bg-paper border border-line rounded-[14px] p-4 text-[12.5px] text-muted">
+        <div className="font-display font-bold text-[15px] text-ink mb-1">90-minute uncovered-pickup alerts</div>
+        <p>
+          When a pickup has been posted for 90 minutes and still isn't fully covered, everyone in this group receives an SMS:
+          <em> "Uncovered 90 min: [donor] · [address] · [date time]. Still open — please cover if you can."</em>
+        </p>
+        <p className="mt-1">
+          One alert per uncovered episode — if it gets covered and then re-opens, the 90-minute clock restarts. Multi-driver pickups are only "covered" once every slot is filled. Shabbos/message-blackout rules apply.
+        </p>
+      </div>
+
+      <div className="bg-paper border border-line rounded-[14px] overflow-hidden">
+        <div className="px-4 py-2.5 border-b border-line flex items-center justify-between">
+          <div className="text-[13px] font-extrabold uppercase tracking-[.06em] text-muted">
+            {rows.length} member{rows.length === 1 ? '' : 's'} in alert group
+          </div>
+          <button onClick={() => setShowPicker((v) => !v)}
+                  className="haptic text-[12.5px] font-bold text-paper bg-forest rounded-[8px] px-3 py-1.5 hover:bg-forest-deep">
+            {showPicker ? 'Close picker' : '+ Add person'}
+          </button>
+        </div>
+
+        {showPicker && (
+          <div className="p-3 border-b border-line bg-cream/40 space-y-2">
+            <input value={addQuery} onChange={(e) => setAddQuery(e.target.value)}
+                   placeholder="Search volunteers by name or phone…"
+                   className="w-full border border-line rounded-[8px] px-2 py-1.5 text-[13px] bg-paper" />
+            <div className="max-h-[240px] overflow-auto rounded-[8px] border border-line bg-paper divide-y divide-line/60">
+              {allVols.isLoading && <div className="p-3 text-[12px] text-muted italic">Loading volunteers…</div>}
+              {searchable.length === 0 && !allVols.isLoading && <div className="p-3 text-[12px] text-muted italic">No matches.</div>}
+              {searchable.map((v: any) => (
+                <button key={v.id} onClick={() => addM.mutate(Number(v.id))} disabled={addM.isPending}
+                        className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-cream/50 disabled:opacity-40">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-bold text-[12.5px] text-ink truncate">{v.firstName} {v.lastName}{v.unitNumber != null ? ` · #${v.unitNumber}` : ''}</div>
+                    <div className="text-[11px] text-muted truncate">{v.phonePrimary ?? '—'}</div>
+                  </div>
+                  <span className="text-[11px] font-bold text-forest">+ Add</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {q.isLoading ? (
+          <div className="text-[13.5px] text-muted py-8 text-center">Loading…</div>
+        ) : rows.length === 0 ? (
+          <div className="text-[13.5px] text-muted py-8 text-center">Nobody in this group yet. Add anyone who should get an SMS when pickups stay open past 90 minutes.</div>
+        ) : (
+          <div className="divide-y divide-line/70">
+            {rows.map((m) => (
+              <div key={m.volunteerId} className="px-4 py-2.5 flex items-center gap-3 text-[13px]">
+                <div className="flex-1 min-w-0">
+                  <div className="font-bold text-ink truncate">{m.firstName} {m.lastName}{m.unitNumber != null ? ` · #${m.unitNumber}` : ''}</div>
+                  <div className="text-[11.5px] text-muted truncate">{m.phone ?? '—'} · added {new Date(m.addedAt).toLocaleDateString()}</div>
+                </div>
+                <button onClick={() => { if (confirm(`Remove ${m.firstName} ${m.lastName} from the 90-min alert group?`)) removeM.mutate(m.volunteerId); }}
+                        className="haptic text-[11.5px] font-bold text-muted hover:text-clay">Remove</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---- Sep 4: dispatcher weekly coverage calendar + template editor ----
+function ny(d: Date): Date {
+  return new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+}
+function isoDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+function sundayOfWeek(anyDate: Date): string {
+  const nyD = ny(anyDate);
+  nyD.setDate(nyD.getDate() - nyD.getDay());
+  return isoDate(nyD);
+}
+function addDays(iso: string, n: number): string {
+  const [y, m, d] = iso.split('-').map((x) => Number(x));
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + n);
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`;
+}
+function fmt12(hhmm: string): string {
+  const [h, m] = hhmm.split(':').map((x) => Number(x));
+  const ap = h >= 12 ? 'PM' : 'AM';
+  const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return `${h12}:${String(m).padStart(2, '0')} ${ap}`;
+}
+const ROSTER_DAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Motzei Shabbos'];
+
+function DispatcherWeeklyCalendar() {
+  const qc = useQueryClient();
+  const [weekStart, setWeekStart] = useState<string>(() => sundayOfWeek(new Date()));
+  const q = useQuery({
+    queryKey: ['disp-weekly', weekStart],
+    queryFn: () => dispatcherShifts.weekly(weekStart),
+  });
+  const rows = q.data?.data ?? [];
+  const covered = q.data?.covered ?? 0;
+  const total = q.data?.total ?? 0;
+
+  const [assignFor, setAssignFor] = useState<DispWeeklyRow | null>(null);
+
+  const bySection: Record<string, DispWeeklyRow[]> = {};
+  for (const r of rows) {
+    const key = r.section === 'friday' ? 'friday'
+              : r.section === 'motzei_shabbos' ? 'motzei_shabbos'
+              : `daily-${r.rosterDow}`;
+    (bySection[key] ??= []).push(r);
+  }
+  const weekEnd = addDays(weekStart, 6);
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-paper border border-line rounded-[14px] p-4 flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <button onClick={() => setWeekStart(addDays(weekStart, -7))}
+                  className="haptic text-[12.5px] font-bold text-forest bg-sage/60 hover:bg-sage rounded-full px-3 py-1">← Prev</button>
+          <button onClick={() => setWeekStart(sundayOfWeek(new Date()))}
+                  className="haptic text-[12.5px] font-bold text-forest bg-sage/60 hover:bg-sage rounded-full px-3 py-1">This week</button>
+          <button onClick={() => setWeekStart(addDays(weekStart, 7))}
+                  className="haptic text-[12.5px] font-bold text-forest bg-sage/60 hover:bg-sage rounded-full px-3 py-1">Next →</button>
+          <span className="text-[12.5px] text-muted ml-1">{weekStart} → {weekEnd}</span>
+        </div>
+        <div className="text-[13px] font-extrabold uppercase tracking-[.06em] text-muted">
+          {q.isLoading ? 'Loading…' : `${covered} of ${total} shifts covered`}
+        </div>
+      </div>
+
+      {q.isLoading ? (
+        <div className="text-center py-10 text-muted text-[13.5px]">Loading…</div>
+      ) : total === 0 ? (
+        <div className="text-center py-10 text-muted text-[13.5px]">No shift template yet. Set one up on the Shift template tab.</div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          {[0, 1, 2, 3, 4].map((d) => (
+            <DispDayCard key={`d-${d}`} label={ROSTER_DAY_LABELS[d]} rows={bySection[`daily-${d}`] ?? []} onAssign={setAssignFor} onUnassign={(r) => dispatcherShifts.unassign(r.shiftId!).then(() => qc.invalidateQueries({ queryKey: ['disp-weekly'] }))} />
+          ))}
+          <DispDayCard label="Friday" rows={bySection['friday'] ?? []} onAssign={setAssignFor} onUnassign={(r) => dispatcherShifts.unassign(r.shiftId!).then(() => qc.invalidateQueries({ queryKey: ['disp-weekly'] }))} />
+          <DispDayCard label="Motzei Shabbos" rows={bySection['motzei_shabbos'] ?? []} onAssign={setAssignFor} onUnassign={(r) => dispatcherShifts.unassign(r.shiftId!).then(() => qc.invalidateQueries({ queryKey: ['disp-weekly'] }))} />
+        </div>
+      )}
+
+      {assignFor && (
+        <AssignDispatcherModal row={assignFor} weekStart={weekStart}
+                               onClose={() => setAssignFor(null)}
+                               onSaved={() => { setAssignFor(null); qc.invalidateQueries({ queryKey: ['disp-weekly'] }); }} />
+      )}
+    </div>
+  );
+}
+
+function DispDayCard({ label, rows, onAssign, onUnassign }: {
+  label: string; rows: DispWeeklyRow[];
+  onAssign: (r: DispWeeklyRow) => void;
+  onUnassign: (r: DispWeeklyRow) => void;
+}) {
+  return (
+    <div className="bg-paper border border-line rounded-[14px] overflow-hidden">
+      <div className="px-3 py-2 border-b border-line bg-cream/50">
+        <div className="font-display font-bold text-[15px] text-ink">{label}</div>
+      </div>
+      <div className="divide-y divide-line/70">
+        {rows.length === 0 && <div className="p-3 text-[12.5px] text-muted italic">No shifts.</div>}
+        {rows.map((r) => (
+          <div key={r.slotId} className="px-3 py-2 flex items-center gap-2 text-[13px]">
+            <div className="tabular-nums text-muted w-[135px] shrink-0">{fmt12(r.startTime)} – {fmt12(r.endTime)}</div>
+            <div className="flex-1 min-w-0">
+              {r.volunteerId ? (
+                <div>
+                  <div className="font-bold text-ink truncate">{r.firstName} {r.lastName}</div>
+                  {r.phone && <div className="text-[11px] text-muted truncate">{r.phone}</div>}
+                </div>
+              ) : (
+                <div className="font-bold text-clay">Open — needs dispatcher</div>
+              )}
+            </div>
+            {r.volunteerId ? (
+              <button onClick={() => onUnassign(r)}
+                      className="haptic text-[11.5px] font-bold text-muted hover:text-clay">Release</button>
+            ) : (
+              <button onClick={() => onAssign(r)}
+                      className="haptic text-[11.5px] font-bold text-paper bg-forest rounded-[8px] px-2 py-1 hover:bg-forest-deep">Assign</button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AssignDispatcherModal({ row, weekStart, onClose, onSaved }: {
+  row: DispWeeklyRow; weekStart: string; onClose: () => void; onSaved: () => void;
+}) {
+  const dq = useQuery({ queryKey: ['dispatchers-roster'], queryFn: () => api<{ data: any[] }>('/api/dispatchers') });
+  const [q, setQ] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const roster = (dq.data?.data ?? []) as any[];
+  const filtered = roster
+    .filter((p: any) => {
+      const s = `${p.firstName ?? p.first_name ?? ''} ${p.lastName ?? p.last_name ?? ''} ${p.phonePrimary ?? p.phone_primary ?? ''}`.toLowerCase();
+      return !q || s.includes(q.toLowerCase());
+    })
+    .slice(0, 40);
+  const assignM = useMutation({
+    mutationFn: (volunteerId: number) => dispatcherShifts.assign({ slotId: row.slotId, weekStart, volunteerId }),
+    onSuccess: () => onSaved(),
+    onError: (e: any) => setErr(e?.message || 'failed'),
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div className="bg-paper rounded-[16px] border border-line max-w-md w-full max-h-[80vh] overflow-hidden flex flex-col"
+           onClick={(e) => e.stopPropagation()}>
+        <div className="px-4 py-3 border-b border-line flex items-start justify-between gap-3">
+          <div>
+            <div className="font-display font-bold text-[17px] text-ink">Assign dispatcher</div>
+            <div className="text-[12px] text-muted">{fmt12(row.startTime)} – {fmt12(row.endTime)} · {new Date(row.startAt).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'America/New_York' })}</div>
+          </div>
+          <button onClick={onClose} className="haptic text-muted hover:text-ink text-[22px] leading-none px-1">×</button>
+        </div>
+        <div className="p-3">
+          <input value={q} onChange={(e) => setQ(e.target.value)}
+                 placeholder="Search dispatchers…"
+                 className="w-full border border-line rounded-[8px] px-2 py-1.5 text-[13px] bg-paper" />
+        </div>
+        <div className="overflow-y-auto px-3 pb-3 space-y-1">
+          {dq.isLoading && <div className="text-[12.5px] text-muted italic">Loading roster…</div>}
+          {filtered.length === 0 && !dq.isLoading && <div className="text-[12.5px] text-muted italic">No matches.</div>}
+          {filtered.map((p: any) => {
+            const id = Number(p.id ?? p.volunteerId);
+            const first = p.firstName ?? p.first_name ?? '';
+            const last = p.lastName ?? p.last_name ?? '';
+            const phone = p.phonePrimary ?? p.phone_primary ?? '';
+            return (
+              <button key={id} onClick={() => assignM.mutate(id)} disabled={assignM.isPending}
+                      className="w-full text-left px-3 py-2 flex items-center gap-2 rounded-[8px] hover:bg-cream/60 disabled:opacity-40">
+                <div className="flex-1 min-w-0">
+                  <div className="font-bold text-[13px] text-ink truncate">{first} {last}</div>
+                  <div className="text-[11.5px] text-muted truncate">{phone}</div>
+                </div>
+                <span className="text-[11px] font-bold text-forest">Assign →</span>
+              </button>
+            );
+          })}
+          {err && <div className="text-[12.5px] text-clay">{err}</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DispatcherShiftTemplate() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['disp-slots'], queryFn: () => dispatcherShifts.listSlots() });
+  const rows = q.data?.data ?? [];
+
+  const patchM = useMutation({
+    mutationFn: ({ id, body }: { id: number; body: Partial<Omit<DispShiftSlot, 'id'>> }) => dispatcherShifts.patchSlot(id, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['disp-slots'] }),
+  });
+  const delM = useMutation({
+    mutationFn: (id: number) => dispatcherShifts.deleteSlot(id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['disp-slots'] }); qc.invalidateQueries({ queryKey: ['disp-weekly'] }); },
+  });
+  const addM = useMutation({
+    mutationFn: (body: Omit<DispShiftSlot, 'id'>) => dispatcherShifts.createSlot(body),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['disp-slots'] }); qc.invalidateQueries({ queryKey: ['disp-weekly'] }); },
+  });
+
+  const grouped: Record<string, DispShiftSlot[]> = {};
+  for (const s of rows) {
+    const key = s.section === 'friday' ? 'friday'
+              : s.section === 'motzei_shabbos' ? 'motzei_shabbos'
+              : `daily-${s.rosterDow}`;
+    (grouped[key] ??= []).push(s);
+  }
+
+  const th = 'px-3 py-2 font-extrabold uppercase text-[11px] tracking-[.06em] text-muted text-left';
+  const timeCls = 'border border-line rounded-[6px] px-2 py-1 text-[12.5px] bg-paper tabular-nums w-[95px]';
+
+  const dailyDows = [0, 1, 2, 3, 4];
+  return (
+    <div className="space-y-4">
+      <div className="bg-paper border border-line rounded-[14px] p-3 text-[12.5px] text-muted">
+        The weekly calendar renders every active slot below. Edit start/end times inline, toggle active, or use <strong>+ Add slot</strong> at the bottom of each section.
+      </div>
+
+      {dailyDows.map((d) => (
+        <TemplateSection key={`daily-${d}`}
+          title={`${ROSTER_DAY_LABELS[d]} — Daily coverage`}
+          rows={grouped[`daily-${d}`] ?? []}
+          onPatch={(id, body) => patchM.mutate({ id, body })}
+          onDelete={(id) => { if (confirm('Delete this slot?')) delM.mutate(id); }}
+          onAdd={(body) => addM.mutate({ ...body, section: 'daily', rosterDow: d, startDow: d, wrapsNextDay: false, sortOrder: 999, isActive: true })}
+          th={th} timeCls={timeCls} />
+      ))}
+      <TemplateSection title="Friday"
+        rows={grouped['friday'] ?? []}
+        onPatch={(id, body) => patchM.mutate({ id, body })}
+        onDelete={(id) => { if (confirm('Delete this slot?')) delM.mutate(id); }}
+        onAdd={(body) => addM.mutate({ ...body, section: 'friday', rosterDow: 5, startDow: 5, wrapsNextDay: false, sortOrder: 999, isActive: true })}
+        th={th} timeCls={timeCls} />
+      <TemplateSection title="Motzei Shabbos"
+        rows={grouped['motzei_shabbos'] ?? []}
+        onPatch={(id, body) => patchM.mutate({ id, body })}
+        onDelete={(id) => { if (confirm('Delete this slot?')) delM.mutate(id); }}
+        onAdd={(body) => addM.mutate({ ...body, section: 'motzei_shabbos', rosterDow: 6, startDow: 6, wrapsNextDay: false, sortOrder: 999, isActive: true })}
+        th={th} timeCls={timeCls} />
+    </div>
+  );
+}
+
+function TemplateSection({ title, rows, onPatch, onDelete, onAdd, th, timeCls }: {
+  title: string; rows: DispShiftSlot[];
+  onPatch: (id: number, body: Partial<Omit<DispShiftSlot, 'id'>>) => void;
+  onDelete: (id: number) => void;
+  onAdd: (body: { startTime: string; endTime: string }) => void;
+  th: string; timeCls: string;
+}) {
+  const [newStart, setNewStart] = useState('');
+  const [newEnd, setNewEnd] = useState('');
+  return (
+    <div className="bg-paper border border-line rounded-[14px] overflow-hidden">
+      <div className="px-4 py-2 border-b border-line bg-cream/50 font-display font-bold text-[15px] text-ink">{title}</div>
+      <table className="w-full text-[13px]">
+        <thead>
+          <tr className="border-b border-line/70">
+            <th className={th}>Start</th>
+            <th className={th}>End</th>
+            <th className={th}>Wraps</th>
+            <th className={th}>Active</th>
+            <th className={th}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 && <tr><td colSpan={5} className="px-4 py-3 text-[12.5px] text-muted italic">No slots.</td></tr>}
+          {rows.map((s) => (
+            <tr key={s.id} className="border-b border-line/60">
+              <td className="px-3 py-1.5">
+                <input type="time" defaultValue={s.startTime} onBlur={(e) => e.target.value !== s.startTime && onPatch(s.id, { startTime: e.target.value })} className={timeCls} />
+              </td>
+              <td className="px-3 py-1.5">
+                <input type="time" defaultValue={s.endTime} onBlur={(e) => e.target.value !== s.endTime && onPatch(s.id, { endTime: e.target.value })} className={timeCls} />
+              </td>
+              <td className="px-3 py-1.5">
+                <input type="checkbox" checked={s.wrapsNextDay} onChange={(e) => onPatch(s.id, { wrapsNextDay: e.target.checked })} />
+              </td>
+              <td className="px-3 py-1.5">
+                <input type="checkbox" checked={s.isActive} onChange={(e) => onPatch(s.id, { isActive: e.target.checked })} />
+              </td>
+              <td className="px-3 py-1.5 text-right">
+                <button onClick={() => onDelete(s.id)} className="haptic text-[11.5px] font-bold text-muted hover:text-clay">Delete</button>
+              </td>
+            </tr>
+          ))}
+          <tr className="bg-cream/30">
+            <td className="px-3 py-1.5"><input type="time" value={newStart} onChange={(e) => setNewStart(e.target.value)} className={timeCls} /></td>
+            <td className="px-3 py-1.5"><input type="time" value={newEnd} onChange={(e) => setNewEnd(e.target.value)} className={timeCls} /></td>
+            <td className="px-3 py-1.5 text-[11px] text-muted">(auto)</td>
+            <td className="px-3 py-1.5"></td>
+            <td className="px-3 py-1.5 text-right">
+              <button onClick={() => {
+                if (!newStart || !newEnd) return;
+                onAdd({ startTime: newStart, endTime: newEnd });
+                setNewStart(''); setNewEnd('');
+              }}
+                      className="haptic text-[11.5px] font-bold text-paper bg-forest rounded-[8px] px-3 py-1 hover:bg-forest-deep">+ Add slot</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * ScheduleDownloadModal — client Aug 12.
+ *
+ * Simple date-range picker over /api/admin/schedule-export. Fetches with
+ * the JWT auth header (window.location.href can't set headers), then
+ * hands the returned .xlsx blob to the browser as a download.
+ * Default range: today to today + 14 days (NY-local wall clock).
+ */
+function ScheduleDownloadModal({ onClose }: { onClose: () => void }) {
+  const todayISO = (() => {
+    const s = new Date().toLocaleDateString('en-CA', {
+      year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/New_York',
+    });
+    return s;
+  })();
+  const plus14ISO = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 14);
+    return d.toLocaleDateString('en-CA', {
+      year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/New_York',
+    });
+  })();
+  const [from, setFrom] = useState(todayISO);
+  const [to,   setTo]   = useState(plus14ISO);
+  const [busy, setBusy] = useState(false);
+  const [err,  setErr]  = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true); setErr(null);
+    try {
+      // Reuse the shared API_BASE + JWT so /rescue-api proxying works
+      // identically on staging (web) and native (Capacitor).
+      const { API_BASE, getToken } = await import('../api');
+      const token = getToken();
+      const r = await fetch(
+        `${API_BASE.replace(/\/$/, '')}/api/admin/schedule-export?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+      );
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error((body as any).error || `${r.status} ${r.statusText}`);
+      }
+      const blob = await r.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = `zlz-schedule-${from}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5_000);
+      onClose();
+    } catch (e: any) {
+      setErr(e?.message || 'Download failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-ink/40 p-4" onClick={onClose}>
+      <div className="w-[420px] max-w-full bg-paper rounded-[16px] shadow-lift border border-line p-5"
+           onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <div className="font-display font-bold text-[18px] text-ink">Download schedule</div>
+            <div className="text-[12px] text-muted mt-0.5">
+              Pickups, steady templates, dispatcher &amp; center-help shifts — as one .xlsx.
+            </div>
+          </div>
+          <button onClick={onClose} className="haptic text-muted hover:text-ink" aria-label="Close">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="mt-4 grid grid-cols-2 gap-3">
+          <label className="block">
+            <span className="text-[11px] font-extrabold uppercase tracking-[.05em] text-muted">From</span>
+            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
+                   className="mt-1 w-full rounded-[10px] border border-line bg-cream px-3 py-2 text-[13px]" />
+          </label>
+          <label className="block">
+            <span className="text-[11px] font-extrabold uppercase tracking-[.05em] text-muted">To</span>
+            <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
+                   className="mt-1 w-full rounded-[10px] border border-line bg-cream px-3 py-2 text-[13px]" />
+          </label>
+        </div>
+        {err && (
+          <div className="mt-3 text-[12px] text-clay bg-clay/10 border border-clay/30 rounded-[8px] px-3 py-2">
+            {err}
+          </div>
+        )}
+        <div className="mt-5 flex items-center justify-end gap-2">
+          <button onClick={onClose} disabled={busy}
+                  className="haptic text-[12.5px] font-bold px-3 py-2 rounded-[10px] border border-line text-ink hover:bg-cream disabled:opacity-50">
+            Cancel
+          </button>
+          <button onClick={run} disabled={busy || !from || !to || from > to}
+                  className="haptic text-[12.5px] font-bold px-3 py-2 rounded-[10px] bg-forest text-paper shadow-ctag hover:brightness-110 disabled:opacity-50">
+            {busy ? 'Downloading…' : 'Download .xlsx'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -6,11 +6,13 @@
  * is also reused inside SupplierForm / VolunteerForm so the recruiter can log
  * a touchpoint from the contact's edit dialog.
  */
+import { uiConfirm } from './ui-dialogs';
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, X, Trash2, Phone, MessageSquare, Mail, Users2, Store, ChevronLeft, ChevronRight, Calendar as CalIcon } from 'lucide-react';
 import { api, crm, staffUsers, adminCRUD, type CrmInteraction, type FollowupDay, type StaffUser } from './api';
-import { Button, cx } from './design';
+import { Button, cx, SearchBar, DateInput } from './design';
+import { nyToday } from './time-format';
 import { RegistrationLinkCard } from './portal-sections';
 import { Gift } from 'lucide-react';
 
@@ -119,7 +121,7 @@ function CalendarView({ onPick }: { onPick: (row: CrmInteraction) => void }) {
   while (cells.length % 7 !== 0) cells.push(null);
 
   const monthLabel = cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
-  const today = new Date(); const todayStr = today.toISOString().slice(0, 10);
+  const todayStr = nyToday(); // Oct 8: NY date (UTC rolled to tomorrow at 8 PM)
 
   return (
     <div className="space-y-3">
@@ -229,9 +231,12 @@ function FeedView({ dueOnly, onPick }: { dueOnly?: boolean; onPick: (row: CrmInt
     queryKey: ['crm-interactions', { dueOnly: !!dueOnly }],
     queryFn:  () => crm.interactions({ dueOnly, limit: 300 }),
   });
-  const rows = q.data?.data ?? [];
+  // Oct 2 client fix: page search.
+  const [fq, setFq] = useState('');
+  const allRows = q.data?.data ?? [];
+  const rows = fq.trim() ? allRows.filter((r) => JSON.stringify(r).toLowerCase().includes(fq.trim().toLowerCase())) : allRows;
   if (q.isLoading) return <div className="text-[13.5px] text-muted py-3">Loading…</div>;
-  if (rows.length === 0) {
+  if (allRows.length === 0) {
     return <div className="text-[13.5px] text-muted py-6 text-center">
       {dueOnly ? 'No follow-ups due. ' : 'No interactions logged yet. '}
       Click "Log interaction" up top to get started.
@@ -239,6 +244,8 @@ function FeedView({ dueOnly, onPick }: { dueOnly?: boolean; onPick: (row: CrmInt
   }
   return (
     <div className="space-y-2">
+      <SearchBar value={fq} onChange={setFq} placeholder="Search interactions — name, summary, status…" />
+      {rows.length === 0 && <div className="text-[13px] text-muted py-3 text-center">Nothing matches that search.</div>}
       {rows.map((r) => <InteractionRow key={r.id} row={r} onPick={() => onPick(r)} />)}
     </div>
   );
@@ -288,7 +295,7 @@ function InteractionFormModal({ row, lockContact, onClose, onDone }: {
   const qc = useQueryClient();
   const editing = !!row;
   const locked = !!lockContact || editing;
-  const suppliers  = useQuery({ queryKey: ['admin-suppliers'],  queryFn: () => api<{ data: any[] }>('/api/suppliers?limit=500') });
+  const suppliers  = useQuery({ queryKey: ['admin-suppliers'],  queryFn: () => api<{ data: any[] }>('/api/suppliers?limit=500&logo=url') });
   const volunteers = useQuery({ queryKey: ['admin-volunteers'], queryFn: () => api<{ data: any[] }>('/api/volunteers?limit=500') });
 
   const [targetType, setTType] = useState<'volunteer' | 'supplier'>(row?.targetType ?? lockContact?.targetType ?? 'volunteer');
@@ -352,7 +359,7 @@ function InteractionFormModal({ row, lockContact, onClose, onDone }: {
   });
 
   return (
-    <div onClick={onClose} className="fixed inset-0 z-[2000] bg-ink/50 flex items-start justify-center pt-16 px-4">
+    <div className="fixed inset-0 z-[2000] bg-ink/50 flex items-start justify-center pt-16 px-4">
       <div onClick={(e) => e.stopPropagation()}
            className="relative z-[2001] bg-paper rounded-[18px] shadow-lift border border-line w-full max-w-xl max-h-[85vh] overflow-y-auto">
         <div className="sticky top-0 bg-paper border-b border-line px-5 py-3 flex items-center justify-between">
@@ -435,7 +442,7 @@ function InteractionFormModal({ row, lockContact, onClose, onDone }: {
 
           <div className="flex items-center justify-between pt-2">
             {editing ? (
-              <button onClick={() => { if (confirm('Delete this interaction entry?')) del.mutate(); }}
+              <button onClick={() => { void uiConfirm('Delete this interaction entry?').then((ok) => { if (ok) { del.mutate(); } }); }}
                       className="haptic flex items-center gap-1.5 text-clay text-[13px] font-bold border border-clay/40 px-3 py-2 rounded-[10px] hover:bg-clay-soft">
                 <Trash2 size={13} /> {del.isPending ? 'Deleting…' : 'Delete'}
               </button>
@@ -561,7 +568,7 @@ function GiftForm({ row, targetType, targetId, targetName, onClose, onDone }: {
   const del = useMutation({ mutationFn: () => adminCRUD.deleteGift(row.id), onSuccess: onDone });
 
   return (
-    <div className="fixed inset-0 z-[3000] bg-black/40 grid place-items-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[3000] bg-black/40 grid place-items-center p-4">
       <div onClick={(e) => e.stopPropagation()} className="bg-paper rounded-[18px] shadow-lift w-full max-w-md p-5">
         <div className="font-display font-semibold text-[18px] mb-1">{row ? 'Edit gift' : 'Record a gift'}</div>
         <div className="text-[12px] text-muted mb-3">For {targetName}</div>
@@ -586,7 +593,7 @@ function GiftForm({ row, targetType, targetId, targetName, onClose, onDone }: {
           </div>
           <label className="block">
             <div className="text-[11px] font-extrabold uppercase tracking-[.05em] text-muted">Date given</div>
-            <input type="date" value={givenAt} onChange={(e) => setGivenAt(e.target.value)}
+            <DateInput value={givenAt} onChange={setGivenAt}
                    className="mt-1 w-full rounded-[10px] border-[1.4px] border-line-2 bg-paper px-3 py-2.5 text-[14px] outline-none focus:border-forest" />
           </label>
           <label className="block">
@@ -598,7 +605,7 @@ function GiftForm({ row, targetType, targetId, targetName, onClose, onDone }: {
         {(save.error || del.error) && <p className="text-clay text-[12px] mt-3">{((save.error || del.error) as Error).message}</p>}
         <div className="flex items-center justify-between mt-4">
           {row ? (
-            <button onClick={() => { if (confirm('Delete this gift entry?')) del.mutate(); }}
+            <button onClick={() => { void uiConfirm('Delete this gift entry?').then((ok) => { if (ok) { del.mutate(); } }); }}
                     className="haptic flex items-center gap-1.5 text-clay text-[12.5px] font-bold border border-clay/40 px-3 py-2 rounded-[10px] hover:bg-clay-soft">
               <Trash2 size={13} /> {del.isPending ? 'Deleting…' : 'Delete'}
             </button>

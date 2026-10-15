@@ -127,6 +127,8 @@ export async function printLabels(
     window.print();
     return { transport: 'browser', ok: true };
   } catch (e: any) {
+    // Oct 9 client: details go to the console; the screen shows a plain message.
+    console.warn('[label-print] browser print failed:', e?.message || e);
     return { transport: 'browser', ok: false, error: e?.message || String(e) };
   }
 }

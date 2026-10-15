@@ -1,19 +1,21 @@
 /**
  * Settings → Admin users panel. List + invite + role/active toggle.
  */
+import { uiConfirm } from './ui-dialogs';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, KeyRound, ShieldCheck } from 'lucide-react';
 import { adminUsers, type AdminUser } from './api';
 import { cx, Button } from './design';
+import { fmtDay } from './time-format';
 
-const ROLES: AdminUser['role'][] = ['admin', 'coordinator', 'staff', 'dispatcher', 'read_only'] as any;
+const ROLES: AdminUser['role'][] = ['admin', 'coordinator', 'staff', 'dispatcher', 'viewer'] as any; // Oct 8: server role is 'viewer' ('read_only' was rejected)
 const ROLE_DESCRIPTIONS: Record<string, string> = {
   admin:       'Super Admin — full access, can manage other admin users.',
   coordinator: 'Office staff — day-to-day office work.',
   staff:       'Office staff — same as coordinator.',
   dispatcher:  'Assigns drivers, edits pickups, sends SMS. No user management.',
-  read_only:   'View-only. No changes allowed.',
+  viewer:      'View-only. No changes allowed.',
 };
 
 export function AdminUsersPanel() {
@@ -64,10 +66,22 @@ function AdminUserRow({ row, onChanged }: { row: AdminUser; onChanged: () => voi
       </span>
       <div className="flex-1 min-w-0">
         <div className="font-bold text-[14.5px] truncate">{row.firstName} {row.lastName}</div>
-        <div className="text-[12.5px] text-muted truncate">{row.email}{row.lastLoginAt ? ` · last login ${new Date(row.lastLoginAt).toLocaleDateString()}` : ' · never logged in'}</div>
+        <div className="text-[12.5px] text-muted truncate">{row.email}{row.lastLoginAt ? ` · last login ${fmtDay(row.lastLoginAt)}` : ' · never logged in'}</div>
       </div>
-      <select value={row.role} onChange={(e) => patch.mutate({ role: e.target.value })}
-              className="rounded-[10px] border-[1.4px] border-line bg-paper px-2 py-1.5 text-[12.5px] font-bold text-ink">
+      <select value={row.role}
+              onChange={async (e) => {
+                const nextRole = e.target.value;
+                if (nextRole === row.role) return;
+                const desc = ROLE_DESCRIPTIONS[nextRole] ?? '';
+                if (!(await uiConfirm(`Change ${row.firstName || row.email} from "${row.role}" to "${nextRole}"?\n\n${desc}\n\nThey must LOG OUT AND BACK IN before the new role takes effect.`))) {
+                  // Snap the <select> back to the current role by forcing a re-render.
+                  (e.target as HTMLSelectElement).value = row.role;
+                  return;
+                }
+                patch.mutate({ role: nextRole });
+              }}
+              className="rounded-[10px] border-[1.4px] border-line bg-paper px-2 py-1.5 text-[12.5px] font-bold text-ink"
+              title={ROLE_DESCRIPTIONS[row.role]}>
         {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
       </select>
       <button onClick={() => patch.mutate({ isActive: !row.isActive })}
@@ -75,7 +89,7 @@ function AdminUserRow({ row, onChanged }: { row: AdminUser; onChanged: () => voi
                             row.isActive ? 'bg-sage text-forest' : 'bg-clay-soft text-clay')}>
         {row.isActive ? 'Active' : 'Inactive'}
       </button>
-      <button onClick={() => { if (confirm(`Deactivate ${row.firstName} ${row.lastName}? They will no longer be able to log in.`)) del.mutate(); }}
+      <button onClick={() => { void uiConfirm(`Deactivate ${row.firstName} ${row.lastName}? They will no longer be able to log in.`).then((ok) => { if (ok) { del.mutate(); } }); }}
               className="haptic grid h-8 w-8 place-items-center rounded-full bg-clay-soft text-clay hover:bg-clay/20">
         <Trash2 size={14} />
       </button>
@@ -130,7 +144,7 @@ function AddAdminForm({ onCancel, onDone }: { onCancel: () => void; onDone: () =
                  : r === 'coordinator' ? 'Office Staff (coordinator)'
                  : r === 'staff' ? 'Office Staff'
                  : r === 'dispatcher' ? 'Dispatcher'
-                 : r === 'read_only' ? 'Read-Only'
+                 : r === 'viewer' || r === 'read_only' ? 'Read-Only'
                  : r}
               </option>
             ))}

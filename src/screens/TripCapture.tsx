@@ -1,41 +1,29 @@
 /**
  * Trip capture — second phone in mockup 02. Auto-filled from the pickup
  * trajectory: store name, miles, minutes. Every field is editable before
- * Save (auto-with-edit pattern). Writes to /api/me/activity-log idempotently.
+ * Save (auto-with-edit pattern). Writes to /api/me/my-trips idempotently.
  */
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { ArrowLeft, Check, Route, Store as StoreIcon, Clock } from 'lucide-react';
+import { ArrowLeft, Route, Clock } from 'lucide-react';
 import { volunteer, getUser } from '../api';
-import { Avatar, StickyCTA, cx } from '../design';
+import { Avatar } from '../design';
+import { driverError, useBack } from './driver-card';
 
 export function TripCapture() {
   const { id } = useParams<{ id: string }>();
   const nav = useNavigate();
+  const back = useBack(); // Oct 9 client: opened from a notification → Back goes home
   const piId = Number(id);
 
   const mine = useQuery({ queryKey: ['mine'], queryFn: volunteer.mine });
   const pickup = mine.data?.data.find((p) => Number(p.pickup_instance_id) === piId);
 
+  // Tier-1 fix (Aug 21): never seed made-up numbers. Blank fields are sent as
+  // undefined and skipped by the backend.
   const [miles, setMiles] = useState<string>('');
   const [minutes, setMinutes] = useState<string>('');
-  const [editing, setEditing] = useState<'miles' | 'minutes' | null>(null);
-
-  useEffect(() => {
-    if (!pickup) return;
-    // Tier-1 fix (Aug 21): we used to seed miles/minutes with Math.random(),
-    // which shipped fabricated numbers straight to /api/me/activity-log if
-    // the driver didn't edit them. That poisoned the four-metric tracker.
-    //
-    // Until proper GPS trip-capture is wired (start-on-depart via Capacitor
-    // Geolocation → stop-on-delivery, then diff distance/duration), seed
-    // empty defaults so the "auto-with-edit" pattern still works — the
-    // driver types real numbers before Save. Anything they leave blank is
-    // sent as `undefined` in the mutation body and skipped by the backend.
-    if (miles === '')   setMiles('');
-    if (minutes === '') setMinutes('');
-  }, [pickup, miles, minutes]);
 
   const save = useMutation({
     mutationFn: () => volunteer.saveActivity({
@@ -46,89 +34,62 @@ export function TripCapture() {
     onSuccess: () => nav('/you', { replace: true }),
   });
 
-  if (!pickup) return <div className="p-6 text-center text-muted">Loading…</div>;
+  if (!pickup && mine.isLoading) return <div className="p-6 text-center text-muted">Loading…</div>;
 
-  const store = pickup.suppliers || 'Pickup';
-  const dropoff = 'Zeh L\'Zeh Drop-off Center, 3 Regina Road, Airmont, NY';
+  const store = pickup?.suppliers || 'Pickup';
 
   return (
     <div className="min-h-screen flex flex-col">
       <div className="px-5 pt-3 pb-2 flex items-center justify-between">
-        <button onClick={() => nav(-1)} className="haptic grid h-9 w-9 place-items-center rounded-full bg-paper border border-line"><ArrowLeft size={18} /></button>
+        <button onClick={back} aria-label="Back" className="haptic grid h-11 w-11 place-items-center rounded-full bg-paper border border-line"><ArrowLeft size={20} /></button>
         <Avatar initials={((getUser()?.firstName?.[0] ?? '') + (getUser()?.lastName?.[0] ?? '')) || '·'} />
       </div>
 
       <main className="flex-1 px-5 pb-4">
-        {/* Route preview */}
-        <div className="rounded-[18px] border border-line overflow-hidden relative h-[150px] mb-4"
-             style={{
-               background: 'linear-gradient(0deg,rgba(44,90,59,.04),rgba(44,90,59,.04)),' +
-                           'repeating-linear-gradient(0deg,#EEF3E9 0 1px,transparent 1px 26px),' +
-                           'repeating-linear-gradient(90deg,#EEF3E9 0 1px,transparent 1px 26px),' +
-                           '#F3F7EF',
-             }}>
-          <svg width="100%" height="100%" viewBox="0 0 264 150" preserveAspectRatio="none" className="absolute inset-0">
-            <path d="M40 120 C 90 110, 80 50, 150 55 S 220 40, 224 34" fill="none" stroke="#2C5A3B" strokeWidth="3.5" strokeLinecap="round" strokeDasharray="2 7" />
-          </svg>
-          <Pin x={40}  y={124} color="#D27A4C" />
-          <Pin x={224} y={38}  color="#2C5A3B" />
+        {/* Oct 8: no drawn route or "logged automatically" — nothing is tracked
+            here. The driver may type miles/time, or just skip. */}
+        <div className="rounded-[16px] bg-sage border border-sage-line px-4 py-3 text-center">
+          <div className="font-display font-bold text-[20px] text-forest">Thank you! Delivery saved.</div>
+          <div className="text-[15px] text-ink/80 mt-0.5 truncate">{store}</div>
         </div>
 
-        <div className="text-center">
-          <div className="text-[11px] font-extrabold uppercase tracking-[.06em] text-forest">Logged automatically</div>
-          <div className="font-display font-semibold text-[23px] tracking-[-0.01em] mt-1">{store}</div>
-          <div className="text-[12.5px] text-muted mt-1">Store → {dropoff}</div>
-        </div>
+        <div className="mt-6 font-display font-semibold text-[22px]">How far did you drive? <span className="text-muted text-[17px] font-normal">(optional)</span></div>
+        <p className="text-[15px] text-muted mt-1">This helps the office. You can skip it.</p>
 
-        <div className="mt-4 border border-line rounded-[16px] overflow-hidden">
-          <Row icon={<Check size={15} strokeWidth={2.4} />} iconBg="bg-sage" iconFg="text-forest" k="This pickup" v={<span className="font-display font-bold text-[16px]">+1</span>} />
-          <Row icon={<Route size={15} />} iconBg="bg-sky-soft" iconFg="text-sky" k="Miles driven"
-               v={editing === 'miles' ? (
-                 <input autoFocus type="number" step="0.1" value={miles} onChange={(e) => setMiles(e.target.value)}
-                        onBlur={() => setEditing(null)} onKeyDown={(e) => e.key === 'Enter' && setEditing(null)}
-                        className="font-display font-bold text-[16px] text-right bg-cream/70 px-2 py-1 rounded-md w-20" />
-               ) : (
-                 <button onClick={() => setEditing('miles')} className="font-display font-bold text-[16px] text-clay-soft-foreground">{miles || '—'} <span className="text-[11px] text-muted font-semibold">mi</span></button>
-               )} />
-          <Row icon={<StoreIcon size={15} />} iconBg="bg-clay-soft" iconFg="text-clay" k="Store" v={<span className="text-[13px] font-bold truncate max-w-[160px]">{store}</span>} />
-          <Row icon={<Clock size={15} />} iconBg="bg-amber-soft" iconFg="text-amber" k="Time spent"
-               v={editing === 'minutes' ? (
-                 <input autoFocus type="number" value={minutes} onChange={(e) => setMinutes(e.target.value)}
-                        onBlur={() => setEditing(null)} onKeyDown={(e) => e.key === 'Enter' && setEditing(null)}
-                        className="font-display font-bold text-[16px] text-right bg-cream/70 px-2 py-1 rounded-md w-20" />
-               ) : (
-                 <button onClick={() => setEditing('minutes')} className="font-display font-bold text-[16px]">{minutes ? fmtMinutes(Number(minutes) || 0) : '—'}</button>
-               )} />
+        <div className="mt-4 space-y-3">
+          <label className="flex items-center gap-3 rounded-[14px] border border-line bg-paper px-4 py-3">
+            <span className="grid h-[36px] w-[36px] place-items-center rounded-[10px] bg-sky-soft text-sky shrink-0"><Route size={18} /></span>
+            <span className="flex-1 text-[16px] font-bold">Miles</span>
+            <input type="number" inputMode="decimal" step="0.1" min="0" value={miles} onChange={(e) => setMiles(e.target.value)}
+                   placeholder="0"
+                   className="w-24 text-right font-display font-bold text-[18px] bg-cream/70 px-2 py-2 rounded-md outline-none focus:ring-2 focus:ring-forest/30" />
+          </label>
+          <label className="flex items-center gap-3 rounded-[14px] border border-line bg-paper px-4 py-3">
+            <span className="grid h-[36px] w-[36px] place-items-center rounded-[10px] bg-amber-soft text-amber shrink-0"><Clock size={18} /></span>
+            <span className="flex-1 text-[16px] font-bold">Minutes</span>
+            <input type="number" inputMode="numeric" min="0" value={minutes} onChange={(e) => setMinutes(e.target.value)}
+                   placeholder="0"
+                   className="w-24 text-right font-display font-bold text-[18px] bg-cream/70 px-2 py-2 rounded-md outline-none focus:ring-2 focus:ring-forest/30" />
+          </label>
         </div>
-        <div className="text-center text-[11.5px] text-muted mt-3 font-semibold">Tap any value to adjust before saving</div>
+        {save.error && <p className="text-[14px] font-bold text-clay mt-3">{driverError(save.error)}</p>}
       </main>
 
-      <StickyCTA tone="forest" loading={save.isPending} onClick={() => save.mutate()}>
-        Save to my activity
-      </StickyCTA>
+      <div className="sticky bottom-0 px-4 pb-safe pt-3 bg-cream flex gap-2">
+        {/* Oct 9 client: one big Skip — it is the main button until they type miles or minutes. */}
+        <button onClick={() => nav('/you', { replace: true })}
+                className={(!miles && !minutes)
+                  ? 'haptic flex-[2] min-h-[58px] rounded-[14px] bg-forest text-paper text-[19px] font-bold shadow-ctag'
+                  : 'haptic flex-1 min-h-[54px] rounded-[14px] border-[1.5px] border-line-2 bg-paper text-[17px] font-bold text-ink'}>
+          Skip
+        </button>
+        <button onClick={() => save.mutate()} disabled={save.isPending || (!miles && !minutes)}
+                className={(!miles && !minutes)
+                  ? 'haptic flex-1 min-h-[58px] rounded-[14px] border-[1.5px] border-line-2 bg-paper text-[17px] font-bold text-muted disabled:opacity-50'
+                  : 'haptic flex-[2] min-h-[54px] rounded-[14px] bg-forest text-paper text-[17px] font-bold shadow-ctag disabled:opacity-50'}>
+          {save.isPending ? 'Saving…' : 'Save'}
+        </button>
+      </div>
     </div>
   );
-}
-
-function Row({ icon, iconBg, iconFg, k, v }: { icon: React.ReactNode; iconBg: string; iconFg: string; k: string; v: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-3 px-3.5 py-3 border-b border-line last:border-b-0">
-      <span className={cx('grid h-[32px] w-[32px] place-items-center rounded-[9px]', iconBg, iconFg)}>{icon}</span>
-      <div className="flex-1"><div className="text-[11px] font-bold uppercase tracking-[.03em] text-muted">{k}</div></div>
-      <div>{v}</div>
-    </div>
-  );
-}
-
-function Pin({ x, y, color }: { x: number; y: number; color: string }) {
-  return (
-    <svg width={20} height={20} viewBox="0 0 24 24" fill={color} className="absolute" style={{ left: x, top: y, transform: 'translate(-50%,-100%)' }}>
-      <path d="M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z" />
-    </svg>
-  );
-}
-
-function fmtMinutes(min: number) {
-  const h = Math.floor(min / 60); const m = min % 60;
-  return `${h}h ${String(m).padStart(2, '0')}m`;
 }

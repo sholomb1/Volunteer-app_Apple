@@ -8,6 +8,7 @@ import type { Config } from 'tailwindcss';
  * Do not invent new colors here — match the mockup.
  */
 export default {
+  darkMode: 'class',
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {
@@ -16,22 +17,22 @@ export default {
         display: ['Fraunces', 'ui-serif', 'Georgia', 'serif'],
       },
       colors: {
-        cream:       '#FAF5EC',
-        paper:       '#FFFFFF',
-        ink:         '#1C2A21',
-        muted:       '#6E7C70',
-        forest:      '#2C5A3B',
-        'forest-deep': '#1E3F29',
-        sage:        '#E5EEE2',
-        'sage-line': '#CFE0CC',
-        clay:        '#D27A4C',
-        'clay-soft': '#F7E4D6',
-        amber:       '#E5A93F',
-        'amber-soft':'#FBEBC8',
-        sky:         '#3E6F8E',
-        'sky-soft':  '#DCE9F0',
-        line:        '#EAE3D4',
-        'line-2':    '#E0D8C6',
+        cream:       'rgb(var(--c-cream) / <alpha-value>)',
+        paper:       'rgb(var(--c-paper) / <alpha-value>)',
+        ink:         'rgb(var(--c-ink) / <alpha-value>)',
+        muted:       'rgb(var(--c-muted) / <alpha-value>)',
+        forest:      'rgb(var(--c-forest) / <alpha-value>)',
+        'forest-deep': 'rgb(var(--c-forest-deep) / <alpha-value>)',
+        sage:        'rgb(var(--c-sage) / <alpha-value>)',
+        'sage-line': 'rgb(var(--c-sage-line) / <alpha-value>)',
+        clay:        'rgb(var(--c-clay) / <alpha-value>)',
+        'clay-soft': 'rgb(var(--c-clay-soft) / <alpha-value>)',
+        amber:       'rgb(var(--c-amber) / <alpha-value>)',
+        'amber-soft':'rgb(var(--c-amber-soft) / <alpha-value>)',
+        sky:         'rgb(var(--c-sky) / <alpha-value>)',
+        'sky-soft':  'rgb(var(--c-sky-soft) / <alpha-value>)',
+        line:        'rgb(var(--c-line) / <alpha-value>)',
+        'line-2':    'rgb(var(--c-line-2) / <alpha-value>)',
       },
       boxShadow: {
         soft:  '0 6px 18px -10px rgba(28,42,33,.32)',

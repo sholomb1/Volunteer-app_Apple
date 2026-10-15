@@ -2,9 +2,11 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <!-- viewport-fit=cover removed so the WebView naturally fits between the
-         Android status bar and nav buttons rather than rendering edge-to-edge. -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <!-- Oct 14 client: viewport-fit=cover so iPhones with a notch / home bar report
+         env(safe-area-inset-*); the app shell pads by those insets (src/index.css) so
+         nothing hides under the notch. Android reports 0 there (the WebView already
+         sits between the status bar and the nav buttons), so nothing changes on Android. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="theme-color" content="#2C5A3B" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />

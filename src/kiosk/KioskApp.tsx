@@ -14,6 +14,9 @@ import { kiosk, type KioskLine, type KioskStore, type KioskLabel, type KioskPick
 import { kioskDevice, API_BASE } from '../api';
 import { printLabels, labelPrinter } from './label-print';
 import { AddressAutocomplete } from '../address-autocomplete';
+// Oct 11 client: opt-in kiosk mode (start/exit with the kiosk PIN).
+import { useKioskLockdown, requestKioskFullscreen, buryKioskHistory } from './lockdown';
+import { kioskMode, pinTries } from './kiosk-mode';
 
 type PickerDriver = { volunteerId: number; name: string; pendingPickups: number };
 type NameCandidate = { volunteerId: number; name: string };
@@ -38,13 +41,14 @@ type Screen =
   // switch to a different supplier if their real pickup differs.
   | { kind: 'stores'; dropoffId: number; volunteerName: string; stores: KioskStore[]; lines: KioskLine[]; recentCompleted?: import('./kiosk-api').KioskRecentCompleted[]; allSuppliers?: VendorOption[] }
   | { kind: 'entry';  dropoffId: number; volunteerName: string; stores: KioskStore[]; lines: KioskLine[]; store: KioskStore; allSuppliers?: VendorOption[] }
-  | { kind: 'labels';  labels: KioskLabel[]; volunteerName: string };
+  | { kind: 'labels';  labels: KioskLabel[]; volunteerName: string; autoDone?: boolean };
 
 const CATEGORIES = ['Dairy', 'Produce', 'Bakery', 'Prepared', 'Frozen', 'Grocery / Dry', 'Meat / Fish', 'Other'];
 const UNITS      = ['box', 'tray', 'container', 'bag'];
 
 // Item 3: 2-minute idle → auto-return to welcome. Any pointer/key/touch resets.
 const IDLE_MS = 2 * 60 * 1000;
+const CLASSIC = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('classic') === '1';
 
 // Tier-2 fix #2 (Aug 21): best-effort DELETE of an orphaned kiosk dropoff
 // shell. Called when the driver backs out of the flow without completing.
@@ -72,6 +76,17 @@ export function KioskApp() {
   // Wake Lock (e.g. after backgrounding), show a small banner so the office
   // knows the tablet's screen may sleep and can wake it manually.
   const [wakeLockWarn, setWakeLockWarn] = useState(false);
+  // Oct 11 client: kiosk mode — while ON the browser stays locked on this page
+  // until someone enters the kiosk PIN.
+  const [modeOn, setModeOn] = useState<boolean>(() => kioskMode.isOn());
+  const [showModeSheet, setShowModeSheet] = useState(false);
+  const [modeNote, setModeNote] = useState<string | null>(null);
+  useKioskLockdown(modeOn);
+  useEffect(() => {
+    if (!modeNote) return;
+    const t = setTimeout(() => setModeNote(null), 4000);
+    return () => clearTimeout(t);
+  }, [modeNote]);
 
   // Kiosk-mode CSS on the root html: hide scroll, lock font, disable text-select
   useEffect(() => {
@@ -220,7 +235,11 @@ export function KioskApp() {
           Screen may sleep — the tablet's wake-lock was refused. Tap the screen every few minutes to keep it awake.
         </div>
       )}
-      {screen.kind === 'welcome'  && <Welcome onStart={() => setScreen({ kind: 'signin' })} />}
+      {/* Oct 6 client: the kiosk opens straight on the code pad (quick drop-off).
+          The older detailed flow is still at ?classic=1. */}
+      {screen.kind === 'welcome' && (CLASSIC
+        ? <Welcome onStart={() => setScreen({ kind: 'signin' })} />
+        : <QuickKiosk secret={secret} onLabels={(labels, name) => setScreen({ kind: 'labels', labels, volunteerName: name, autoDone: true })} />)}
       {screen.kind === 'signin'   && <Signin  secret={secret}
         onSigned={(d) => setScreen({ kind: 'stores', dropoffId: d.dropoffId, volunteerName: d.volunteerName, stores: d.stores, lines: [], recentCompleted: d.recentCompleted, allSuppliers: d.allSuppliers })}
         onAdminPick={(p) => setScreen({ kind: 'picker', ...p })}
@@ -272,7 +291,7 @@ export function KioskApp() {
       {screen.kind === 'entry'    && <StoreEntry secret={secret} screen={screen}
         onDone={(newLines) => setScreen({ kind: 'stores', dropoffId: screen.dropoffId, volunteerName: screen.volunteerName, stores: screen.stores, lines: newLines, allSuppliers: screen.allSuppliers })} />}
       {screen.kind === 'labels'   && <Labels  labels={screen.labels} volunteerName={screen.volunteerName}
-        kioskSecret={secret}
+        kioskSecret={secret} autoDone={screen.autoDone}
         onFinish={() => setScreen({ kind: 'welcome' })} />}
       {/* Aug 13 client redesign: top-left Start Over pill removed.
           Start Over lives inside the Help popup so the surface stays clean. */}
@@ -333,9 +352,52 @@ export function KioskApp() {
               if (kl?.stopLockTask) await kl.stopLockTask();
             } catch { /* ignore */ }
             kioskDevice.clear();
+            // Oct 11 client: the Admin PIN was just entered, so kiosk mode
+            // ends too (otherwise App.tsx would bounce straight back here).
+            kioskMode.stop();
+            setModeOn(false);
             window.location.href = window.location.origin + (import.meta.env.BASE_URL || '/');
           }}
         />
+      )}
+      {/* Oct 11 client: discreet lock button (bottom-left, start screen only).
+          OFF → explains kiosk mode + "Start kiosk mode" (needs the kiosk PIN).
+          ON  → kiosk PIN pad to exit. */}
+      {screen.kind === 'welcome' && !showModeSheet && (
+        <button onClick={() => setShowModeSheet(true)}
+                className={cxKiosk('fixed bottom-3 left-3 z-40 h-14 w-14 rounded-full flex items-center justify-center text-[24px] active:scale-95',
+                                   modeOn ? 'bg-forest/15 text-forest opacity-60' : 'bg-cream text-muted border-2 border-line opacity-50')}
+                aria-label={modeOn ? 'Exit kiosk mode' : 'Kiosk mode'}>
+          {modeOn ? '🔒' : '⚙'}
+        </button>
+      )}
+      {showModeSheet && (
+        <KioskModeSheet
+          secret={secret}
+          modeOn={modeOn}
+          onCancel={() => setShowModeSheet(false)}
+          onStarted={() => {
+            // Oct 11 client: remember the full kiosk address (with secret) and
+            // bury the way back while we still have the PIN tap.
+            kioskMode.start(secret, window.location.pathname + window.location.search);
+            buryKioskHistory();
+            setModeOn(true);
+            setShowModeSheet(false);
+            setModeNote('Kiosk mode is ON. Tap the lock (bottom-left) and enter the PIN to exit.');
+            requestKioskFullscreen();
+          }}
+          onExited={() => {
+            kioskMode.stop();
+            setModeOn(false);
+            setShowModeSheet(false);
+            setModeNote('Kiosk mode is OFF. Normal browsing is back.');
+          }}
+        />
+      )}
+      {modeNote && (
+        <div className="fixed bottom-20 left-4 right-4 z-[300] mx-auto max-w-[560px] rounded-[14px] bg-forest text-paper px-5 py-3 text-[17px] font-bold text-center shadow-lift">
+          {modeNote}
+        </div>
       )}
     </FullPage>
   );
@@ -363,24 +425,24 @@ function HelpOverlay({ onClose, onStartOver, onAdmin }: {
                 className="absolute top-3 right-3 h-11 w-11 rounded-full bg-cream text-ink text-[22px] font-extrabold active:scale-95"
                 aria-label="Close help">×</button>
         <div className="text-[13px] uppercase tracking-[.15em] text-muted font-extrabold">How to drop off</div>
-        <div className="text-[30px] font-extrabold text-forest mt-1 leading-tight">Zeh L'Zeh Kiosk — 5 quick steps</div>
+        <div className="text-[30px] font-extrabold text-forest mt-1 leading-tight">Zeh L'Zeh Kiosk — 4 quick steps</div>
 
+        {/* Oct 7 client: matches the new kiosk (code pad → store → items → labels). */}
         <ol className="mt-6 space-y-5">
-          <HelpStep n="1" title="Tap Start sign-in" />
-          <HelpStep n="2" title="Enter the last 4 digits of your phone">
-            Recognized? Tap your name.<br />
-            New? Tap <b>Continue as guest</b>, then your full name + phone number.
+          {/* Oct 9 client: the name list only shows when two drivers share the digits. */}
+          <HelpStep n="1" title="Type the last 4 digits of your phone">
+            (If two people share them, tap your name.)<br />
+            New, or no code? Tap <b>I'm new / no code</b> and type your name.
           </HelpStep>
-          <HelpStep n="3" title="Pick the store">
-            Scheduled pickup? It's already on-screen — just tap.<br />
-            Walk-in? Search the list.<br />
-            Not listed? Tap <b>Enter pickup location manually</b> — the address auto-completes as you type.
+          <HelpStep n="2" title="Tap the store">
+            Your pickup is already on the screen.<br />
+            Not there? Type the store name, or tap <b>+ Store not on the list</b>.
           </HelpStep>
-          <HelpStep n="4" title="Add each item">
-            Tap <b>+ Add item</b>, then choose Category · Quantity + unit (box, tray, bag, container) · Description (optional).
+          <HelpStep n="3" title="How many items?">
+            Tap <b>+</b> or <b>−</b>. Brought from more than one store? Tap <b>+ Another store</b>.
           </HelpStep>
-          <HelpStep n="5" title="Complete → Print labels → Done">
-            Tap <b>Complete drop-off</b>, add any notes, then <b>Print labels</b> and stick them on the matching boxes.
+          <HelpStep n="4" title="Print labels & finish">
+            Stick one label on each item. Want to tell the office something? Tap <b>+ Add a note</b>.
           </HelpStep>
         </ol>
 
@@ -402,6 +464,159 @@ function HelpOverlay({ onClose, onStartOver, onAdmin }: {
             Got it
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Oct 11 client: kiosk mode sheet. OFF → short explanation + device-lock tips
+ * + "Start kiosk mode" → kiosk PIN. ON → kiosk PIN pad straight away to exit.
+ * PIN is checked on the server (same check as the Admin Panel). 5 wrong tries
+ * → 30-second wait. Closes itself after 2 minutes untouched.
+ */
+function KioskModeSheet({ secret, modeOn, onCancel, onStarted, onExited }: {
+  secret: string;
+  modeOn: boolean;
+  onCancel: () => void;
+  onStarted: () => void;
+  onExited: () => void;
+}) {
+  const [askPin, setAskPin] = useState(modeOn);
+  const [pin, setPin] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [waitLeft, setWaitLeft] = useState(() => pinTries.waitLeft());
+
+  // Oct 11 client: tick down the 30-second wait.
+  useEffect(() => {
+    if (waitLeft <= 0) return;
+    const t = setTimeout(() => setWaitLeft(pinTries.waitLeft()), 500);
+    return () => clearTimeout(t);
+  }, [waitLeft]);
+
+  // Oct 11 client: close by itself if left open.
+  useEffect(() => {
+    let t: any = setTimeout(onCancel, IDLE_MS);
+    const reset = () => { clearTimeout(t); t = setTimeout(onCancel, IDLE_MS); };
+    window.addEventListener('pointerdown', reset, { passive: true });
+    window.addEventListener('keydown', reset, { passive: true });
+    return () => { clearTimeout(t); window.removeEventListener('pointerdown', reset); window.removeEventListener('keydown', reset); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const pinRef = useRef(pin);
+  pinRef.current = pin;
+
+  async function submit() {
+    const p = pinRef.current.trim();
+    if (busy || p.length < 4) return;
+    if (pinTries.waitLeft() > 0) { setWaitLeft(pinTries.waitLeft()); return; }
+    setBusy(true); setErr(null);
+    try {
+      await kiosk.verifyAdminPin(secret, p);
+      pinTries.reset();
+      if (modeOn) onExited(); else onStarted();
+    } catch (e: any) {
+      if (e?.status === 401) {
+        pinTries.wrong();
+        setErr('Wrong PIN');
+        setWaitLeft(pinTries.waitLeft());
+      } else {
+        setErr(e?.message || 'Something went wrong. Try again.');
+      }
+      setPin('');
+    } finally { setBusy(false); }
+  }
+  function addDigit(d: string) {
+    if (busy || pinTries.waitLeft() > 0) return;
+    setErr(null);
+    setPin((prev) => (prev + d).slice(0, 12));
+  }
+  function backspace() { setErr(null); setPin((p) => p.slice(0, -1)); }
+
+  // Oct 11 client: Bluetooth keyboard works on the PIN pad too. Capture phase
+  // so the code pad behind this sheet doesn't also get the digits.
+  useEffect(() => {
+    if (!askPin) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (/^[0-9]$/.test(e.key)) addDigit(e.key);
+      else if (e.key === 'Backspace') backspace();
+      else if (e.key === 'Enter') void submit();
+      else if (e.key === 'Escape') onCancel();
+      else return;
+      e.preventDefault(); e.stopPropagation();
+    }
+    window.addEventListener('keydown', onKey, { capture: true });
+    return () => window.removeEventListener('keydown', onKey, { capture: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [askPin, busy]);
+
+  const waiting = waitLeft > 0;
+  const btn = 'h-16 rounded-[14px] bg-cream border-2 border-line text-[26px] font-extrabold text-ink active:scale-95 disabled:opacity-40';
+
+  return (
+    <div onClick={onCancel} className="fixed inset-0 z-[200] bg-ink/70 flex items-center justify-center p-6">
+      <div onClick={(e) => e.stopPropagation()}
+           className="bg-paper rounded-[22px] shadow-lift w-full max-w-[520px] max-h-[94vh] overflow-y-auto p-8 relative">
+        <div className="text-[13px] uppercase tracking-[.15em] text-muted font-extrabold text-center">Kiosk mode</div>
+
+        {!askPin ? (
+          <>
+            <div className="text-[26px] font-extrabold text-ink text-center mt-1 leading-tight">Lock this tablet on the kiosk</div>
+            <div className="mt-4 text-[17px] text-ink leading-snug">
+              The browser stays on this page. Back, reload and other web pages all come back here.
+              To leave, tap the lock (bottom-left) and enter the kiosk PIN.
+            </div>
+            <div className="mt-4 rounded-[14px] bg-cream border-2 border-line p-4 text-[15px] text-ink leading-snug">
+              <b>For a full lock, also turn on:</b><br />
+              Android → Settings → Security → App pinning<br />
+              iPad → Settings → Accessibility → Guided Access
+            </div>
+            {/* Oct 11 client: Home Screen icon tip (no browser back button there). */}
+            <div className="mt-3 rounded-[14px] bg-cream border-2 border-line p-4 text-[15px] text-ink leading-snug">
+              <b>Best:</b> open the kiosk from a Home Screen icon (browser menu → Add to Home Screen) — that has no browser back button — and turn on App pinning (Android) or Guided Access (iPad).
+            </div>
+            <div className="mt-6 flex flex-col gap-3">
+              <button onClick={() => setAskPin(true)}
+                      className="h-16 rounded-full bg-forest text-paper text-[20px] font-extrabold shadow-lift active:scale-95">
+                Start kiosk mode
+              </button>
+              <button onClick={onCancel}
+                      className="h-14 rounded-full bg-paper text-ink border-2 border-line text-[17px] font-bold active:scale-95">
+                Cancel
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="text-[24px] font-extrabold text-ink text-center mt-1">
+              {modeOn ? 'Enter PIN to exit kiosk mode' : 'Enter PIN to start kiosk mode'}
+            </div>
+            <div className="mt-5 h-14 rounded-[12px] border-2 border-line bg-cream flex items-center justify-center text-[30px] font-extrabold tracking-[.3em] text-forest">
+              {pin ? '•'.repeat(pin.length) : <span className="text-[16px] tracking-normal font-bold text-muted">Kiosk PIN</span>}
+            </div>
+            {waiting
+              ? <div className="mt-3 text-[16px] text-clay font-bold text-center">Too many wrong tries. Wait {Math.ceil(waitLeft / 1000)} seconds.</div>
+              : err && <div className="mt-3 text-[16px] text-clay font-bold text-center">{err}</div>}
+            <div className="mt-5 grid grid-cols-3 gap-2">
+              {['1','2','3','4','5','6','7','8','9'].map((d) => (
+                <button key={d} disabled={busy || waiting} onClick={() => addDigit(d)} className={btn}>{d}</button>
+              ))}
+              <button onClick={backspace} disabled={busy} className={btn} aria-label="Delete">⌫</button>
+              <button disabled={busy || waiting} onClick={() => addDigit('0')} className={btn}>0</button>
+              <button onClick={() => void submit()} disabled={busy || waiting || pin.length < 4}
+                      className="h-16 rounded-[14px] bg-forest text-paper text-[20px] font-extrabold active:scale-95 disabled:opacity-40">
+                {busy ? '…' : 'OK'}
+              </button>
+            </div>
+            <button onClick={onCancel}
+                    className="mt-4 w-full h-14 rounded-full bg-paper text-ink border-2 border-line text-[17px] font-bold active:scale-95">
+              Cancel
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
@@ -667,7 +882,7 @@ function Signin({ secret, onSigned, onAdminPick, onNamePick, onPickupPick, onWal
       onSigned(d as { dropoffId: number; volunteerName: string; stores: KioskStore[] });
     } catch (e: any) {
       // Unknown code = offer guest sign-in instead of erroring out.
-      const msg = String(e?.message || '');
+      const msg = `${e?.message || ''} ${e?.body?.error || ''} ${e?.body?.message || ''}`;
       if (/no driver found|unknown_code/i.test(msg)) {
         setErr(null); setCode(''); setGuestMode(true); return;
       }
@@ -1496,11 +1711,11 @@ function StoreEntry({ secret, screen, onDone }:
   );
 }
 
-function Labels({ labels, volunteerName, kioskSecret, onFinish }:
-  { labels: KioskLabel[]; volunteerName: string; kioskSecret: string; onFinish: () => void }) {
+function Labels({ labels, volunteerName, kioskSecret, onFinish, autoDone }:
+  { labels: KioskLabel[]; volunteerName: string; kioskSecret: string; onFinish: () => void; autoDone?: boolean }) {
   const [status, setStatus] = useState<'printing' | 'ok' | 'err'>('printing');
   const [transport, setTransport] = useState<'relay' | 'tcp' | 'browser' | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [, setErr] = useState<string | null>(null); // Oct 9 client: kept for the console only
   const started = useRef(false);
 
   async function doPrint() {
@@ -1514,7 +1729,8 @@ function Labels({ labels, volunteerName, kioskSecret, onFinish }:
     const res = await printLabels(labels, { kioskSecret });
     setTransport(res.transport);
     if (res.ok) setStatus('ok');
-    else { setStatus('err'); setErr(res.error ?? 'unknown error'); }
+    // Oct 9 client: raw error stays in the console, not on screen.
+    else { console.warn('[kiosk] label print failed:', res.error ?? 'unknown error'); setStatus('err'); setErr(res.error ?? 'unknown error'); }
   }
 
   useEffect(() => {
@@ -1523,25 +1739,67 @@ function Labels({ labels, volunteerName, kioskSecret, onFinish }:
     void doPrint();
   }, []);
 
+  // Quick drop-off: once the labels are sent, go back to the code pad by itself.
+  // Oct 9 client: 5 seconds, and never while the tablet's print dialog is in
+  // use (the driver taps Done after printing).
+  useEffect(() => {
+    if (!autoDone || status !== 'ok' || transport === 'browser') return;
+    const t = setTimeout(onFinish, 5000);
+    return () => clearTimeout(t);
+  }, [autoDone, status, transport]);
+
+  // Oct 9 client: "Recorded N items from <store>" so the driver sees it counted.
+  const stores = Array.from(new Set(labels.map((l) => l.supplierName).filter(Boolean)));
+  const recorded = `Recorded ${labels.length} item${labels.length === 1 ? '' : 's'}${stores.length ? ` from ${stores.join(' + ')}` : ''}.`;
+
+  // Oct 9 client: a print problem is NOT a drop-off problem: it's already saved.
+  if (status === 'err') {
+    return (
+      <>
+        <div className="no-print h-full w-full flex flex-col items-center justify-center p-8">
+          <div className="text-[80px]">✅</div>
+          <div className="text-[46px] font-extrabold text-forest text-center mt-2">Your drop-off is saved ✓</div>
+          <div className="text-[20px] text-muted text-center mt-1">{recorded}</div>
+          <div className="text-[24px] text-ink font-bold text-center mt-6 max-w-[620px]">
+            Labels didn't print — Try again, or write the store name on the box.
+          </div>
+          <div className="mt-8 flex gap-4">
+            <button onClick={doPrint}
+                    className="min-h-[56px] py-4 px-8 rounded-[16px] border-2 border-forest text-forest text-[21px] font-extrabold hover:bg-sage/40">
+              Try again
+            </button>
+            <button onClick={onFinish}
+                    className="min-h-[56px] py-4 px-10 rounded-[16px] bg-forest text-paper text-[21px] font-extrabold">
+              Done
+            </button>
+          </div>
+        </div>
+        <div className="print-only">
+          {labels.map((lb, i) => <LabelPage key={i} label={lb} />)}
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
       {/* On-screen confirmation (hidden when the browser print dialog is used). */}
       <div className="no-print h-full w-full flex flex-col items-center justify-center p-8">
-        <div className="text-[80px]">{status === 'err' ? '⚠️' : '✅'}</div>
+        <div className="text-[80px]">✅</div>
         <div className="text-[42px] font-extrabold text-forest text-center mt-2">
-          {status === 'err' ? 'Print failed' : `Thank you, ${volunteerName.split(' ')[0]}!`}
+          {`Thank you, ${volunteerName.split(' ')[0]}!`}
         </div>
+        <div className="text-[20px] text-muted text-center mt-1">{recorded}</div>
         <div className="text-[22px] text-muted text-center mt-2">
           {status === 'printing' && `Printing ${labels.length} label${labels.length === 1 ? '' : 's'}…`}
           {status === 'ok' && (transport === 'browser'
-            ? 'Follow the print dialog to release the labels.'
-            : `${labels.length} label${labels.length === 1 ? '' : 's'} sent to the printer${transport === 'relay' ? ' (via relay).' : '.'}`)}
-          {status === 'err' && (err || 'Printer not reachable.')}
+            ? <b className="text-ink">Print the labels, then tap Done.</b>
+            : `${labels.length} label${labels.length === 1 ? '' : 's'} sent to the printer.`)}
         </div>
         <div className="mt-8 flex gap-4">
           <button onClick={doPrint}
                   className="py-4 px-6 rounded-[16px] border-2 border-forest text-forest text-[19px] font-extrabold hover:bg-sage/40">
-            {status === 'err' ? 'Try again' : 'Reprint labels'}
+            Reprint labels
           </button>
           <button onClick={onFinish}
                   className="py-4 px-8 rounded-[16px] bg-forest text-paper text-[19px] font-extrabold">
@@ -1635,4 +1893,374 @@ function groupLinesBySupplier(lines: KioskLine[]): Map<number, KioskLine[]> {
     arr.push(l); m.set(l.supplierId, arr);
   }
   return m;
+}
+
+// ==================== Oct 6 client: QUICK drop-off ====================
+// Opens straight on the code pad (no Start button). Code → "Dropping off
+// from" (today's/yesterday's pickups already ticked) → how many items per
+// store (= labels) → print & finish, or finish without labels (bulk).
+// 60 seconds untouched → back to the code pad, nothing saved.
+type QuickRow = { key: string; pickupId: number | null; supplierId: number | null; otherName: string | null; label: string; sub: string };
+type QuickStep =
+  | { kind: 'code' }
+  | { kind: 'names'; code: string; candidates: NameCandidate[] }
+  | { kind: 'guest' }
+  | { kind: 'pick' }
+  | { kind: 'count' }
+  | { kind: 'thanks'; firstName: string; summary: string };
+const QUICK_IDLE_MS = 60 * 1000;
+
+function quickWhen(date: string, time: string | null): string {
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const day = date === today ? 'Today' : 'Yesterday';
+  if (!time) return day;
+  const [h, m] = time.split(':').map(Number);
+  return `${day} · ${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+function QuickKiosk({ secret, onLabels }: {
+  secret: string;
+  onLabels: (labels: KioskLabel[], name: string) => void;
+}) {
+  const [step, setStep]       = useState<QuickStep>({ kind: 'code' });
+  const [code, setCode]       = useState('');
+  const [busy, setBusy]       = useState(false);
+  const [err, setErr]         = useState<string | null>(null);
+  const [who, setWho]         = useState<{ volunteerId: number | null; name: string; guestPhone?: string } | null>(null);
+  const [rows, setRows]       = useState<QuickRow[]>([]);
+  const [picked, setPicked]   = useState<Set<string>>(new Set());
+  const [counts, setCounts]   = useState<Record<string, number>>({});
+  const [stores, setStores]   = useState<VendorOption[]>([]);
+  const [search, setSearch]   = useState('');
+  const [showAll, setShowAll] = useState(false);
+  const [guestName, setGuestName]   = useState('');
+  const [guestPhone, setGuestPhone] = useState('');
+  const [note, setNote]         = useState<string | null>(null);
+  const [newStore, setNewStore] = useState<string | null>(null);
+
+  // Oct 9 client: one id per drop-off attempt; every tap/retry sends the same
+  // one so the server saves it once. New id after Start over / next driver.
+  const requestId = useRef<string | null>(null);
+  const saving = useRef(false);
+
+  function resetAll() {
+    requestId.current = null; saving.current = false;
+    setNote(null); setNewStore(null);
+    setStep({ kind: 'code' }); setCode(''); setBusy(false); setErr(null); setWho(null);
+    setRows([]); setPicked(new Set()); setCounts({}); setSearch(''); setShowAll(false);
+    setGuestName(''); setGuestPhone('');
+  }
+
+  // 60-second idle → back to the code pad. Nothing has been saved yet.
+  useEffect(() => {
+    if (step.kind === 'code' && !code) return;
+    if (step.kind === 'thanks') return;
+    let t: any = null;
+    const reset = () => { if (t) clearTimeout(t); t = setTimeout(resetAll, QUICK_IDLE_MS); };
+    reset();
+    const events = ['pointerdown', 'keydown', 'touchstart', 'wheel'];
+    events.forEach((e) => window.addEventListener(e, reset, { passive: true }));
+    return () => { if (t) clearTimeout(t); events.forEach((e) => window.removeEventListener(e, reset)); };
+  }, [step.kind, code]);
+
+  // Thank-you shows for 5 seconds (Oct 9 client), then the pad is ready for the next driver.
+  useEffect(() => {
+    if (step.kind !== 'thanks') return;
+    const t = setTimeout(resetAll, 5000);
+    return () => clearTimeout(t);
+  }, [step.kind]);
+
+  function loadPicks(d: any) {
+    // Hide pickups more than 2 hours away; newest first.
+    const nowNY = new Date().toLocaleString('sv-SE', { timeZone: 'America/New_York' }).slice(0, 16).replace(' ', 'T');
+    const soon = new Date(Date.parse(nowNY + ':00Z') + 2 * 3600e3).toISOString().slice(0, 16);
+    const ps = (d.pickups ?? [])
+      .map((p: any) => ({ ...p, at: `${p.date}T${p.time ?? '00:00'}` }))
+      .filter((p: any) => p.at <= soon)
+      .sort((a: any, b: any) => (a.at < b.at ? 1 : -1));
+    const r: QuickRow[] = ps.map((p: any) => ({
+      key: `p:${p.pickupId}`, pickupId: p.pickupId, supplierId: p.supplierId, otherName: null, label: p.label, sub: quickWhen(p.date, p.time),
+    }));
+    setRows(r); setPicked(new Set()); setStores(d.allSuppliers ?? []);
+    setShowAll(r.length === 0); setSearch('');
+    setWho({ volunteerId: d.volunteerId, name: d.name });
+    setStep({ kind: 'pick' });
+  }
+
+  async function lookup(c: string, resolveVolunteerId?: number) {
+    setBusy(true); setErr(null);
+    try {
+      const r = await kiosk.quickLookup(secret, { code: c, resolveVolunteerId });
+      if (r.data.needsPick) { setStep({ kind: 'names', code: c, candidates: r.data.candidates ?? [] }); return; }
+      loadPicks(r.data);
+    } catch (e: any) {
+      setErr(e?.status === 404 ? "We don't know that code. Try again." : (e?.message || 'Something went wrong. Please try again.'));
+      setCode('');
+    } finally { setBusy(false); }
+  }
+
+  function addDigit(d: string) {
+    if (busy) return;
+    setErr(null);
+    setCode((prev) => {
+      const next = (prev + d).slice(0, 4);
+      if (next.length === 4 && prev.length < 4) setTimeout(() => lookup(next), 80);
+      return next;
+    });
+  }
+  function backspace() { setErr(null); setCode((p) => p.slice(0, -1)); }
+
+  useEffect(() => {
+    if (step.kind !== 'code') return;
+    function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+      if (/^[0-9]$/.test(e.key)) { e.preventDefault(); addDigit(e.key); }
+      else if (e.key === 'Backspace') { e.preventDefault(); backspace(); }
+      else if (e.key === 'Escape') { e.preventDefault(); setCode(''); setErr(null); }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step.kind, busy]);
+
+  async function startGuest() {
+    if (!guestName.trim()) { setErr('Please enter your name.'); return; }
+    setBusy(true); setErr(null);
+    try {
+      const r = await kiosk.quickStores(secret);
+      setWho({ volunteerId: null, name: guestName.trim(), guestPhone: guestPhone.trim() });
+      setRows([]); setPicked(new Set()); setStores(r.data); setShowAll(true); setSearch('');
+      setStep({ kind: 'pick' });
+    } catch (e: any) { setErr(e?.message || 'Something went wrong. Please try again.'); }
+    finally { setBusy(false); }
+  }
+
+  // Oct 6 client: one tap on a store goes straight to "How many items?".
+  function choose(row: QuickRow) {
+    setRows((r) => r.some((x) => x.key === row.key) ? r : [...r, row]);
+    setPicked((s) => new Set(s).add(row.key));
+    setSearch(''); setShowAll(false); setNewStore(null);
+    setStep({ kind: 'count' });
+  }
+  function unchoose(key: string) {
+    const n = new Set(picked); n.delete(key); setPicked(n);
+    if (n.size === 0) setStep({ kind: 'pick' });
+  }
+
+  const chosen = rows.filter((r) => picked.has(r.key));
+  const totalLabels = chosen.reduce((n, r) => n + (counts[r.key] ?? 1), 0);
+
+  async function finish(printLabels: boolean) {
+    if (!who || chosen.length === 0 || saving.current) return;
+    saving.current = true;
+    if (!requestId.current) requestId.current = (globalThis.crypto as any)?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setBusy(true); setErr(null);
+    try {
+      const r = await kiosk.quickFinish(secret, {
+        clientRequestId: requestId.current ?? undefined,
+        volunteerId: who.volunteerId, guestName: who.volunteerId ? undefined : who.name, guestPhone: who.guestPhone,
+        printLabels, note: note?.trim() || undefined,
+        items: chosen.map((x) => ({ pickupId: x.pickupId, supplierId: x.supplierId, otherName: x.otherName, count: counts[x.key] ?? 1 })),
+      });
+      const first = who.name.split(' ')[0];
+      if (printLabels && r.data.labels.length) { onLabels(r.data.labels, who.name); return; }
+      const n = chosen.reduce((t, x) => t + (counts[x.key] ?? 1), 0);
+      const summary = `Recorded ${n} item${n === 1 ? '' : 's'} from ${chosen.map((x) => x.label).join(' + ')}.`;
+      setStep({ kind: 'thanks', firstName: first, summary });
+    } catch (e: any) {
+      setErr(e?.message || 'Something went wrong. Please try again.');
+    } finally { setBusy(false); saving.current = false; }
+  }
+
+  const back = (
+    <button onClick={resetAll} className="mt-5 text-[17px] font-bold text-muted underline underline-offset-2 py-2">Start over</button>
+  );
+  const errBox = err && <div className="text-clay text-[19px] font-bold text-center bg-clay/10 rounded-[16px] py-3 px-4 mt-4 w-full max-w-[560px]">{err}</div>;
+
+  if (step.kind === 'thanks') {
+    return (
+      <Center>
+        <div className="text-[80px]">✅</div>
+        <div className="text-[44px] font-extrabold text-forest text-center">Thank you, {step.firstName}!</div>
+        <div className="text-[24px] text-ink font-bold text-center mt-3">{step.summary}</div>
+      </Center>
+    );
+  }
+
+  if (step.kind === 'names') {
+    return (
+      <div className="h-full w-full flex flex-col items-center pt-16 pb-6 px-6 overflow-y-auto">
+        <Big>Tap your name</Big>
+        <div className="mt-6 w-full max-w-[560px] space-y-3">
+          {step.candidates.map((c) => (
+            <button key={c.volunteerId} disabled={busy} onClick={() => lookup(step.code, c.volunteerId)}
+                    className="w-full rounded-[16px] border-[2px] border-line bg-paper px-6 py-5 text-[26px] font-extrabold text-ink text-left hover:border-forest">
+              {c.name}
+            </button>
+          ))}
+        </div>
+        {errBox}
+        {back}
+      </div>
+    );
+  }
+
+  if (step.kind === 'guest') {
+    return (
+      <div className="h-full w-full flex flex-col items-center pt-16 pb-6 px-6 overflow-y-auto">
+        <Big>What's your name?</Big>
+        <div className="mt-6 w-full max-w-[560px] space-y-4">
+          <KioskInput placeholder="Full name" value={guestName} onChange={setGuestName} autoFocus />
+          <input value={guestPhone} onChange={(e) => setGuestPhone(e.target.value)} placeholder="Phone (optional)" inputMode="tel"
+                 className="w-full rounded-[16px] border-[2px] border-line bg-paper px-5 py-4 text-[24px] outline-none focus:border-forest" />
+          <PrimaryButton onClick={startGuest} disabled={busy || !guestName.trim()}>Next →</PrimaryButton>
+        </div>
+        {errBox}
+        {back}
+      </div>
+    );
+  }
+
+  if (step.kind === 'pick') {
+    const q = search.trim().toLowerCase();
+    const matches = stores.filter((s) => !q || s.supplierName.toLowerCase().includes(q) || s.city.toLowerCase().includes(q)).slice(0, 40);
+    const first = (who?.name ?? '').split(' ')[0];
+    const mine = rows.filter((r) => r.pickupId && !picked.has(r.key));
+    const listOpen = showAll || mine.length === 0;
+    return (
+      <div className="h-full w-full flex flex-col items-center pt-16 pb-6 px-6 overflow-y-auto">
+        <Big>{mine.length ? `Hi ${first}! Which store is this from?` : `Hi ${first}! Where's this food from?`}</Big>
+        <div className="mt-6 w-full max-w-[620px] space-y-3">
+          {mine.map((r) => (
+            <button key={r.key} onClick={() => choose(r)}
+                    className="w-full rounded-[16px] border-[2px] border-line bg-paper px-5 py-4 text-left hover:border-forest active:bg-sage/40">
+              <span className="block text-[24px] font-extrabold text-ink truncate">{r.label}</span>
+              {r.sub && <span className="block text-[16px] text-muted">{r.sub}</span>}
+            </button>
+          ))}
+          {!listOpen && (
+            <button onClick={() => setShowAll(true)}
+                    className="w-full rounded-[16px] border-[2px] border-dashed border-line px-5 py-4 text-[20px] font-extrabold text-forest">
+              + Another store
+            </button>
+          )}
+          {listOpen && newStore === null && (
+            <div className="rounded-[16px] border-[2px] border-line bg-paper p-3">
+              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Type the store name" autoFocus={mine.length > 0}
+                     className="w-full rounded-[12px] border-[2px] border-line bg-paper px-4 py-3 text-[22px] outline-none focus:border-forest" />
+              <div className="mt-2 max-h-[300px] overflow-y-auto">
+                {matches.map((s) => (
+                  <button key={s.supplierId}
+                          onClick={() => choose({ key: `s:${s.supplierId}`, pickupId: null, supplierId: s.supplierId, otherName: null, label: s.supplierName, sub: s.city })}
+                          className="w-full text-left px-4 py-3 rounded-[10px] text-[20px] font-bold text-ink hover:bg-sage/40">
+                    {s.supplierName}{s.city && <span className="text-muted font-normal text-[16px]"> · {s.city}</span>}
+                  </button>
+                ))}
+                {q && matches.length === 0 && <div className="px-4 py-3 text-[18px] text-muted">No store by that name.</div>}
+              </div>
+            </div>
+          )}
+          {listOpen && newStore === null && (
+            <button onClick={() => setNewStore(search.trim())}
+                    className="w-full rounded-[16px] border-[2px] border-dashed border-forest px-5 py-4 text-[20px] font-extrabold text-forest">
+              + Store not on the list
+            </button>
+          )}
+          {newStore !== null && (
+            <div className="rounded-[16px] border-[2px] border-forest bg-paper p-4 space-y-3">
+              <div className="text-[20px] font-extrabold text-ink">Store name</div>
+              <input value={newStore} onChange={(e) => setNewStore(e.target.value)} autoFocus placeholder="e.g. Corner Bakery"
+                     className="w-full rounded-[12px] border-[2px] border-line bg-paper px-4 py-3 text-[22px] outline-none focus:border-forest" />
+              <PrimaryButton disabled={!newStore.trim()}
+                             onClick={() => choose({ key: `o:${newStore.trim().toLowerCase()}`, pickupId: null, supplierId: null, otherName: newStore.trim(), label: newStore.trim(), sub: '' })}>
+                Next →
+              </PrimaryButton>
+              <button onClick={() => setNewStore(null)} className="w-full text-[17px] font-bold text-muted underline underline-offset-2 py-1">Cancel</button>
+            </div>
+          )}
+          {errBox}
+        </div>
+        {picked.size > 0
+          ? <button onClick={() => setStep({ kind: 'count' })} className="mt-5 text-[17px] font-bold text-muted underline underline-offset-2 py-2">← Back</button>
+          : back}
+      </div>
+    );
+  }
+
+  if (step.kind === 'count') {
+    return (
+      <div className="h-full w-full flex flex-col items-center pt-16 pb-6 px-6 overflow-y-auto">
+        <Big>How many items?</Big>
+        <div className="text-[19px] text-muted mt-2 text-center">One label prints for each item.</div>
+        <div className="mt-6 w-full max-w-[620px] space-y-3">
+          {chosen.map((r) => {
+            const n = counts[r.key] ?? 1;
+            const set = (v: number) => setCounts((c) => ({ ...c, [r.key]: Math.max(1, Math.min(60, v)) }));
+            return (
+              <div key={r.key} className="flex items-center gap-4 rounded-[16px] border-[2px] border-line bg-paper px-5 py-4">
+                <span className="flex-1 min-w-0">
+                  <span className="block text-[24px] font-extrabold text-ink truncate">{r.label}</span>
+                  {r.sub && chosen.filter((x) => x.label === r.label).length > 1 && <span className="block text-[16px] text-muted">{r.sub}</span>}
+                  {chosen.length > 1 && <button onClick={() => unchoose(r.key)} className="text-[15px] font-bold text-muted underline underline-offset-2">Remove</button>}
+                </span>
+                <button onClick={() => set(n - 1)} disabled={n <= 1} aria-label="Less"
+                        className="h-16 w-16 rounded-[14px] border-[2px] border-line text-[34px] font-extrabold text-ink disabled:opacity-30">−</button>
+                <span className="w-16 text-center text-[38px] font-extrabold text-forest">{n}</span>
+                <button onClick={() => set(n + 1)} aria-label="More"
+                        className="h-16 w-16 rounded-[14px] border-[2px] border-forest bg-sage/40 text-[34px] font-extrabold text-forest">+</button>
+              </div>
+            );
+          })}
+          <div className="flex justify-center gap-8">
+            <button onClick={() => { setShowAll(false); setStep({ kind: 'pick' }); }} className="text-[18px] font-bold text-forest underline underline-offset-2 py-1">+ Another store</button>
+            {note === null && <button onClick={() => setNote('')} className="text-[18px] font-bold text-forest underline underline-offset-2 py-1">+ Add a note</button>}
+          </div>
+          {note !== null && (
+            <textarea value={note} onChange={(e) => setNote(e.target.value)} autoFocus rows={2} placeholder="Note for the office (optional)"
+                      className="w-full rounded-[16px] border-[2px] border-line bg-paper px-5 py-3 text-[20px] outline-none focus:border-forest" />
+          )}
+          {errBox}
+          <PrimaryButton onClick={() => finish(true)} disabled={busy}>
+            {busy ? 'Finishing…' : `Print ${totalLabels} label${totalLabels === 1 ? '' : 's'} & finish`}
+          </PrimaryButton>
+          <button onClick={() => finish(false)} disabled={busy}
+                  className="w-full rounded-[16px] border-[2px] border-forest text-forest py-4 text-[20px] font-extrabold">
+            Finish without labels
+          </button>
+        </div>
+        {back}
+      </div>
+    );
+  }
+
+  // Code pad — the home screen.
+  return (
+    <div className="h-full w-full flex flex-col items-center pt-16 pb-6 px-6 overflow-y-auto">
+      <div className="text-[22px] font-extrabold text-forest">Zeh L'Zeh drop-off</div>
+      <Big>Enter the last 4 digits of your phone</Big>
+      <div className="mt-6 flex gap-4">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i}
+               className={`w-16 h-20 rounded-[14px] border-[2px] flex items-center justify-center text-[38px] font-extrabold ${code[i] ? 'bg-sage/50 border-forest text-forest' : 'bg-paper border-line text-muted'}`}>
+            {code[i] ?? ''}
+          </div>
+        ))}
+      </div>
+      {err && <div className="text-clay text-[18px] font-bold text-center bg-clay/10 rounded-[16px] py-3 px-4 mt-4 max-w-[540px]">{err}</div>}
+      <div className="mt-6 grid grid-cols-3 gap-3 w-full max-w-[400px]">
+        {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => (
+          <KeyBtn key={n} onClick={() => addDigit(String(n))}>{n}</KeyBtn>
+        ))}
+        {/* Oct 9 client: plain words instead of the arrow / "clear". */}
+        <KeyBtn onClick={backspace} muted><span className="text-[24px]">Delete</span></KeyBtn>
+        <KeyBtn onClick={() => addDigit('0')}>0</KeyBtn>
+        <KeyBtn onClick={() => { setCode(''); setErr(null); }} muted><span className="text-[24px]">Clear</span></KeyBtn>
+      </div>
+      <button onClick={() => { setErr(null); setStep({ kind: 'guest' }); }}
+              className="mt-6 text-[18px] font-extrabold text-forest underline underline-offset-2 py-2">
+        I'm new / no code
+      </button>
+    </div>
+  );
 }

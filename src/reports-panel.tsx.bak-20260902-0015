@@ -1,0 +1,317 @@
+/**
+ * Reports panel — filterable pickup history with CSV export and quick stats.
+ * Hits the existing /api/reports/pickups endpoint (staff-only, already wired
+ * on the backend). Lives in the Coordinator Portal under the Reports tab.
+ *
+ * Tier-2 fixes (2026-08-21):
+ *  1. `delivered` now counts toward Completed (was silently in Scheduled)
+ *  2. Total-pickups tile shows only completed/delivered/picked_up (grant reality)
+ *  3. Distinct stores/drivers come from server-side DISTINCT on join tables
+ *     (no more "Chai Lifeline, Inc." splitting into two on the comma)
+ *  4. New tiles: total miles + total hours (SUM from activity_logs)
+ *  5. Date-range preset buttons (this week / this month / last month / YTD / all)
+ *  6. Filter dropdowns include inactive suppliers + soft-deleted volunteers,
+ *     tagged "(inactive)" so historical rows stay filterable
+ *  7. CSV first column = pickup ID
+ *  8. CSV column order matches the on-screen table
+ *  9. CSV export fetches uncapped dataset; banner appears when the on-screen
+ *     table is truncated
+ */
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { api } from './api';
+import { cx } from './design';
+import { fmtTime } from './time-format';
+
+type ReportRow = {
+  id: string;
+  scheduled_date: string;
+  scheduled_time: string;
+  status: string;
+  pickup_type: string | null;
+  supplier: string | null;
+  volunteer: string | null;
+  items_collected: any;
+};
+
+type ReportTotals = {
+  allRows: number;
+  totalPickups: number;
+  completed: number;
+  missedCancelled: number;
+  scheduled: number;
+  distinctSuppliers: number;
+  distinctVolunteers: number;
+  miles: number;
+  hours: number;
+};
+
+type SupplierPick   = { id: number; name: string; isActive: boolean };
+type VolunteerPick  = { id: number; firstName: string; lastName: string; unitNumber: number | null; inactive: boolean };
+
+function fmtQty(items: any) {
+  if (!items || typeof items !== 'object') return '';
+  return items.quantity ? String(items.quantity) : '';
+}
+
+// Local ISO date (YYYY-MM-DD) — using toISOString() would shift into UTC and
+// hide same-day rows near midnight local time (per zlz_ny_date_defaults rule).
+function isoLocal(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+export function ReportsPanel() {
+  const today = new Date();
+  const lastMonth = new Date(); lastMonth.setMonth(lastMonth.getMonth() - 1);
+  const [from, setFrom] = useState<string>(isoLocal(lastMonth));
+  const [to,   setTo]   = useState<string>(isoLocal(today));
+  const [status, setStatus]           = useState<string>('');
+  const [supplierId, setSupplierId]   = useState<string>('');
+  const [volunteerId, setVolunteerId] = useState<string>('');
+  const [exportBusy, setExportBusy]   = useState(false);
+
+  // Reports-specific picklists — include inactive/soft-deleted parties so
+  // historical rows tied to since-removed stores/drivers are filterable.
+  const suppliers  = useQuery({ queryKey: ['reports-suppliers-picklist'],
+    queryFn: () => api<{ data: SupplierPick[] }>('/api/reports/suppliers-picklist') });
+  const volunteers = useQuery({ queryKey: ['reports-volunteers-picklist'],
+    queryFn: () => api<{ data: VolunteerPick[] }>('/api/reports/volunteers-picklist') });
+
+  const qs = new URLSearchParams();
+  if (from)        qs.set('from', from);
+  if (to)          qs.set('to', to);
+  if (status)      qs.set('status', status);
+  if (supplierId)  qs.set('supplierId', supplierId);
+  if (volunteerId) qs.set('volunteerId', volunteerId);
+  const report = useQuery({
+    queryKey: ['reports-pickups', qs.toString()],
+    queryFn:  () => api<{ data: ReportRow[]; totals: ReportTotals; truncated: boolean; limit: number }>(
+      `/api/reports/pickups${qs.toString() ? `?${qs}` : ''}`),
+  });
+  const rows = report.data?.data ?? [];
+  const totals: ReportTotals = report.data?.totals ?? {
+    allRows: 0, totalPickups: 0, completed: 0, missedCancelled: 0, scheduled: 0,
+    distinctSuppliers: 0, distinctVolunteers: 0, miles: 0, hours: 0,
+  };
+  const truncated = !!report.data?.truncated;
+
+  async function exportCsv() {
+    setExportBusy(true);
+    try {
+      // Always pull the uncapped dataset for CSV so the office file is complete
+      // even when the on-screen table shows only the first 1000 rows.
+      const exportQs = new URLSearchParams(qs);
+      exportQs.set('limit', '0');
+      const full = await api<{ data: ReportRow[] }>(`/api/reports/pickups?${exportQs}`);
+      const allRows = full.data ?? [];
+
+      // Column order MATCHES the on-screen table (ID injected first).
+      const head = ['ID', 'Date', 'Time', 'Supplier', 'Volunteer(s)', 'Type', 'Qty', 'Status'];
+      const lines = allRows.map((r) => [
+        r.id ?? '',
+        String(r.scheduled_date ?? '').slice(0, 10),
+        String(r.scheduled_time ?? '').slice(0, 5),
+        r.supplier ?? '',
+        r.volunteer ?? '',
+        r.pickup_type ?? '',
+        fmtQty(r.items_collected),
+        r.status ?? '',
+      ].map((c) => `"${String(c).replace(/"/g, '""')}"`).join(','));
+      const csv = [head.join(','), ...lines].join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `zlz-pickups-${from}_${to}.csv`; a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
+  function clearFilters() {
+    setStatus(''); setSupplierId(''); setVolunteerId('');
+    setFrom(isoLocal(lastMonth));
+    setTo(isoLocal(today));
+  }
+
+  // Date-range presets (fix #5). All resolve to local NY-style ISO strings.
+  function applyPreset(kind: 'week' | 'month' | 'last-month' | 'ytd' | 'all') {
+    const now = new Date();
+    if (kind === 'week') {
+      const day = now.getDay(); // 0 = Sun; grant reporters generally mean Sun→today
+      const start = new Date(now); start.setDate(now.getDate() - day);
+      setFrom(isoLocal(start)); setTo(isoLocal(now));
+    } else if (kind === 'month') {
+      setFrom(isoLocal(new Date(now.getFullYear(), now.getMonth(), 1)));
+      setTo(isoLocal(now));
+    } else if (kind === 'last-month') {
+      const first = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const last  = new Date(now.getFullYear(), now.getMonth(), 0);
+      setFrom(isoLocal(first)); setTo(isoLocal(last));
+    } else if (kind === 'ytd') {
+      setFrom(isoLocal(new Date(now.getFullYear(), 0, 1)));
+      setTo(isoLocal(now));
+    } else if (kind === 'all') {
+      setFrom('2020-01-01'); setTo(isoLocal(now));
+    }
+  }
+
+  const filterInput = 'rounded-[10px] border-[1.4px] border-line bg-paper px-3 py-2 text-[14px] outline-none focus:border-forest';
+  const presetBtn   = 'haptic text-[12.5px] font-bold text-forest bg-sage/60 hover:bg-sage rounded-full px-3 py-1';
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2">
+        <StatTile label="Total pickups"       value={totals.totalPickups}          tone="forest" />
+        <StatTile label="Completed"           value={totals.completed}             tone="forest" />
+        <StatTile label="Scheduled"           value={totals.scheduled}             tone="amber" />
+        <StatTile label="Missed / cancelled"  value={totals.missedCancelled}       tone="clay" />
+        <StatTile label="Distinct stores"     value={totals.distinctSuppliers}     tone="sky" />
+        <StatTile label="Distinct drivers"    value={totals.distinctVolunteers}    tone="sky" />
+        <StatTile label="Total miles"         value={Math.round(totals.miles * 10) / 10}  tone="forest" />
+        <StatTile label="Total hours"         value={Math.round(totals.hours * 10) / 10}  tone="forest" />
+      </div>
+
+      <div className="bg-paper border border-line rounded-[14px] p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-[13px] font-extrabold uppercase tracking-[.06em] text-muted">Filters</div>
+          <div className="flex flex-wrap gap-1.5">
+            <button onClick={() => applyPreset('week')}       className={presetBtn}>This week</button>
+            <button onClick={() => applyPreset('month')}      className={presetBtn}>This month</button>
+            <button onClick={() => applyPreset('last-month')} className={presetBtn}>Last month</button>
+            <button onClick={() => applyPreset('ytd')}        className={presetBtn}>This year</button>
+            <button onClick={() => applyPreset('all')}        className={presetBtn}>All time</button>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
+          <label className="block">
+            <span className="text-[11.5px] font-extrabold uppercase tracking-[.06em] text-muted">From</span>
+            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className={cx(filterInput, 'mt-1 w-full')} />
+          </label>
+          <label className="block">
+            <span className="text-[11.5px] font-extrabold uppercase tracking-[.06em] text-muted">To</span>
+            <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className={cx(filterInput, 'mt-1 w-full')} />
+          </label>
+          <label className="block">
+            <span className="text-[11.5px] font-extrabold uppercase tracking-[.06em] text-muted">Status</span>
+            <select value={status} onChange={(e) => setStatus(e.target.value)} className={cx(filterInput, 'mt-1 w-full')}>
+              <option value="">All</option>
+              <option value="scheduled">Scheduled</option>
+              <option value="confirmed">Confirmed</option>
+              <option value="in_progress">In progress</option>
+              <option value="picked_up">Picked up</option>
+              <option value="delivered">Delivered</option>
+              <option value="completed">Completed</option>
+              <option value="missed">Missed</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-[11.5px] font-extrabold uppercase tracking-[.06em] text-muted">Supplier</span>
+            <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} className={cx(filterInput, 'mt-1 w-full')}>
+              <option value="">All</option>
+              {(suppliers.data?.data ?? []).map((s) => (
+                <option key={s.id} value={s.id}>{s.name}{s.isActive === false ? ' (inactive)' : ''}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-[11.5px] font-extrabold uppercase tracking-[.06em] text-muted">Volunteer</span>
+            <select value={volunteerId} onChange={(e) => setVolunteerId(e.target.value)} className={cx(filterInput, 'mt-1 w-full')}>
+              <option value="">All</option>
+              {(volunteers.data?.data ?? []).map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.firstName} {v.lastName}
+                  {v.unitNumber != null ? ` · #${v.unitNumber}` : ''}
+                  {v.inactive ? ' (inactive)' : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="flex items-end gap-2">
+            <button onClick={clearFilters} className="haptic text-[13px] font-bold text-muted px-3 py-2 rounded-[10px] hover:bg-cream">Clear</button>
+            <button onClick={exportCsv} disabled={rows.length === 0 || exportBusy}
+                    className="haptic flex-1 bg-forest text-paper font-bold text-[13px] rounded-[10px] px-3 py-2 disabled:opacity-40">
+              {exportBusy ? 'Exporting…' : '⬇ Export CSV'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {truncated && (
+        <div className="bg-amber-soft border border-amber/40 text-[#8a6011] text-[13px] font-semibold rounded-[10px] px-3 py-2">
+          Showing first {rows.length} of {totals.allRows} rows.
+          The <b>Export CSV</b> button downloads the complete dataset.
+        </div>
+      )}
+
+      <div className="bg-paper border border-line rounded-[14px] overflow-hidden">
+        <div className="px-4 py-2.5 border-b border-line flex items-center justify-between">
+          <div className="text-[13px] font-extrabold uppercase tracking-[.06em] text-muted">
+            {report.isLoading ? 'Loading…' : `${totals.allRows} pickup${totals.allRows === 1 ? '' : 's'}`}
+          </div>
+          {report.error && <div className="text-[12.5px] text-clay">{(report.error as Error).message}</div>}
+        </div>
+        {report.isLoading ? (
+          <div className="text-[13.5px] text-muted py-8 text-center">Loading…</div>
+        ) : rows.length === 0 ? (
+          <div className="text-[13.5px] text-muted py-8 text-center">No pickups match these filters.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-[13.5px]">
+              <thead>
+                <tr className="text-left border-b border-line bg-cream/40">
+                  <th className="px-3 py-2.5 font-extrabold uppercase text-[11.5px] tracking-[.06em] text-muted">Date</th>
+                  <th className="px-3 py-2.5 font-extrabold uppercase text-[11.5px] tracking-[.06em] text-muted">Time</th>
+                  <th className="px-3 py-2.5 font-extrabold uppercase text-[11.5px] tracking-[.06em] text-muted">Supplier</th>
+                  <th className="px-3 py-2.5 font-extrabold uppercase text-[11.5px] tracking-[.06em] text-muted">Volunteer(s)</th>
+                  <th className="px-3 py-2.5 font-extrabold uppercase text-[11.5px] tracking-[.06em] text-muted">Type</th>
+                  <th className="px-3 py-2.5 font-extrabold uppercase text-[11.5px] tracking-[.06em] text-muted">Qty</th>
+                  <th className="px-3 py-2.5 font-extrabold uppercase text-[11.5px] tracking-[.06em] text-muted">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id} className="border-b border-line/70 hover:bg-cream/40">
+                    <td className="px-3 py-2 text-ink">{new Date(String(r.scheduled_date).slice(0, 10) + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</td>
+                    <td className="px-3 py-2 text-ink tabular-nums">{fmtTime(String(r.scheduled_time ?? '').slice(0, 5)) || '—'}</td>
+                    <td className="px-3 py-2 font-bold text-ink">{r.supplier || '—'}</td>
+                    <td className="px-3 py-2 text-ink">{r.volunteer || <span className="text-clay">unassigned</span>}</td>
+                    <td className="px-3 py-2 text-muted capitalize">{(r.pickup_type || '').replace(/_/g, ' ')}</td>
+                    <td className="px-3 py-2 text-ink">{fmtQty(r.items_collected)}</td>
+                    <td className="px-3 py-2">
+                      <span className={cx('inline-block text-[11.5px] font-bold py-1 px-2.5 rounded-full',
+                        r.status === 'completed' || r.status === 'delivered' ? 'bg-sage text-forest' :
+                        r.status === 'missed' || r.status === 'cancelled' ? 'bg-clay-soft text-clay' :
+                        r.status === 'in_progress' || r.status === 'picked_up' ? 'bg-amber-soft text-[#8a6011]' :
+                        'bg-line text-muted')}>
+                        {r.status?.replace(/_/g, ' ')}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StatTile({ label, value, tone }: { label: string; value: number; tone: 'forest' | 'clay' | 'amber' | 'sky' }) {
+  const bg =
+    tone === 'forest' ? 'bg-sage border-sage-line text-forest' :
+    tone === 'clay'   ? 'bg-clay-soft border-clay/30 text-clay' :
+    tone === 'amber'  ? 'bg-amber-soft border-amber/30 text-[#8a6011]' :
+                        'bg-sky-soft border-sky/30 text-[#1d4a6a]';
+  return (
+    <div className={cx('rounded-[14px] border-2 px-4 py-3', bg)}>
+      <div className="font-display font-bold text-[28px] leading-none">{value}</div>
+      <div className="text-[12.5px] font-bold mt-1.5">{label}</div>
+    </div>
+  );
+}

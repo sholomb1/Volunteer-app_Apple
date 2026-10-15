@@ -4,21 +4,43 @@
  * routes). No JWT header. All calls go through here so nothing in the
  * regular authed api.ts leaks into the kiosk flow.
  */
-import { API_BASE, maybeForcePortalReload } from '../api';
+import { API_BASE, maybeForcePortalReload, friendlyError, NETWORK_ERROR_TEXT, decodeEnc, filterBlockedError, encNeeded, markEncNeeded, GZ_OK } from '../api';
 
 async function ksh<T>(secret: string, path: string, init: RequestInit = {}): Promise<T> {
   const url = API_BASE.replace(/\/$/, '') + `/api/kiosk/${encodeURIComponent(secret)}${path}`;
   const headers = new Headers(init.headers);
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-  const r = await fetch(url, { ...init, headers });
+  // Oct 11 client: filter-proof (base64) replies — see api.ts decodeEnc.
+  // Speed: only once a filter block was seen on this device (api.ts encNeeded).
+  const encSent = encNeeded();
+  if (encSent) headers.set('X-Zlz-Enc', '1');
+  if (GZ_OK) headers.set('X-Zlz-Gz', '1'); // Oct 11 client: speed — gzip'd JSON (browsers only)
+  const go = () => fetch(url, { ...init, headers }).catch(() => { throw Object.assign(new Error(NETWORK_ERROR_TEXT), { status: 0 }); });
+  const read = async (resp: Response) => {
+    const text = await resp.text();
+    let json: any = null;
+    let parsed = !text;
+    try { json = text ? decodeEnc(JSON.parse(text)) : null; parsed = true; } catch { /* leave null */ }
+    return { json, blocked: resp.ok && (!parsed || /text\/html/i.test(resp.headers.get('content-type') || '')) };
+  };
+  let r = await go();
   // Honor the portal-wide reload epoch so a stale kiosk bundle self-heals
   // on its next API call instead of shipping day-old print code forever.
   maybeForcePortalReload(r.headers.get('X-Portal-Reload-Since'));
-  const text = await r.text();
-  let json: any = null;
-  try { json = text ? JSON.parse(text) : null; } catch { /* leave null */ }
+  let { json, blocked } = await read(r);
+  // Speed: blocked without the header → remember it; reads ask again with it.
+  if (blocked && !encSent) {
+    markEncNeeded();
+    if ((init.method ?? 'GET').toUpperCase() === 'GET') {
+      headers.set('X-Zlz-Enc', '1');
+      r = await go();
+      ({ json, blocked } = await read(r));
+    }
+  }
+  // Oct 11 client: an OK reply that isn't JSON = an internet filter's block page.
+  if (blocked) throw filterBlockedError(r.status);
   if (!r.ok) {
-    const err = new Error(json?.message || json?.error || `HTTP ${r.status}`) as any;
+    const err = new Error(friendlyError(r.status, json)) as any;
     err.status = r.status;
     err.body = json;
     throw err;
@@ -89,6 +111,21 @@ export type KioskLabel = {
 };
 
 export const kiosk = {
+  // Oct 6 client: quick drop-off (code → stores → item count → labels).
+  quickLookup: (secret: string, body: { code: string; resolveVolunteerId?: number }) =>
+    ksh<{ data: { needsPick?: boolean; candidates?: { volunteerId: number; name: string }[];
+                  volunteerId: number; name: string; firstName: string;
+                  pickups: { pickupId: number; supplierId: number | null; label: string; date: string; time: string | null }[];
+                  allSuppliers: { supplierId: number; supplierName: string; city: string }[] } }>(
+      secret, '/quick/lookup', { method: 'POST', body: JSON.stringify(body) }),
+  quickStores: (secret: string) =>
+    ksh<{ data: { supplierId: number; supplierName: string; city: string }[] }>(secret, '/quick/stores'),
+  quickFinish: (secret: string, body: {
+    volunteerId: number | null; guestName?: string; guestPhone?: string; printLabels: boolean; note?: string;
+    clientRequestId?: string; // Oct 9 client: same id on retry = saved once
+    items: { pickupId: number | null; supplierId: number | null; otherName: string | null; count: number }[];
+  }) => ksh<{ data: { dropoffId: number; name: string; labels: KioskLabel[] } }>(
+      secret, '/quick/finish', { method: 'POST', body: JSON.stringify(body) }),
   signin: (secret: string, body: {
     code?: string;
     resolveVolunteerId?: number;

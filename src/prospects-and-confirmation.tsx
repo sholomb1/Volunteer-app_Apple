@@ -5,12 +5,14 @@
 //      dispatch. Steadys flagged needs_confirmation materialize as
 //      status='pending_confirmation'; a dispatcher decides each morning.
 
+import { uiConfirm } from './ui-dialogs';
+import { foodCheckLine, driverToldLine } from './food-check'; // Oct 13 client
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Check, X, Store, Phone, Trash2, PhoneCall } from 'lucide-react';
 import { api } from './api';
-import { Button, cx } from './design';
-import { fmtTime } from './time-format';
+import { Button, cx, SearchBar } from './design';
+import { fmtTime, fmtDateTimeEastern } from './time-format';
 
 // ─────────────────────────────── API clients ──────────────────────────────────
 
@@ -53,6 +55,7 @@ export type NeedsConfirmationItem = {
   steadyName?: string | null;
   supplierName?: string | null;
   supplierAddress?: string | null;
+  storeTexts?: any; // Oct 13 client: "food today?" state (food-check.tsx)
 };
 
 export const pickupConfirmation = {
@@ -88,7 +91,9 @@ export function ProspectsPanel() {
     queryKey: ['prospects', filter],
     queryFn: () => prospects.list(filter === 'all' ? undefined : filter),
   });
-  const rows = q.data?.data ?? [];
+  // Oct 2 client fix: page search.
+  const [pq, setPq] = useState('');
+  const rows = (q.data?.data ?? []).filter((r) => !pq.trim() || JSON.stringify(r).toLowerCase().includes(pq.trim().toLowerCase()));
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [creating, setCreating] = useState(false);
 
@@ -107,6 +112,7 @@ export function ProspectsPanel() {
         </Button>
       </div>
 
+      <SearchBar value={pq} onChange={setPq} placeholder="Search prospects — name, contact, phone, address, notes…" />
       {/* Status filter chips */}
       <div className="flex items-center gap-1.5 flex-wrap">
         <button onClick={() => setFilter('all')}
@@ -232,7 +238,7 @@ function ProspectEditor({
     },
     onError: (e: any) => {
       const msg = String(e?.message ?? e);
-      if (msg.includes('already-converted')) alert('This prospect was already converted to a supplier.');
+      if (`${msg} ${e?.body?.error ?? ''}`.includes('already-converted')) alert('This prospect was already converted to a supplier.');
       else alert(`Convert failed: ${msg}`);
     },
   });
@@ -255,12 +261,12 @@ function ProspectEditor({
           {!isNew && !alreadyConverted && (
             <Button size="sm" variant="forest" icon={<Check size={14} />}
                     loading={convert.isPending}
-                    onClick={() => { if (confirm(`Convert "${prospect!.name}" to a real supplier? A supplier row will be created and this prospect will be marked signed.`)) convert.mutate(); }}>
+                    onClick={() => { void uiConfirm(`Convert "${prospect!.name}" to a real supplier? A supplier row will be created and this prospect will be marked signed.`).then((ok) => { if (ok) { convert.mutate(); } }); }}>
               Convert to supplier
             </Button>
           )}
           {!isNew && (
-            <button onClick={() => { if (confirm(`Delete prospect "${prospect!.name}"?`)) remove.mutate(); }}
+            <button onClick={() => { void uiConfirm(`Delete prospect "${prospect!.name}"?`).then((ok) => { if (ok) { remove.mutate(); } }); }}
                     className="haptic text-clay grid h-8 w-8 place-items-center rounded-full hover:bg-clay-soft" title="Delete">
               <Trash2 size={14} />
             </button>
@@ -303,7 +309,7 @@ function ProspectEditor({
 
       {!isNew && prospect?.lastContactedAt && (
         <div className="text-[11.5px] text-muted">
-          Last contacted: {new Date(prospect.lastContactedAt).toLocaleString()}
+          Last contacted: {fmtDateTimeEastern(prospect.lastContactedAt)}
         </div>
       )}
 
@@ -372,8 +378,12 @@ export function NeedsConfirmationSection() {
 }
 
 function NeedsConfirmationRow({ row, onDone }: { row: NeedsConfirmationItem; onDone: () => void }) {
-  const confirmM = useMutation({ mutationFn: () => pickupConfirmation.confirm(row.id), onSuccess: onDone });
-  const declineM = useMutation({ mutationFn: () => pickupConfirmation.decline(row.id), onSuccess: onDone });
+  // Oct 13 client: held by the store "food today?" text → its state, and Send to drivers / Cancel today
+  // (sent by the normal new-pickup timing; cancelled quietly).
+  const fc = row.storeTexts?.food ? foodCheckLine(row.storeTexts.food, true) : null;
+  const driverTold = driverToldLine(row.storeTexts?.driver); // Oct 14 client: "Driver Moshe told 8:05 AM"
+  const confirmM = useMutation({ mutationFn: () => fc ? api(`/api/pickup-instances/${row.id}/food-check/send`, { method: 'POST', body: '{}' }) : pickupConfirmation.confirm(row.id), onSuccess: onDone });
+  const declineM = useMutation({ mutationFn: () => fc ? api(`/api/pickup-instances/${row.id}/food-check/cancel`, { method: 'POST', body: '{}' }) : pickupConfirmation.decline(row.id), onSuccess: onDone });
   const label   = row.steadyName || row.supplierName || row.donorName || 'Pickup';
   const address = row.supplierAddress || row.pickupAddress || '';
 
@@ -386,16 +396,18 @@ function NeedsConfirmationRow({ row, onDone }: { row: NeedsConfirmationItem; onD
           {address && <span className="truncate">{address}</span>}
           {row.contactPhone && <span>{row.contactPhone}</span>}
         </div>
+        {fc && <div className="mt-1 text-[11.5px] font-bold text-[#9a7415]" data-testid="nc-food-check">🥖 {fc.text}</div>}
+        {driverTold && <div className="mt-0.5 text-[11.5px] font-semibold text-muted" data-testid="nc-driver-told">🚐 {driverTold}</div>}
       </div>
       <div className="flex items-center gap-1.5 shrink-0">
         <button onClick={() => confirmM.mutate()} disabled={confirmM.isPending || declineM.isPending}
                 className="haptic text-[11.5px] font-extrabold px-3 py-1.5 rounded-[10px] bg-forest text-paper hover:brightness-110 disabled:opacity-50">
-          {confirmM.isPending ? '…' : 'Confirm'}
+          {confirmM.isPending ? '…' : fc ? 'Send to drivers' : 'Confirm'}
         </button>
-        <button onClick={() => { if (window.confirm('Decline this pickup for today? It will be cancelled and drivers will not be notified.')) declineM.mutate(); }}
+        <button onClick={() => { void uiConfirm(fc ? 'Cancel this pickup for today? Drivers are not texted.' : 'Decline this pickup for today? It will be cancelled and drivers will not be notified.').then((ok) => { if (ok) { declineM.mutate(); } }); }}
                 disabled={confirmM.isPending || declineM.isPending}
                 className="haptic text-[11.5px] font-extrabold px-3 py-1.5 rounded-[10px] border border-clay text-clay hover:bg-clay-soft disabled:opacity-50">
-          {declineM.isPending ? '…' : 'Decline'}
+          {declineM.isPending ? '…' : fc ? 'Cancel today' : 'Decline'}
         </button>
       </div>
     </div>

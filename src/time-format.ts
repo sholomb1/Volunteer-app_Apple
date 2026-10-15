@@ -57,6 +57,19 @@ export function fmtDateEastern(iso: string | Date | null | undefined): string {
   });
 }
 
+/** Oct 9: date → "Thu, Oct 9" in Eastern time; adds ", 2025" only when it's
+ *  not the current year. Accepts YYYY-MM-DD or any timestamp. */
+export function fmtDay(iso: string | Date | null | undefined): string {
+  const s = fmtDateEastern(iso);
+  if (!s) return '';
+  const d = iso instanceof Date ? iso
+        : typeof iso === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(iso) ? new Date(iso + 'T12:00:00Z')
+        : new Date(iso as string);
+  const y = new Intl.DateTimeFormat('en-US', { year: 'numeric', timeZone: TZ }).format(d);
+  const nowY = new Intl.DateTimeFormat('en-US', { year: 'numeric', timeZone: TZ }).format(new Date());
+  return y === nowY ? s : `${s}, ${y}`;
+}
+
 /** Combined "Sat, Jun 14 · 2:30 PM" — used on pickup cards and feeds. */
 export function fmtDateTimeFull(iso: string | Date | null | undefined): string {
   if (!iso) return '';
@@ -74,4 +87,39 @@ export function fmtDateTimeFull(iso: string | Date | null | undefined): string {
  *  the day over at 8 PM NY (EDT) / 7 PM NY (EST). */
 export function nyToday(): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date());
+}
+
+// Oct 13 client: "It shouldn't show a time if it's in the queue waiting — it's a pickup from now.
+// But for us (office) it should show that it was reposted."
+/** New York wall clock right now, 'YYYY-MM-DD HH:MM'. */
+export function nyWallNow(): string {
+  return new Date().toLocaleString('sv-SE', { timeZone: TZ }).slice(0, 16);
+}
+/** True once a pickup's date + time (New York) has come. No date or time → false. */
+export function isPastDueNy(date: string | null | undefined, time: string | null | undefined): boolean {
+  const d = date ? String(date).slice(0, 10) : '';
+  const m = /^(\d{1,2}):(\d{2})/.exec(String(time ?? ''));
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || !m) return false;
+  return `${d} ${m[1]!.padStart(2, '0')}:${m[2]}` <= nyWallNow();
+}
+const DONE_FOR_DRIVER = ['completed', 'delivered', 'cancelled', 'missed'];
+/** Drivers see "Now" (not the old time) for a pickup still to do whose time has passed —
+ *  reposted, or still open after its time. Finished ones keep their time. */
+export function driverShowsNow(p: { scheduled_date?: string | null; scheduled_time?: string | null; status?: string | null }): boolean {
+  return !DONE_FOR_DRIVER.includes(String(p.status ?? '').toLowerCase()) && isPastDueNy(p.scheduled_date, p.scheduled_time);
+}
+/** Office tag: "Reposted 3:20 PM · was Mon 10:36 PM" (another day: "Reposted Mon 3:20 PM · …"). */
+export function repostedLabel(at: string, date: string | null | undefined, time: string | null | undefined): string {
+  const when = new Date(at);
+  let r = '';
+  if (!Number.isNaN(when.getTime())) {
+    const sameDay = new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(when) === nyToday();
+    r = sameDay ? fmtTimeEastern(when)
+      : when.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: TZ });
+  }
+  const key = date ? String(date).slice(0, 10) : '';
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(key) ? new Date(key + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }) : '';
+  const t = fmtTime(time ? String(time).slice(0, 5) : '');
+  const was = [d, t].filter(Boolean).join(' ');
+  return `Reposted${r ? ` ${r}` : ''}${was ? ` · was ${was}` : ''}`;
 }

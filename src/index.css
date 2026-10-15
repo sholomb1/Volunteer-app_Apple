@@ -22,8 +22,9 @@
       radial-gradient(1200px 600px at 80% -5%, #EAF1E4 0%, transparent 55%),
       radial-gradient(900px 500px at 5% 110%, #F4E7D8 0%, transparent 50%);
     line-height: 1.45;
-    /* No safe-area-inset padding here — the Android theme inset the WebView
-       already, and viewport-fit=cover is off so iOS WebKit handles it too. */
+    /* Oct 14 client: notch padding. viewport-fit=cover is on (index.html), so
+       iPhones report the notch / home-bar insets here; Android and desktop report 0. */
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   }
   h1, h2, h3 { font-family: 'Fraunces', serif; font-weight: 600; letter-spacing: -0.02em; }
   :focus-visible { @apply outline-none ring-2 ring-forest/50 ring-offset-2 ring-offset-cream; }
@@ -55,8 +56,13 @@
   .text-balance { text-wrap: balance; }
   .no-scrollbar::-webkit-scrollbar { display: none; }
   .no-scrollbar { scrollbar-width: none; }
-  .pb-safe { padding-bottom: calc(env(safe-area-inset-bottom) + 0.75rem); }
-  .pt-safe { padding-top: calc(env(safe-area-inset-top) + 0.75rem); }
+  /* Oct 14 client: body already pads by the notch / home bar, so these are plain spacing now. */
+  .pb-safe { padding-bottom: 0.75rem; }
+  .pt-safe { padding-top: 0.75rem; }
+  /* Oct 14 client: full-height phone frame = screen minus the notch / home-bar padding on body
+     (md:h-[820px] still wins on desktop). Full-screen pages likewise, so they don't scroll by the inset. */
+  .h-app { height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+  body .min-h-screen { min-height: calc(100vh - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
 
   /* Fraunces italic for the "em" accent in mockup headlines */
   .accent-italic { font-style: italic; color: #2C5A3B; }
@@ -90,4 +96,75 @@
   .label-desc  { font-size: 10pt; font-weight: 600; line-height: 1.15; margin-bottom: 4pt;
                  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
   .label-meta  { font-size: 8pt; text-transform: uppercase; letter-spacing: .05em; color: #555; }
+}
+
+/* Oct 5 client: dark mode + bigger text (per person, saved in this browser). */
+:root {
+  --c-cream: 250 245 236;
+  --c-paper: 255 255 255;
+  --c-ink: 28 42 33;
+  --c-muted: 110 124 112;
+  --c-forest: 44 90 59;
+  --c-forest-deep: 30 63 41;
+  --c-sage: 229 238 226;
+  --c-sage-line: 207 224 204;
+  --c-clay: 210 122 76;
+  --c-clay-soft: 247 228 214;
+  --c-amber: 229 169 63;
+  --c-amber-soft: 251 235 200;
+  --c-sky: 62 111 142;
+  --c-sky-soft: 220 233 240;
+  --c-line: 234 227 212;
+  --c-line-2: 224 216 198;
+}
+html.dark {
+  --c-cream: 18 24 21;
+  --c-paper: 27 35 30;
+  --c-ink: 230 237 232;
+  --c-muted: 154 168 157;
+  --c-forest: 109 181 133;
+  --c-forest-deep: 154 211 172;
+  --c-sage: 33 52 41;
+  --c-sage-line: 45 70 54;
+  --c-clay: 232 148 106;
+  --c-clay-soft: 59 42 33;
+  --c-amber: 233 180 90;
+  --c-amber-soft: 58 49 34;
+  --c-sky: 134 185 217;
+  --c-sky-soft: 29 50 64;
+  --c-line: 43 53 48;
+  --c-line-2: 53 64 58;
+  color-scheme: dark;
+}
+html.dark body { background: rgb(var(--c-cream)); background-image: none; color: rgb(var(--c-ink)); }
+html.dark .bg-canvas { background-image: none !important; }
+html.dark .bg-white { background-color: rgb(var(--c-paper)) !important; }
+html.dark input, html.dark select, html.dark textarea { color: rgb(var(--c-ink)); background-color: rgb(var(--c-paper)); }
+html.dark .bg-ink\/50 { background-color: rgb(0 0 0 / .6) !important; }
+html.big-text body { zoom: 1.15; }
+/* The green menu looks the same in dark mode (it is already dark). */
+html.dark .zlz-keep-light {
+  --c-cream: 250 245 236; --c-paper: 255 255 255; --c-ink: 28 42 33; --c-muted: 110 124 112;
+  --c-forest: 44 90 59; --c-forest-deep: 22 46 31; --c-sage: 229 238 226; --c-sage-line: 207 224 204;
+  --c-line: 234 227 212; --c-line-2: 224 216 198;
+}
+
+/* Oct 14 client: bigger map +/- buttons for fingers (were 30px). */
+.leaflet-touch .leaflet-bar a { width: 44px; height: 44px; line-height: 44px; font-size: 22px; }
+
+/* Oct 14 client: on a phone (390px) every office button / icon is at least 40px to tap.
+   body.zlz-office is set by the office portal (popups render into <body> too), so the
+   driver app, store app and kiosk are unchanged; desktop is unchanged (phone widths only). */
+@media (max-width: 640px) {
+  body.zlz-office button.haptic,
+  body.zlz-office a.haptic,
+  body.zlz-office [role=button].haptic { min-height: 40px; }
+  body.zlz-office button.haptic.grid,
+  body.zlz-office button.haptic.inline-grid,
+  body.zlz-office button.haptic[aria-label] { min-width: 40px; }
+  /* small icons that must stay small to look right: invisible 40px hit area */
+  body.zlz-office .hit40 { position: relative; }
+  body.zlz-office .hit40::after { content: ''; position: absolute; left: 50%; top: 50%; width: 40px; height: 40px; transform: translate(-50%, -50%); }
+  /* tick boxes: the label around the box is the 40px target */
+  body.zlz-office .tap40-box { display: inline-grid; place-items: center; min-width: 40px; min-height: 40px; margin: -10px; }
 }

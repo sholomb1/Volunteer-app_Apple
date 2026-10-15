@@ -1,313 +1,240 @@
 /**
- * Volunteer Home — Sharing-Excess "task-hub" cards layout from the mockup.
- * Three colour-coded cards (Available Pickups · My Pickups · Completed this
- * week) sit beneath a small map strip. Header is the Fraunces greeting.
+ * Volunteer Home — Oct 6 client redesign: your pickups today first (Navigate /
+ * Call), then what's open now with a Take button, then one line for later &
+ * tomorrow. The fake map, colored count boxes and 24-hour recap are gone;
+ * location sharing moved to My profile.
+ * Oct 14 client: the "Getting pickup texts" switch was misleading — now a short
+ * status line with the real setting ("📩 Pickups by: Text · Quiet 10 PM–7 AM",
+ * "Pickups by: WhatsApp", "Paused until Sun, Oct 19"), a quick Pause / Resume,
+ * and Change → Settings. Open = the driver queue (pickups open 2 hours before
+ * their time), so there is no "Later & tomorrow" line any more; the driver's
+ * own upcoming pickups are under Coming up.
  */
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { ArrowRight, Truck, Calendar, Check, MapPin } from 'lucide-react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { volunteer, centerHelp, CENTER_HELP_TASK_LABELS, type CenterHelpInstance, type AuthUser } from '../api';
-import { AppBar, Avatar, FadeUp, Skeleton, Toast, cx } from '../design';
-import { AnimatePresence } from 'framer-motion';
-import { useLocationReporting, getTrackingEnabled, setTrackingEnabled, reportNow } from '../location-reporter';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ArrowRight, MapPin } from 'lucide-react';
+import { volunteer, centerHelp, CENTER_HELP_TASK_LABELS, FILTER_BLOCKED_TEXT, type CenterHelpInstance, type AuthUser, type MyPickup } from '../api';
+import { AppBar, Avatar, FadeUp, Skeleton, cx } from '../design';
+import { useLocationReporting, getTrackingEnabled, setTrackingEnabled } from '../location-reporter';
 import { nyToday } from '../time-format';
+import { DriverCard, useTakePickup, fmtWhenLine, storeName } from './driver-card';
+import { uiConfirm } from '../ui-dialogs';
+import { PauseSheet, PausedBox, REACH_SHORT, quietShort, useDriverSettings, usePause } from '../driver-settings'; // Oct 14 client
+
+const DONE = new Set(['completed', 'delivered', 'cancelled', 'missed']);
+// Oct 9 client: same "finished" rule as the Mine tab — the pickup is over, or
+// this driver's part of it is done.
+const isMineDone = (p: MyPickup) => DONE.has(p.status) || p.assignment_status === 'completed';
+const shiftDay = (iso: string, n: number) => new Date(Date.parse(iso + 'T12:00:00Z') + n * 86400e3).toISOString().slice(0, 10);
 
 export function VolunteerHome({ user }: { user: AuthUser }) {
   const nav = useNavigate();
-
-  // fgh103 (Aug 17): live-poll so the "N available" tile stays current.
   const open = useQuery({ queryKey: ['open'], queryFn: volunteer.open, refetchInterval: 15_000, refetchOnWindowFocus: true, staleTime: 5_000 });
   const mine = useQuery({ queryKey: ['mine'], queryFn: volunteer.mine, refetchOnWindowFocus: true, staleTime: 5_000 });
-  const hist = useQuery({ queryKey: ['history'], queryFn: volunteer.history });
+  const { take, busy } = useTakePickup();
 
-  // batch abc810 Aug 10 — count only TODAY's open pickups so the home tile
-  // matches the Available Pickups feed (which is today-only per spec 8b).
-  const todayIsoNY = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-  const openCount  = open.data?.data.filter((p) => (p.scheduled_date ?? '').slice(0, 10) === todayIsoNY).length ?? 0;
-  const mineCount  = mine.data?.data.filter((p) => p.status !== 'completed' && p.status !== 'cancelled').length ?? 0;
-  const thisMonth  = hist.data?.stats.thisMonth ?? 0;
-  const initials   = (user.firstName?.[0] ?? '') + (user.lastName?.[0] ?? '');
-  const firstName  = user.firstName || 'friend';
+  const today = nyToday();
+  const initials  = (user.firstName?.[0] ?? '') + (user.lastName?.[0] ?? '');
+  const firstName = user.firstName || 'friend';
 
+  // Your pickups: anything you have that isn't finished, up to today (incl. last night's).
+  const myOpen = (mine.data?.data ?? [])
+    .filter((p: MyPickup) => !isMineDone(p))
+    .sort((a, b) => (`${a.scheduled_date}${a.scheduled_time}` < `${b.scheduled_date}${b.scheduled_time}` ? -1 : 1));
+  const myToday = myOpen.filter((p) => String(p.scheduled_date).slice(0, 10) <= today);
+  // Oct 9 client: "Coming up" — your own pickups in the next 3 days (max 3).
+  const comingUp = myOpen
+    .filter((p) => { const d = String(p.scheduled_date).slice(0, 10); return d > today && d <= shiftDay(today, 3); })
+    .slice(0, 3);
+  // Oct 14 client: the Open list is the driver queue (a pickup opens 2 hours before its
+  // time, late / reposted ones stay), so everything in it is "open now" — no Later line.
+  const openNow = open.data?.data ?? [];
+  const loadFailed = (open.isError && !open.data) || (mine.isError && !mine.data);
+
+  // Oct 14 client: status line = the driver's real setting (Settings screen), with Pause.
+  const settings = useDriverSettings();
+  const st = settings.data?.data;
+  const pause = usePause(st);
+  const [pauseOpen, setPauseOpen] = useState(false);
+  const quiet = quietShort(st);
+  const statusLine = !st ? ''
+    : pause.paused ? `⏸ ${pause.pausedLine}`
+    : st.channel === 'none' ? '🔕 No pickup messages'
+    : st.channel === 'app' ? '🔔 Pickups by: App only'
+    : !st.smsOptIn && st.channel === 'text' ? '📩 Texts are turned off'
+    : `📩 Pickups by: ${REACH_SHORT[st.channel]}${quiet ? ` · Quiet ${quiet}` : ''}`;
+
+  return (
+    <div className="min-h-screen pb-[80px]">
+      <AppBar title="Zeh L'Zeh" right={<Avatar initials={initials} />} />
+      <main className="px-5">
+        <FadeUp>
+          <div className="font-display font-semibold text-[24px] leading-tight">Shalom, {firstName}</div>
+          {/* Oct 14 client: what really happens (Settings), not a misleading switch. */}
+          {/* Oct 14 client: paused → what it means ("No pickup messages until …") + Resume now. */}
+          {st && pause.paused && (
+            <div data-home-status className="mt-2"><PausedBox pause={pause} onChange={() => nav('/settings')} /></div>
+          )}
+          {st && !pause.paused && (
+            <div data-home-status className="mt-2 flex items-center gap-1.5 rounded-[14px] border border-line bg-paper pl-3.5 pr-1.5 py-1">
+              <span className="flex-1 min-w-0 text-[15px] font-bold text-ink/85 leading-snug py-1.5">{statusLine}</span>
+              {st.channel !== 'none' && (
+                <button onClick={() => setPauseOpen(true)} disabled={pause.busy}
+                        className="haptic shrink-0 min-h-[44px] px-3 rounded-[10px] border border-forest/40 bg-sage text-forest text-[15px] font-bold disabled:opacity-60">Pause</button>
+              )}
+              <button onClick={() => nav('/settings')}
+                      className="haptic shrink-0 min-h-[44px] px-2.5 text-[15px] font-bold text-forest underline underline-offset-2">Change</button>
+            </div>
+          )}
+        </FadeUp>
+
+        {/* Oct 9 client: pause sheet — "for how long?" (Oct 14: shared with Settings) */}
+        {pauseOpen && <PauseSheet onPick={pause.pauseFor} onClose={() => setPauseOpen(false)} busy={pause.busy} />}
+
+        {/* Your pickups */}
+        {myToday.length > 0 && (
+          <FadeUp delay={0.04}>
+            <SectionTitle>Your pickups</SectionTitle>
+            <div className="space-y-2.5">
+              {myToday.map((p) => (
+                <DriverCard key={p.assignment_id ?? p.pickup_instance_id} p={p} mine onOpen={() => nav(`/pickup/mine/${p.pickup_instance_id}`)} />
+              ))}
+            </div>
+          </FadeUp>
+        )}
+
+        {/* Oct 9 client: Coming up — your own pickups tomorrow and the next few days. */}
+        {comingUp.length > 0 && (
+          <FadeUp delay={0.06}>
+            <SectionTitle>Coming up</SectionTitle>
+            <div className="rounded-[16px] border border-line bg-paper divide-y divide-line overflow-hidden">
+              {comingUp.map((p) => (
+                <button key={p.assignment_id ?? p.pickup_instance_id} onClick={() => nav(`/pickup/mine/${p.pickup_instance_id}`)}
+                        className="haptic w-full min-h-[48px] flex items-center justify-between gap-3 px-4 py-2.5 text-left">
+                  <span className="min-w-0 text-[15px]">
+                    <span className="font-bold text-forest">{fmtWhenLine(p.scheduled_date, p.scheduled_time).replace(' · ', ' ')}</span>
+                    <span className="text-ink/80"> — {storeName(p)}</span>
+                  </span>
+                  <ArrowRight size={16} className="shrink-0 text-muted" />
+                </button>
+              ))}
+            </div>
+          </FadeUp>
+        )}
+
+        {/* Open now */}
+        <FadeUp delay={0.08}>
+          <SectionTitle>
+            {open.isLoading ? 'Open now' : openNow.length === 0 ? 'Open now' : `Open now · ${openNow.length} need${openNow.length === 1 ? 's' : ''} a driver`}
+          </SectionTitle>
+          {open.isLoading ? (
+            <div className="space-y-2.5">{[0, 1].map((i) => <Skeleton key={i} className="h-28 rounded-[16px]" />)}</div>
+          ) : loadFailed ? (
+            // Oct 9 client: no signal is not "nothing open".
+            <LoadError onRetry={() => { open.refetch(); mine.refetch(); }} busy={open.isFetching || mine.isFetching} error={(open.isError && !open.data ? open.error : null) ?? mine.error} what="pickups" />
+          ) : openNow.length === 0 ? (
+            <div className="rounded-[16px] border border-line bg-paper px-4 py-6 text-center text-[13.5px] text-muted">
+              Nothing open right now. We'll text you when something comes in.
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {openNow.map((p) => (
+                <DriverCard key={p.pickup_instance_id} p={p} busy={busy}
+                            onOpen={() => nav(`/pickup/open/${p.pickup_instance_id}`)} onTake={() => take(p)} />
+              ))}
+            </div>
+          )}
+        </FadeUp>
+
+        <FadeUp delay={0.12}>
+          <CenterHelpSectionForVolunteer />
+        </FadeUp>
+      </main>
+    </div>
+  );
+}
+
+// Oct 14 client: the API's 404 "no volunteer profile (linked to this login)" = this login has
+// no driver record. Only THAT may say "not connected"; any other failure says what went wrong.
+export const NOT_LINKED_TEXT = "Your login isn't connected to your volunteer profile yet. Please call the office.";
+export function isNotLinked(err: unknown): boolean {
+  const e = err as { status?: number; message?: string; body?: { error?: string } } | null | undefined;
+  return e?.status === 404 && /no volunteer profile/i.test(`${e?.body?.error ?? ''} ${e?.message ?? ''}`);
+}
+
+/** Oct 9 client: shown when a load fails — never "Nothing open".
+ *  Oct 14 client: pass `error` to say the real reason (no signal / internet filter / not connected / server message). */
+export function LoadError({ onRetry, busy, error, what }: { onRetry: () => void; busy?: boolean; error?: unknown; what?: string }) {
+  const e = error as (Error & { status?: number; filterBlocked?: boolean }) | null | undefined;
+  const msg = String(e?.message ?? '').trim();
+  const notLinked = isNotLinked(e);
+  const noSignal = !e || e.status === 0 || e instanceof TypeError || /failed to fetch|load failed|network|can't reach the server/i.test(msg);
+  const text = notLinked ? NOT_LINKED_TEXT
+    : e?.filterBlocked ? FILTER_BLOCKED_TEXT
+    : noSignal ? "Can't connect — check your signal."
+    : `Couldn't load ${what ?? 'this'} — ${(msg || 'something went wrong').replace(/\.$/, '')}.`;
+  return (
+    <div className="rounded-[16px] border border-line bg-paper px-4 py-6 text-center mt-3">
+      <div className="text-[16px] font-bold text-ink">{text}</div>
+      {!notLinked && (
+        <button onClick={onRetry} disabled={busy}
+                className="haptic mt-3 w-full min-h-[52px] rounded-[14px] bg-forest text-paper text-[17px] font-bold disabled:opacity-60">
+          {busy ? 'Trying…' : 'Try again'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return <div className="text-[14px] font-extrabold uppercase tracking-[.05em] text-muted mt-5 mb-2">{children}</div>;
+}
+
+/** Oct 6: "Share your location" moved here from Home — shown on My profile. */
+export function LocationShareCard() {
   const [tracking, setTracking] = useState<boolean>(() => getTrackingEnabled());
   useEffect(() => {
     const onChange = (e: Event) => setTracking((e as CustomEvent).detail?.enabled === true);
     window.addEventListener('vp:tracking-changed', onChange as any);
     return () => window.removeEventListener('vp:tracking-changed', onChange as any);
   }, []);
-  const trackingStatus = useLocationReporting(tracking);
-  function toggleTracking() {
-    const next = !tracking;
-    setTrackingEnabled(next);
-    setTracking(next);
-  }
-  // Available/Unavailable toggle. Drivers flip this from here when they're
-  // on a break, vacation, etc. — it drives whether the office/agent sends
-  // them new-pickup alerts and (in future) whether the office roster shows
-  // them as claimable.
-  const qc = useQueryClient();
-  const avail = useQuery({ queryKey: ['availability'], queryFn: volunteer.availability });
-  // abc-tier1 (Aug 21): endpoint used to 404 silently; add optimistic UI +
-  // toast on error so the driver actually sees when a toggle failed.
-  const [availToast, setAvailToast] = useState<string | null>(null);
-  const setAvail = useMutation({
-    mutationFn: (next: boolean) => volunteer.setAvailability(next),
-    onMutate: async (next: boolean) => {
-      await qc.cancelQueries({ queryKey: ['availability'] });
-      const previous = qc.getQueryData<{ data: { isAvailable: boolean; unavailableUntil: string | null } }>(['availability']);
-      // Optimistic: paint the new state immediately so the toggle feels snappy.
-      qc.setQueryData(['availability'], (old: any) => ({
-        data: { isAvailable: next, unavailableUntil: old?.data?.unavailableUntil ?? null },
-      }));
-      return { previous };
-    },
-    onError: (_err, _next, ctx) => {
-      // Roll the UI back to the last known-good value and surface the failure.
-      if (ctx?.previous) qc.setQueryData(['availability'], ctx.previous);
-      else qc.invalidateQueries({ queryKey: ['availability'] });
-      setAvailToast('Couldn’t save availability, try again');
-      window.setTimeout(() => setAvailToast(null), 3500);
-    },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['availability'] }),
-  });
-  const isAvailable = avail.data?.data?.isAvailable ?? true;
-
-  const [oneShot, setOneShot] = useState<string | null>(null);
-  const [showLocationDetails, setShowLocationDetails] = useState(false);
-  async function sendNow() {
-    setOneShot('Sending…');
-    const r = await reportNow();
-    setOneShot(r.ok ? '✓ Sent' : `✗ ${r.error}`);
-    window.setTimeout(() => setOneShot(null), 5000);
-  }
-
+  const status = useLocationReporting(tracking);
+  function toggle() { const next = !tracking; setTrackingEnabled(next); setTracking(next); }
   return (
-    <div className="min-h-screen pb-[80px]">
-      <AppBar title="Zeh L'Zeh" right={<Avatar initials={initials} />} />
-
-      <main className="px-5">
-        <FadeUp>
-          <div className="font-display font-semibold text-[23px] leading-tight">
-            Shalom, <span>{firstName}</span>
-          </div>
-          <p className="text-[13px] text-muted mt-1.5">
-            {openCount > 0
-              ? `${openCount} pickup${openCount === 1 ? '' : 's'} near you still need a driver.`
-              : 'No open pickups right now.'}
-          </p>
-
-          {/* Available / Unavailable toggle. */}
-          <div className="mt-3 flex items-center justify-between rounded-[14px] border border-line bg-paper px-3.5 py-2.5">
-            <div className="min-w-0">
-              <div className="text-[13px] font-bold text-ink">
-                {isAvailable ? "You're available for pickups" : 'You are unavailable'}
-              </div>
-              <div className="text-[11.5px] text-muted">
-                {isAvailable
-                  ? "You'll get alerts for new nearby pickups."
-                  : "You won't be alerted until you switch back on."}
-              </div>
-            </div>
-            <button onClick={() => setAvail.mutate(!isAvailable)} disabled={setAvail.isPending}
-                    aria-label={isAvailable ? 'Set unavailable' : 'Set available'}
-                    className={cx('relative w-[46px] h-[26px] rounded-full transition-colors shrink-0',
-                                  isAvailable ? 'bg-forest' : 'bg-line')}>
-              <span className={cx('absolute top-[3px] h-[20px] w-[20px] rounded-full bg-paper transition-all shadow-sm',
-                                  isAvailable ? 'right-[3px]' : 'left-[3px]')} />
-            </button>
-          </div>
-        </FadeUp>
-
-        {/* Map strip */}
-        <FadeUp delay={0.05}>
-          <div className="mt-4 h-[96px] rounded-[18px] border border-line overflow-hidden relative"
-               style={{
-                 background: 'linear-gradient(0deg,rgba(44,90,59,.05),rgba(44,90,59,.05)),' +
-                             'repeating-linear-gradient(0deg,#EEF3E9 0 1px,transparent 1px 22px),' +
-                             'repeating-linear-gradient(90deg,#EEF3E9 0 1px,transparent 1px 22px),' +
-                             '#F3F7EF',
-               }}>
-            <button onClick={() => nav('/map')} className="absolute inset-0 haptic">
-              <span className="absolute inset-x-0 top-[42px] h-1.5 bg-[#E2E9DA]" />
-              <span className="absolute top-0 bottom-0 left-[90px] w-1.5 bg-[#E2E9DA]" />
-              <Pin x={64}  y={40} color="#D27A4C" />
-              <Pin x={120} y={62} color="#2C5A3B" />
-              <Pin x={206} y={34} color="#2C5A3B" />
-            </button>
-          </div>
-        </FadeUp>
-
-        {/* Live-location toggle — opt-in. When on, the office sees your last
-            known location on the live map. Status line + Send-now button below
-            so you can debug if it ever stops reporting. */}
-        <FadeUp delay={0.08}>
-          <div className={cx('mt-4 rounded-[14px] border',
-                             tracking ? 'bg-sage border-sage-line' : 'bg-paper border-line')}>
-            <button onClick={toggleTracking}
-                    className="w-full px-4 py-3 flex items-center gap-3 haptic text-left">
-              <span className={cx('grid h-10 w-10 place-items-center rounded-full',
-                                  tracking ? 'bg-forest text-paper' : 'bg-cream text-muted')}>
-                <MapPin size={18} />
-              </span>
-              <div className="flex-1 min-w-0">
-                <div className="font-bold text-[14.5px]">{tracking ? 'Sharing your location' : 'Share your location'}</div>
-                <div className="text-[12.5px] text-muted">
-                  {tracking ? 'Office sees you on the live map. Tap to stop.' : 'Let the office see you on the live map while the app is open.'}
-                </div>
-              </div>
-              <span className={cx('relative inline-block w-10 h-6 rounded-full transition',
-                                  tracking ? 'bg-forest' : 'bg-line')}>
-                <span className={cx('absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-paper shadow transition',
-                                    tracking && 'translate-x-4')} />
-              </span>
-            </button>
-
-            {/* Status row — the raw "Last sent Xs ago · N total" was noise
-                for drivers; hide it under a tap-to-expand affordance and only
-                surface errors + the Send-now button by default. */}
-            {(trackingStatus.lastError || oneShot || showLocationDetails) && (
-              <div className={cx('border-t px-4 py-3 flex items-center gap-3 text-[13px]',
-                                  tracking ? 'border-sage-line/60' : 'border-line')}>
-                <div className="flex-1 min-w-0">
-                  <div className={cx('font-bold truncate',
-                                     trackingStatus.lastError ? 'text-clay'
-                                     : trackingStatus.lastReportedAt ? 'text-forest'
-                                     : 'text-muted')}>
-                    {trackingStatus.lastError
-                      ? `Last error: ${trackingStatus.lastError}`
-                      : trackingStatus.lastReportedAt
-                        ? `Last sent ${Math.max(0, Math.round((Date.now() - trackingStatus.lastReportedAt) / 1000))}s ago · ${trackingStatus.reportsSent} total`
-                        : tracking
-                          ? `Permission: ${trackingStatus.permission} · waiting for first GPS read`
-                          : 'Tap Send now to test'}
-                  </div>
-                  {oneShot && <div className={cx('truncate mt-0.5 font-bold', oneShot.startsWith('✓') ? 'text-forest' : 'text-clay')}>{oneShot}</div>}
-                </div>
-                <button onClick={sendNow}
-                        className="haptic shrink-0 bg-forest text-paper rounded-[10px] px-3.5 py-1.5 font-bold text-[12.5px] shadow-ctag">
-                  Send now
-                </button>
-              </div>
-            )}
-            {!trackingStatus.lastError && !oneShot && (
-              <button onClick={() => setShowLocationDetails((v) => !v)}
-                      className={cx('haptic w-full border-t px-4 py-1.5 text-[11px] text-muted',
-                                    tracking ? 'border-sage-line/60' : 'border-line')}>
-                {showLocationDetails ? 'Hide details' : 'Details'}
-              </button>
-            )}
-          </div>
-        </FadeUp>
-
-        {/* Task-hub cards */}
-        <FadeUp delay={0.1} className="mt-4 space-y-2.5">
-          <TaskCard tone="sage" title="Available Pickups" desc="Near you · refrigerated & dry"
-                    count={open.isLoading ? null : openCount} onClick={() => nav('/pickups')}
-                    icon={<Truck size={22} />} />
-
-          <TaskCard tone="clay" title="My Pickups" desc={`${mineCount} active`}
-                    count={mine.isLoading ? null : mineCount} onClick={() => nav('/pickups?tab=mine')}
-                    icon={<Calendar size={22} />} />
-
-          <TaskCard tone="paper" title="Completed this month" desc="Tracked in My Activity"
-                    count={hist.isLoading ? null : thisMonth} onClick={() => nav('/you')}
-                    icon={<Check size={22} strokeWidth={2.5} />} />
-        </FadeUp>
-
-        {/* abc873 (Aug 18): read-only recap of what the driver actually
-            covered in the last 24 hours. Sourced from the same completed-
-            history endpoint so it also picks up SMS-completed and
-            dispatcher-marked-completed pickups (per brief item #11). */}
-        <FadeUp delay={0.13}>
-          <RecentlyCoveredSection />
-        </FadeUp>
-
-        {/* batch abc801 Aug 9 — Center Help schedule: simple listing of the
-            next 7 days of instances. Volunteer can sign up / cancel here. */}
-        <FadeUp delay={0.14}>
-          <CenterHelpSectionForVolunteer />
-        </FadeUp>
-      </main>
-
-      {/* Availability-toggle failure toast (Tier-1 fix — no more silent 404). */}
-      <AnimatePresence>
-        {availToast && <Toast kind="err" msg={availToast} />}
-      </AnimatePresence>
-    </div>
+    <button onClick={toggle}
+            className={cx('haptic w-full mt-3 rounded-[14px] border px-4 py-3 flex items-center gap-3 text-left',
+                          tracking ? 'bg-sage border-sage-line' : 'bg-paper border-line')}>
+      <span className={cx('grid h-9 w-9 place-items-center rounded-full shrink-0', tracking ? 'bg-forest text-paper' : 'bg-cream text-muted')}>
+        <MapPin size={17} />
+      </span>
+      <span className="flex-1 min-w-0">
+        <span className="block font-bold text-[14px]">{tracking ? 'Sharing your location' : 'Share your location'}</span>
+        <span className={cx('block text-[13px]', status.lastError ? 'text-clay' : 'text-muted')}>
+          {status.lastError ? `Problem: ${status.lastError}` : tracking ? 'The office sees you on the map while the app is open.' : 'Off. Tap to let the office see you on the map.'}
+        </span>
+      </span>
+      <span className={cx('relative inline-block w-10 h-6 rounded-full transition shrink-0', tracking ? 'bg-forest' : 'bg-line')}>
+        <span className={cx('absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-paper shadow transition', tracking && 'translate-x-4')} />
+      </span>
+    </button>
   );
 }
 
-// abc873 (Aug 18): "Covered in the last 24 hours" — read-only recap. Uses
-// the same /me/history endpoint so it counts SMS/backend/steady completions,
-// not only app-completed trips.
-function RecentlyCoveredSection() {
-  const q = useQuery({ queryKey: ['history'], queryFn: volunteer.history, refetchInterval: 60_000 });
-  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-  const recent = (q.data?.data ?? []).filter((r: any) => {
-    const t = r.actual_end_at ?? r.scheduled_date ?? null;
-    if (!t) return false;
-    const ms = new Date(String(t)).getTime();
-    return Number.isFinite(ms) && ms >= cutoff;
-  }).slice(0, 20);
-  if (q.isLoading) return null;
-  return (
-    <div className="mt-4 rounded-[14px] border border-line bg-paper overflow-hidden">
-      <div className="px-4 py-2.5 border-b border-line bg-cream/40 flex items-center justify-between">
-        <div className="text-[13px] font-extrabold text-ink">Covered in the last 24 hours</div>
-        <span className="text-[11px] text-muted font-semibold">{recent.length}</span>
-      </div>
-      {recent.length === 0 ? (
-        <div className="px-4 py-4 text-[12.5px] text-muted italic">Nothing in the last 24 hours. Recent pickups will show up here after they're delivered.</div>
-      ) : (
-        <ul className="divide-y divide-line/70">
-          {recent.map((r: any) => {
-            const when = r.actual_end_at ? new Date(r.actual_end_at) : (r.scheduled_date ? new Date(String(r.scheduled_date) + 'T00:00:00') : null);
-            const label = r.suppliers || 'Pickup';
-            return (
-              <li key={r.pickup_instance_id} className="px-4 py-2.5">
-                <div className="flex items-baseline justify-between gap-2">
-                  <div className="text-[13px] font-bold text-ink truncate">{label}</div>
-                  <div className="text-[11px] text-muted whitespace-nowrap">{when ? when.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' }) : ''}</div>
-                </div>
-                {r.supplier_address && <div className="text-[11.5px] text-muted truncate">{r.supplier_address}</div>}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      <div className="px-4 py-2 border-t border-line text-[10.5px] text-muted italic">Read-only — this list reflects what you covered across the app and SMS.</div>
-    </div>
-  );
-}
-
-// batch abc801 Aug 9 — small compact listing of upcoming center-help tasks
-// for the volunteer. Sign up or cancel inline. Nothing fancy.
+// batch abc801 Aug 9 — Center Help schedule (only shows when there is something).
 function CenterHelpSectionForVolunteer() {
   const qc = useQueryClient();
   const from = nyToday();
   const to  = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(Date.now() + 7 * 86400e3));
-  const q = useQuery({
-    queryKey: ['ch-vol-instances', from, to],
-    queryFn:  () => centerHelp.instances(from, to),
-    refetchInterval: 60_000,
-  });
-  const signup = useMutation({
-    mutationFn: (id: number) => centerHelp.signupSelf(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['ch-vol-instances', from, to] }),
-  });
-  const cancel = useMutation({
-    mutationFn: (id: number) => centerHelp.cancelSelf(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['ch-vol-instances', from, to] }),
-  });
+  const q = useQuery({ queryKey: ['ch-vol-instances', from, to], queryFn: () => centerHelp.instances(from, to), refetchInterval: 60_000 });
+  const signup = useMutation({ mutationFn: (id: number) => centerHelp.signupSelf(id), onSuccess: () => qc.invalidateQueries({ queryKey: ['ch-vol-instances', from, to] }) });
+  const cancel = useMutation({ mutationFn: (id: number) => centerHelp.cancelSelf(id), onSuccess: () => qc.invalidateQueries({ queryKey: ['ch-vol-instances', from, to] }) });
   const now = Date.now();
   const list = (q.data?.data ?? []).filter((i) => new Date(i.starts_at).getTime() > now).slice(0, 10);
-  if (q.isLoading) return null;
-  if (list.length === 0) return null;
+  if (q.isLoading || list.length === 0) return null;
   return (
     <div className="mt-5">
-      <div className="text-[11px] font-extrabold uppercase tracking-[.05em] text-muted mb-1.5">Center help — next 7 days</div>
+      <SectionTitle>Center help — next 7 days</SectionTitle>
       <div className="space-y-2">
         {list.map((inst) => <CHRow key={inst.id} inst={inst} onSignup={() => signup.mutate(inst.id)} onCancel={() => cancel.mutate(inst.id)} busy={signup.isPending || cancel.isPending} />)}
       </div>
@@ -317,66 +244,25 @@ function CenterHelpSectionForVolunteer() {
 
 function CHRow({ inst, onSignup, onCancel, busy }: { inst: CenterHelpInstance; onSignup: () => void; onCancel: () => void; busy: boolean }) {
   const label = CENTER_HELP_TASK_LABELS[inst.task_type] ?? inst.task_type;
-  const when  = new Date(inst.starts_at).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+  const when  = new Date(inst.starts_at).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' });
   const filled = inst.signup_count;
   const target = inst.volunteers_needed;
-  const short  = filled < target;
   const iAmIn  = inst.is_me === true;
   return (
     <div className="rounded-[14px] border border-line bg-paper px-3.5 py-2.5 flex items-center justify-between gap-3">
       <div className="min-w-0 flex-1">
-        <div className="font-bold text-[13.5px] truncate">{label}</div>
-        <div className="text-[11.5px] text-muted truncate">
-          {when} · <span className={cx('font-extrabold', short ? 'text-clay' : 'text-forest')}>{filled} of {target} filled</span>
+        <div className="font-bold text-[15px] truncate">{label}</div>
+        <div className="text-[13px] text-muted truncate">
+          {when} · <span className={cx('font-extrabold', filled < target ? 'text-clay' : 'text-forest')}>{filled} of {target} filled</span>
         </div>
       </div>
       {iAmIn ? (
-        <button disabled={busy} onClick={onCancel}
-                className="haptic text-[11.5px] font-bold text-clay border border-clay/40 px-3 py-1.5 rounded-[10px] disabled:opacity-50">
-          Signed up ✓
-        </button>
+        <button disabled={busy}
+                onClick={async () => { if (await uiConfirm(`Cancel your spot?\n\n${label} · ${when}`, { okLabel: 'Yes, cancel it', cancelLabel: 'No, keep it' })) onCancel(); }}
+                className="haptic shrink-0 min-h-[44px] text-[14px] font-bold text-forest border border-forest/40 bg-sage px-3 rounded-[10px] disabled:opacity-50">Signed up ✓</button>
       ) : (
-        <button disabled={busy || filled >= target} onClick={onSignup}
-                className="haptic text-[11.5px] font-bold text-forest border border-forest/40 bg-sage/40 px-3 py-1.5 rounded-[10px] disabled:opacity-50">
-          + Sign up
-        </button>
+        <button disabled={busy || filled >= target} onClick={onSignup} className="haptic shrink-0 min-h-[44px] text-[14px] font-bold text-paper bg-forest px-4 rounded-[10px] disabled:opacity-50">Sign up</button>
       )}
     </div>
-  );
-}
-
-function Pin({ x, y, color }: { x: number; y: number; color: string }) {
-  return (
-    <svg width={18} height={18} viewBox="0 0 24 24" className="absolute" style={{ left: x, top: y, transform: 'translate(-50%, -100%)', filter: 'drop-shadow(0 3px 3px rgba(0,0,0,.18))' }}>
-      <path d="M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z" fill={color} />
-    </svg>
-  );
-}
-
-const TC_TONE: Record<string, { bg: string; ic: string; cn: string }> = {
-  sage:  { bg: 'bg-sage border-sage-line',           ic: 'bg-paper text-forest', cn: 'text-forest' },
-  clay:  { bg: 'bg-clay-soft border-[#EED2BF]',      ic: 'bg-paper text-clay',   cn: 'text-clay' },
-  paper: { bg: 'bg-paper border-line',               ic: 'bg-amber-soft text-amber', cn: 'text-amber' },
-};
-
-function TaskCard({ tone, title, desc, count, icon, onClick }: {
-  tone: 'sage' | 'clay' | 'paper';
-  title: string; desc: string; count: number | null;
-  icon: React.ReactNode; onClick: () => void;
-}) {
-  const t = TC_TONE[tone];
-  return (
-    <button onClick={onClick}
-      className={cx('haptic w-full text-left flex items-center gap-3.5 rounded-[18px] border px-4 py-4 transition hover:-translate-y-0.5 hover:shadow-card', t.bg)}>
-      <span className={cx('grid h-[42px] w-[42px] place-items-center rounded-[12px] shrink-0', t.ic)}>{icon}</span>
-      <span className="flex-1 min-w-0">
-        <span className="block font-display font-semibold text-[16px] leading-tight">{title}</span>
-        <span className="block text-[12px] text-muted mt-0.5">{desc}</span>
-      </span>
-      {count === null
-        ? <Skeleton className="h-6 w-8 rounded-md" />
-        : <span className={cx('font-display font-bold text-[22px] leading-none', t.cn)}>{count}</span>}
-      <ArrowRight size={16} className="text-muted ml-1" />
-    </button>
   );
 }

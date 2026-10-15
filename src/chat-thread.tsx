@@ -9,8 +9,10 @@ import { dm, getUser } from './api';
 import { cx } from './design';
 import { fmtTimeEastern } from './time-format';
 
-export function ChatThread({ userId, title, subtitle, color }: {
-  userId: number; title: string; subtitle?: string; color?: string;
+// Oct 9 client: `big` = driver app (16px input so iPhones don't zoom, larger
+// messages + send button). Office screens leave it off and look the same.
+export function ChatThread({ userId, title, subtitle, color, big = false }: {
+  userId: number; title: string; subtitle?: string; color?: string; big?: boolean;
 }) {
   const me = getUser();
   const qc = useQueryClient();
@@ -34,8 +36,8 @@ export function ChatThread({ userId, title, subtitle, color }: {
       <div className="flex items-center gap-3 px-4 py-3 border-b border-line">
         {color && <span className="inline-block w-3 h-3 rounded-sm" style={{ background: color }} />}
         <div className="min-w-0">
-          <div className="font-bold text-[14px] truncate">{title}</div>
-          {subtitle && <div className="text-[11px] text-muted truncate">{subtitle}</div>}
+          <div className={cx('font-bold truncate', big ? 'text-[17px]' : 'text-[14px]')}>{title}</div>
+          {subtitle && <div className={cx('text-muted truncate', big ? 'text-[13px]' : 'text-[11px]')}>{subtitle}</div>}
         </div>
       </div>
 
@@ -43,15 +45,15 @@ export function ChatThread({ userId, title, subtitle, color }: {
         {messages.isLoading ? (
           <div className="text-center text-muted text-[12px] py-4">Loading…</div>
         ) : (messages.data?.data.length ?? 0) === 0 ? (
-          <div className="text-center text-muted text-[12px] py-6">No messages yet. Say hi 👋</div>
+          <div className={cx('text-center text-muted py-6', big ? 'text-[15px]' : 'text-[12px]')}>No messages yet. Say hi 👋</div>
         ) : messages.data?.data.map((m) => {
           const mine = m.from_user_id === me?.id;
           return (
             <div key={m.id} className={cx('flex', mine ? 'justify-end' : 'justify-start')}>
-              <div className={cx('max-w-[78%] rounded-[14px] px-3 py-2 text-[13px]',
+              <div className={cx('max-w-[78%] rounded-[14px] px-3 py-2', big ? 'text-[16px]' : 'text-[13px]',
                                  mine ? 'bg-forest text-paper' : 'bg-paper border border-line text-ink')}>
                 <div>{m.body}</div>
-                <div className={cx('text-[10px] mt-0.5', mine ? 'text-paper/70' : 'text-muted')}>
+                <div className={cx('mt-0.5', big ? 'text-[12px]' : 'text-[10px]', mine ? 'text-paper/70' : 'text-muted')}>
                   {fmtTimeEastern(m.created_at)}
                 </div>
               </div>
@@ -63,10 +65,11 @@ export function ChatThread({ userId, title, subtitle, color }: {
       <form onSubmit={(e) => { e.preventDefault(); if (text.trim()) send.mutate(text.trim()); }}
             className="flex items-center gap-2 px-3 py-2.5 border-t border-line bg-paper">
         <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Type a message…"
-               className="flex-1 bg-cream/50 rounded-[10px] px-3 py-2.5 text-[13px] outline-none border border-line focus:bg-paper focus:border-forest" />
+               className={cx('flex-1 bg-cream/50 rounded-[10px] px-3 py-2.5 outline-none border border-line focus:bg-paper focus:border-forest', big ? 'text-[16px] min-h-[44px]' : 'text-[13px]')} />
         <button type="submit" disabled={!text.trim() || send.isPending}
-                className="haptic grid h-10 w-10 place-items-center rounded-[10px] bg-forest text-paper disabled:opacity-40">
-          <Send size={16} />
+                aria-label="Send"
+                className={cx('haptic grid place-items-center rounded-[10px] bg-forest text-paper disabled:opacity-40', big ? 'h-12 w-12' : 'h-10 w-10')}>
+          <Send size={big ? 20 : 16} />
         </button>
       </form>
     </div>

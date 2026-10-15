@@ -9,11 +9,18 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { MessageSquare, ArrowLeft } from 'lucide-react';
+import { MessageSquare, ArrowLeft, Phone, RefreshCw } from 'lucide-react';
 import { volunteer, dm, getUser } from '../api';
 import { AppBar, Avatar, Card, Skeleton, cx } from '../design';
 import { ChatThread } from '../chat-thread';
 import { fmtTime, fmtDateEastern } from '../time-format';
+
+// Oct 9 client: finished pickups don't belong under "active" chats. Same rule
+// as PickupsFeed.tsx (FINISHED + assignment completed).
+const FINISHED = new Set(['completed', 'delivered', 'cancelled', 'missed']);
+// Oct 9 client: same office number as Login.tsx "Call the office".
+const OFFICE_PHONE = '(845) 363-5323';
+const OFFICE_TEL = 'tel:+18453635323';
 
 export function Chat() {
   const nav = useNavigate();
@@ -31,8 +38,11 @@ export function Chat() {
   const sumByPickup = (chatSum.data?.data?.byPickup ?? []).reduce(
     (acc, s) => { acc[Number(s.pickupInstanceId)] = s; return acc; },
     {} as Record<number, { lastBody: string; lastAt: string; unread: number }>);
-  const list = mine.data?.data.filter((p) => p.status !== 'completed' && p.status !== 'cancelled') ?? [];
+  const list = mine.data?.data.filter((p) => !FINISHED.has(p.status) && p.assignment_status !== 'completed') ?? [];
   const officeUser = office.data?.data?.[0];
+  // Oct 9 client: the office contact failed to load (or came back empty) — the
+  // card used to silently do nothing. Now it says so and offers retry + call.
+  const officeDown = !officeUser && !office.isLoading;
   const officeUnread = officeUser ? (unreadByPeer[officeUser.user_id] ?? 0) : 0;
   const officeThread = officeUser ? threadByPeer[officeUser.user_id] : undefined;
   const officePreview = officeThread?.lastBody
@@ -45,13 +55,13 @@ export function Chat() {
     return (
       <div className="min-h-screen flex flex-col px-4 pt-3 pb-[88px]">
         <button onClick={() => setChatWithOffice(false)}
-                className="haptic self-start flex items-center gap-1.5 text-[14px] font-bold text-forest mb-2">
-          <ArrowLeft size={16} /> Back to chats
+                className="haptic self-start flex items-center gap-1.5 min-h-[44px] pr-3 text-[16px] font-bold text-forest mb-1">
+          <ArrowLeft size={20} /> Back to chats
         </button>
         <div className="flex-1 min-h-0">
           <ChatThread userId={officeUser.user_id}
                       title="Zeh L'Zeh Office"
-                      subtitle="Coordinator team" color="#2C5A3B" />
+                      subtitle="Coordinator team" color="#2C5A3B" big />
         </div>
       </div>
     );
@@ -64,10 +74,24 @@ export function Chat() {
       <main className="px-5">
         <h1 className="font-display font-semibold text-[24px]">Your chats</h1>
         <p className="text-[14px] text-muted mt-1 mb-5">
-          Reach the Zeh L'Zeh office anytime, or jump into a pickup chat with the donor + co-drivers.
+          Write to the Zeh L'Zeh office any time, or to the other drivers on your pickup.
         </p>
 
         {/* Office contact — always shown at the top. */}
+        {officeDown ? (
+          <Card className="!p-4 mb-4">
+            <button type="button" onClick={() => office.refetch()} disabled={office.isFetching}
+                    className="haptic w-full flex items-center gap-3 text-left min-h-[48px]">
+              <RefreshCw size={22} className={cx('text-clay shrink-0', office.isFetching && 'animate-spin')} />
+              <span className="text-[16px] font-bold text-ink">
+                {office.isFetching ? 'Trying again…' : "Can't reach the office chat right now — tap to try again"}
+              </span>
+            </button>
+            <a href={OFFICE_TEL} className="haptic mt-2 flex items-center gap-2 min-h-[44px] text-[16px] font-bold text-forest">
+              <Phone size={18} /> Call the office: {OFFICE_PHONE}
+            </a>
+          </Card>
+        ) : (
         <Card onClick={() => officeUser && setChatWithOffice(true)} className="!p-4 mb-4 cursor-pointer">
           <div className="flex items-center gap-3">
             <span className="relative grid h-12 w-12 place-items-center rounded-2xl bg-forest text-paper font-display font-bold text-[15px]">
@@ -85,6 +109,7 @@ export function Chat() {
             <MessageSquare size={20} className="text-forest" />
           </div>
         </Card>
+        )}
 
         <div className="text-[13px] font-extrabold uppercase tracking-[.06em] text-muted mt-4 mb-2">Pickup chats</div>
         {mine.isLoading ? <Skeleton className="h-20 rounded-[16px]" /> :
@@ -92,7 +117,7 @@ export function Chat() {
            <div className="text-center py-10">
              <div className="mx-auto h-14 w-14 rounded-2xl bg-sage grid place-items-center mb-3"><MessageSquare size={26} className="text-forest" /></div>
              <div className="font-display font-semibold text-[16px]">No active pickup chats</div>
-             <p className="text-[14px] text-muted mt-1 max-w-[32ch] mx-auto">Sign up for a pickup to start chatting with the donor.</p>
+             <p className="text-[14px] text-muted mt-1 max-w-[32ch] mx-auto">When you take a pickup, you can chat here with the office and the other drivers on it.</p>
            </div>
          ) : (
            <div className="space-y-2.5">

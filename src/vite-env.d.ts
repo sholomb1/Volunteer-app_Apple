@@ -9,3 +9,4 @@ interface ImportMeta { readonly env: ImportMetaEnv }
 // C12 Aug 13 — vite.config define()s these from android/app/build.gradle.
 declare const __APP_VERSION_CODE__: string;
 declare const __APP_VERSION_NAME__: string;
+declare const __BUILD_TIME__: string; // Oct 14 client
