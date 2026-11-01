@@ -74,7 +74,7 @@ export function Chat() {
       <main className="px-5">
         <h1 className="font-display font-semibold text-[24px]">Your chats</h1>
         <p className="text-[14px] text-muted mt-1 mb-5">
-          Write to the Zeh L'Zeh office any time, or to the other drivers on your pickup.
+          Write to the Zeh L'Zeh office any time, or about a pickup you have. Messages go to the office only.
         </p>
 
         {/* Office contact — always shown at the top. */}
@@ -117,7 +117,7 @@ export function Chat() {
            <div className="text-center py-10">
              <div className="mx-auto h-14 w-14 rounded-2xl bg-sage grid place-items-center mb-3"><MessageSquare size={26} className="text-forest" /></div>
              <div className="font-display font-semibold text-[16px]">No active pickup chats</div>
-             <p className="text-[14px] text-muted mt-1 max-w-[32ch] mx-auto">When you take a pickup, you can chat here with the office and the other drivers on it.</p>
+             <p className="text-[14px] text-muted mt-1 max-w-[32ch] mx-auto">When you take a pickup, you can write to the office about it here.</p>
            </div>
          ) : (
            <div className="space-y-2.5">

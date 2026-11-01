@@ -56,9 +56,9 @@ export type KioskStore = {
 };
 
 // C5 Aug 13 — recently-completed pickups the driver can reprint labels for.
+// Oct 27 client: pickupId is for linking only, never shown (no ref numbers).
 export type KioskRecentCompleted = {
   pickupId: number;
-  refNumber: string | null;
   supplierId: number;
   supplierName: string;
   scheduledDate: string;
@@ -110,22 +110,40 @@ export type KioskLabel = {
   total: number;
 };
 
+// Quick drop-off: who typed the code (or scanned the tag). unitNumber: Oct 30 client ("Hi Moshe K. #20").
+export type QuickLookupData = {
+  needsPick?: boolean; candidates?: { volunteerId: number; name: string }[];
+  volunteerId: number; name: string; firstName: string; unitNumber?: number | null;
+  pickups: { pickupId: number; supplierId: number | null; label: string; date: string; time: string | null }[];
+  allSuppliers: { supplierId: number; supplierName: string; city: string }[];
+};
+
 export const kiosk = {
   // Oct 6 client: quick drop-off (code → stores → item count → labels).
+  // Oct 30 client: "📷 Scan my name tag" on the quick kiosk — same reply as quickLookup.
+  quickLookupQr: (secret: string, qrToken: string) =>
+    ksh<{ data: QuickLookupData }>(secret, '/quick/lookup-qr', { method: 'POST', body: JSON.stringify({ qrToken }) }),
   quickLookup: (secret: string, body: { code: string; resolveVolunteerId?: number }) =>
-    ksh<{ data: { needsPick?: boolean; candidates?: { volunteerId: number; name: string }[];
-                  volunteerId: number; name: string; firstName: string;
-                  pickups: { pickupId: number; supplierId: number | null; label: string; date: string; time: string | null }[];
-                  allSuppliers: { supplierId: number; supplierName: string; city: string }[] } }>(
-      secret, '/quick/lookup', { method: 'POST', body: JSON.stringify(body) }),
+    ksh<{ data: QuickLookupData }>(secret, '/quick/lookup', { method: 'POST', body: JSON.stringify(body) }),
   quickStores: (secret: string) =>
     ksh<{ data: { supplierId: number; supplierName: string; city: string }[] }>(secret, '/quick/stores'),
   quickFinish: (secret: string, body: {
     volunteerId: number | null; guestName?: string; guestPhone?: string; printLabels: boolean; note?: string;
     clientRequestId?: string; // Oct 9 client: same id on retry = saved once
-    items: { pickupId: number | null; supplierId: number | null; otherName: string | null; count: number }[];
+    // Oct 30 client (new kiosk): one item per food line; container + kind (no kind = "Not sure").
+    items: { pickupId: number | null; supplierId: number | null; otherName: string | null; count: number;
+             container?: string | null; kind?: string | null }[];
   }) => ksh<{ data: { dropoffId: number; name: string; labels: KioskLabel[] } }>(
       secret, '/quick/finish', { method: 'POST', body: JSON.stringify(body) }),
+  // Oct 30 client: "Any feedback, or any problem we should know about?" → the office (text + bell + problem reports).
+  feedback: (secret: string, body: { dropoffId?: number | null; volunteerId?: number | null; name?: string | null; text: string }) =>
+    ksh<{ data: { ok: true; id?: number; repeated?: boolean } }>(secret, '/feedback', { method: 'POST', body: JSON.stringify(body) }),
+  // Oct 31 client: label print log — what the kiosk sent to the printer and the answer (office: Kiosk Activity).
+  printLog: (secret: string, body: {
+    dropoffId?: number | null; transport: 'tcp' | 'relay' | 'browser' | 'none'; ok: boolean; printed: number; total: number;
+    stopped?: boolean; error?: string | null; layout?: string;
+    faces?: Array<{ store: string[]; date: string; kind: string; container: string; count: string }>; commands?: string | null;
+  }) => ksh<{ data: { ok: true } }>(secret, '/print-log', { method: 'POST', body: JSON.stringify(body) }),
   signin: (secret: string, body: {
     code?: string;
     resolveVolunteerId?: number;
@@ -134,7 +152,11 @@ export const kiosk = {
     simulateAsVolunteerId?: number;
     guestName?: string;
     guestPhone?: string;
-  }) => ksh<KioskSigninResp>(secret, '/signin', { method: 'POST', body: JSON.stringify(body) }),
+  }) => ksh<KioskSigninResp>(secret, '/signin', { method: 'POST', body: JSON.stringify({ ...body, withRecent: true }) }),
+
+  // Oct 30 client: "📷 Scan my name tag" — the QR text from the tag; same reply as the 4-digit sign-in.
+  signinQr: (secret: string, qrToken: string) =>
+    ksh<KioskSigninResp>(secret, '/signin-qr', { method: 'POST', body: JSON.stringify({ qrToken, withRecent: true }) }),
 
   // Aug 26 client rule: resolve the pickup-selection screen. `pickupIds`
   // is the subset the driver ticked; `skipAll` sends them to the walk-in

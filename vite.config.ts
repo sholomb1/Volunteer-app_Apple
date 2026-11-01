@@ -19,6 +19,21 @@ function readGradleVersion() {
 }
 const APP_VERSION = readGradleVersion();
 
+// Oct 25 client: What's new screenshots (public/whats-new/) stay out of the phone app build —
+// they'd only make the app download bigger; the app loads them from the website when tapped.
+function dropWhatsNewPicsInApp(): Plugin {
+  let outDir = 'dist';
+  return {
+    name: 'zlz-drop-whats-new-pics',
+    apply: 'build',
+    configResolved(c) { outDir = path.resolve(c.root, c.build.outDir); },
+    closeBundle() {
+      if (process.env.BUILD_TARGET !== 'cap') return;
+      fs.rmSync(path.join(outDir, 'whats-new'), { recursive: true, force: true });
+    },
+  };
+}
+
 // Oct 14 client: publish version.json (app version + build time) next to index.html,
 // i.e. /rescue/version.json on the site. The phone app reads it from the live site to
 // tell drivers when a newer app is in the store (src/app-version-check.ts).
@@ -49,6 +64,7 @@ export default defineConfig({
   plugins: [
     react(),
     versionJson(), // Oct 14 client
+    dropWhatsNewPicsInApp(), // Oct 25 client
     VitePWA({
       // Oct 14 client: no service worker in the phone app build (BUILD_TARGET=cap):
       // the files are inside the app, and a SW there only risks serving stale files.

@@ -69,7 +69,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
  */
 export async function printLabels(
   labels: KioskLabel[],
-  opts?: { kioskSecret?: string },
+  opts?: { kioskSecret?: string; noBrowser?: boolean },
 ): Promise<{ transport: 'relay' | 'tcp' | 'browser'; ok: boolean; error?: string }> {
   // Aug 24 client fix (kiosk speed): reorder transport preference. Direct
   // TCP is FIRST on Android when a printer host is configured, because the
@@ -116,12 +116,13 @@ export async function printLabels(
       return { transport: 'relay', ok: true };
     } catch (e: any) {
       const relayErr = e?.message || String(e);
-      if (typeof window === 'undefined') {
+      if (typeof window === 'undefined' || opts?.noBrowser) {
         return { transport: 'relay', ok: false, error: relayErr };
       }
       console.warn('[label-print] relay failed, trying browser fallback:', relayErr);
     }
   }
+  if (opts?.noBrowser) return { transport: 'relay', ok: false, error: 'no printer path' };
   // Path 3 — browser fallback (window.print via existing print-only DOM).
   try {
     window.print();
@@ -131,6 +132,118 @@ export async function printLabels(
     console.warn('[label-print] browser print failed:', e?.message || e);
     return { transport: 'browser', ok: false, error: e?.message || String(e) };
   }
+}
+
+/**
+ * Oct 30 client (new kiosk): print one label at a time so the screen shows "2 of 6" and
+ * "Don't need labels" can stop the rest (the drop-off is already saved). Each label goes the
+ * same way as printLabels (direct TCP, else the relay). If the very first label finds no printer
+ * path, the whole batch falls back to printLabels (which ends in the browser print dialog).
+ */
+export async function printLabelsStepwise(
+  labels: KioskLabel[],
+  opts: { kioskSecret?: string; onProgress?: (printed: number) => void; stopped?: () => boolean },
+): Promise<{ transport: 'relay' | 'tcp' | 'browser'; ok: boolean; printed: number; stopped?: boolean; error?: string }> {
+  let transport: 'relay' | 'tcp' | 'browser' = 'relay';
+  for (let i = 0; i < labels.length; i++) {
+    if (opts.stopped?.()) return { transport, ok: true, printed: i, stopped: true };
+    const res = await printLabels([labels[i]], { kioskSecret: opts.kioskSecret, noBrowser: true });
+    if (!res.ok) {
+      if (i === 0) {
+        const all = await printLabels(labels, { kioskSecret: opts.kioskSecret });
+        return { ...all, printed: all.ok ? labels.length : 0 };
+      }
+      return { transport: res.transport, ok: false, printed: i, error: res.error };
+    }
+    transport = res.transport;
+    opts.onProgress?.(i + 1);
+  }
+  return { transport, ok: true, printed: labels.length };
+}
+
+// ------------------------------------------------------------
+// Oct 30 client: the round "kind" label (new kiosk)
+// ------------------------------------------------------------
+// Same rules as the API's src/kiosk-food.ts kioskLabelFace (unit-tested there): store, date,
+// KIND big (FLEISHIG / MILCHIG / PAREVE / MIXED / NOT SURE), CONTAINER under it, "x of N".
+// Old quick lines ('Drop-off' / 'Item') and classic-kiosk lines (Dairy, Bakery …) are not kind
+// labels and keep the older layout.
+const KIND_WORDS = ['Fleishig', 'Milchig', 'Pareve', 'Mixed', 'Not sure'];
+const squish = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
+export type LabelFace = { isKind: boolean; store: string[]; date: string; kind: string; container: string; count: string };
+export function kioskLabelFace(lb: Pick<KioskLabel, 'supplierName' | 'date' | 'category' | 'unit' | 'index' | 'total'>): LabelFace {
+  const cat = squish(lb.category);
+  const hit = KIND_WORDS.find((k) => k.toLowerCase() === cat.toLowerCase());
+  const unit = squish(lb.unit).toLowerCase();
+  return {
+    isKind: !!hit,
+    store: labelLines(squish(lb.supplierName) || 'Drop-off', 20, 2),
+    date: squish(lb.date).slice(0, 18),
+    kind: (hit ?? cat).toUpperCase().slice(0, 12),
+    container: (!unit || unit === 'item' ? '' : unit).toUpperCase().slice(0, 12),
+    count: `${lb.index} of ${lb.total}`,
+  };
+}
+function labelLines(text: string, maxChars: number, maxLines: number): string[] {
+  const words = squish(text).split(' ').filter(Boolean);
+  if (!words.length) return [''];
+  const out: string[] = [];
+  let cur = '';
+  let i = 0;
+  for (; i < words.length; i++) {
+    const w = words[i].length > maxChars ? words[i].slice(0, maxChars) : words[i];
+    const test = cur ? `${cur} ${w}` : w;
+    if (test.length <= maxChars) { cur = test; continue; }
+    out.push(cur);
+    cur = w;
+    if (out.length === maxLines) break;
+  }
+  if (out.length < maxLines && cur) { out.push(cur); cur = ''; i = words.length; }
+  if (i < words.length || cur) {
+    const last = out[out.length - 1] ?? '';
+    out[out.length - 1] = last.length >= maxChars ? `${last.slice(0, maxChars - 1)}…` : `${last}…`;
+  }
+  return out;
+}
+
+/**
+ * TSPL for one round kind label. Same SIZE / GAP / DENSITY / SPEED as every kiosk label (printer
+ * settings unchanged). Everything is a centered BLOCK inside the 3" round die (608×597 dots,
+ * circle centre ≈ 304,298): short lines only, the widest (the kind) ~400 dots at mid height.
+ *   y 112–168  store (1–2 lines, font 3)      y 180  date (font 3)
+ *   y 222      rule                           y 238  KIND (font 4 ×2)
+ *   y 312      CONTAINER (font 3 ×2)          y 378  rule
+ *   y 396      "x of N" (font 3 ×2)
+ */
+export function buildKindLabelTspl(lb: KioskLabel): Uint8Array {
+  const f = kioskLabelFace(lb);
+  const esc = (s: string) => s.replace(/[\r\n\t\0]/g, ' ').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/…/g, '...');
+  const BX = 64;   // 64-dot margin each side → 480 wide box
+  const BW = 480;
+  const storeCmds = f.store.length === 1
+    ? [`BLOCK ${BX},130,${BW},36,"3",0,1,1,0,2,"${esc(f.store[0])}"`]
+    : [`BLOCK ${BX},108,${BW},30,"3",0,1,1,0,2,"${esc(f.store[0])}"`,
+       `BLOCK ${BX},140,${BW},30,"3",0,1,1,0,2,"${esc(f.store[1])}"`];
+  const cmds: string[] = [
+    'SIZE 3.00,2.94',
+    'GAP 0.19,0',
+    'OFFSET 0.00',
+    'DIRECTION 1',
+    'REFERENCE 0,0',
+    'DENSITY 8',
+    'SPEED 6',
+    'SET TEAR ON',
+    'CLS',
+    ...storeCmds,
+    `BLOCK ${BX},180,${BW},30,"3",0,1,1,0,2,"${esc(f.date)}"`,
+    'BAR 154,222,300,4',
+    `BLOCK 24,238,560,70,"4",0,2,2,0,2,"${esc(f.kind)}"`,
+    `BLOCK ${BX},312,${BW},54,"3",0,2,2,0,2,"${esc(f.container)}"`,
+    'BAR 154,378,300,4',
+    `BLOCK ${BX},396,${BW},54,"3",0,2,2,0,2,"${esc(f.count)}"`,
+    'PRINT 1,1',
+  ];
+  return new TextEncoder().encode(cmds.join('\r\n') + '\r\n');
 }
 
 // ------------------------------------------------------------
@@ -215,6 +328,8 @@ function wrapChars(text: string, maxCharsPerLine: number): string[] {
  *   align: 1=left, 2=center, 3=right
  */
 export function buildLabelTspl(lb: KioskLabel): Uint8Array {
+  // Oct 30 client: new-kiosk lines (kind + container) get the round kind layout.
+  if (kioskLabelFace(lb).isKind) return buildKindLabelTspl(lb);
   // Aug 31: long supplier names used to overrun the label edge.
   //   - ≤22 chars    → single big line, font 3 mult 2 (as before)
   //   - 23-60 chars  → two smaller lines, font 3 mult 1 (½ the height)

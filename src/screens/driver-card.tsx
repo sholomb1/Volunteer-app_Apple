@@ -11,10 +11,12 @@ import { uiConfirm, uiNotify } from '../ui-dialogs';
 import { Card, StatusPill, cx } from '../design';
 import { DROPOFF } from '../dropoff';
 import { StorePhotoThumb } from '../store-photo'; // Oct 14 client
+import { STATUS, shortAddress as displayShortAddress, telHref, whenText } from '../display'; // Oct 23 client: same style everywhere
+import { Name } from '../display-ui';
 
+/** Oct 23 client: the one short address — "8 Hershel Terrace, Monsey" (no state / zip / country). */
 export function shortAddress(a: string | null | undefined): string {
-  if (!a) return '';
-  return String(a).replace(/,?\s*(USA|United States)\.?\s*$/i, '').trim();
+  return displayShortAddress(a);
 }
 export function storeName(p: OpenPickup | MyPickup): string {
   // Oct 7 client: no store name → show the address, not a generic label.
@@ -57,22 +59,15 @@ export function useFinishPickup() {
   return { finish, busy: m.isPending };
 }
 
-/** Oct 8: "Today · 3:30 PM" / "Tomorrow · 9:00 AM" / "Thu, Oct 9 · 9:00 AM" (New York day, 12-hour). */
+/** Oct 23 client: the one format — "Today 3:30 PM" / "Tomorrow 9:00 AM" / "Thu Oct 9 · 9:00 AM" (New York day, 12-hour). */
 export function fmtWhenLine(date: string | null | undefined, time: string | null | undefined, status?: string | null, keepTime = false): string {
   // Oct 13 client: a reposted / late pickup still to do is "now", not last night's time.
   if (!keepTime && driverShowsNow({ scheduled_date: date, scheduled_time: time, status })) return String(status) === 'picked_up' ? 'Now · take it to the drop-off' : 'Now · ready for pickup'; // Oct 14 client: was "ready for pickup" after Picked up
-  const t = fmtTime(time ? String(time).slice(0, 5) : '');
   const key = date ? String(date).slice(0, 10) : '';
-  let day = '';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(key)) {
-    const today = nyToday();
-    const shift = (iso: string, n: number) => new Date(Date.parse(iso + 'T12:00:00Z') + n * 86400e3).toISOString().slice(0, 10);
-    day = key === today ? 'Today'
-      : key === shift(today, 1) ? 'Tomorrow'
-      : key === shift(today, -1) ? 'Yesterday'
-      : new Date(key + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
-  }
-  return [day, t].filter(Boolean).join(' · ');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return fmtTime(time ? String(time).slice(0, 5) : '');
+  const w = whenText(key, time ? String(time).slice(0, 5) : null);
+  const s = key === nyToday() && time ? `today ${w}` : w;
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 // Oct 14 client: plain words, never the server's "already claimed by you".
@@ -130,7 +125,7 @@ export function DriverCard({ p, mine, onOpen, onTake, busy }: {
     <Card onClick={onOpen} className="!p-4">
       <div className="flex items-baseline gap-2 min-w-0">
         {time && <span className="font-display font-bold text-[15px] text-forest shrink-0">{time}</span>}
-        <span className="font-bold text-[15px] text-ink truncate">{storeName(p)}</span>
+        <span className="font-bold text-[15px] text-ink truncate"><Name>{storeName(p)}</Name></span>
         {mine && <span className="ml-auto shrink-0"><StatusPill status={p.status} /></span>}
       </div>
       {addr && <div className="text-[13px] text-ink/75 mt-1 truncate">{addr}</div>}
@@ -149,7 +144,7 @@ export function DriverCard({ p, mine, onOpen, onTake, busy }: {
                  className="haptic flex-1 text-center bg-forest text-paper font-bold text-[15px] min-h-[44px] flex items-center justify-center rounded-[11px]">{pickedUp ? 'Go to drop-off' : 'Navigate'}</a>
             )}
             {phone && (
-              <a href={`tel:${phone.replace(/[^\d+]/g, '')}`}
+              <a href={telHref(phone)}
                  className="haptic flex-1 text-center bg-sage text-forest font-bold text-[15px] min-h-[44px] flex items-center justify-center rounded-[11px] border border-sage-line">Call</a>
             )}
             {!addr && !pickedUp && !phone && (
@@ -158,8 +153,8 @@ export function DriverCard({ p, mine, onOpen, onTake, busy }: {
           </>
         ) : (
           <>
-            <span className={cx('flex-1 text-[13px] font-bold', need > 0 ? 'text-clay' : 'text-forest')}>
-              {need === 0 ? 'Covered' : cap > 1 && need < cap ? `Needs ${need} more` : `Needs ${need} driver${need === 1 ? '' : 's'}`}
+            <span className={cx('flex-1 text-[13px] font-bold', need > 0 ? STATUS.needs_driver.text : STATUS.covered.text)}>
+              {need === 0 ? STATUS.covered.word : cap > 1 && need < cap ? `Needs ${need} more` : `Needs ${need} driver${need === 1 ? '' : 's'}`}
             </span>
             {onTake && need > 0 && (
               <button onClick={onTake} disabled={busy}

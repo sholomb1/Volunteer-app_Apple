@@ -13,7 +13,7 @@
  * question here and it shows in both places.
  */
 import { AddressAutocomplete } from '../address-autocomplete';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../api';
 import {
   CheckGroup, Field, FormShell, Input, PHONE_HELP, RadioGroup, Section, SubmitBar, Textarea, ThankYou, phoneOk,
@@ -90,6 +90,9 @@ const STOCKING_HOURS_OPTS: { label: string; value: StockingHours }[] = [
 ];
 const REMINDER_OPTS: Array<[string, string]> = [['15', '15 minutes'], ['30', '30 minutes'], ['60', '1 hour'], ['120', '2 hours'], ['180', '3 hours']];
 const YES_NO = [{ label: 'Yes', value: 'yes' as const }, { label: 'No', value: 'no' as const }];
+// Oct 30 client: runs from Monsey to our Lakewood / Fallsburg locations (sets the 🚚 travel tags).
+const TRAVEL_QUESTION = 'Do you ever drive to Lakewood or Fallsburg?';
+const TRAVEL_OPTS: { label: string; value: string }[] = [{ label: 'Lakewood', value: 'lakewood' }, { label: 'Fallsburg', value: 'fallsburg' }];
 
 /** Oct 14 client: the saved answers (intake_payload shape) + `onCall` rows for the call-hours question. */
 export type ApplicationAnswers = Record<string, any> & { onCall?: Array<{ day: string; start: string; end: string }> };
@@ -97,9 +100,13 @@ type OnCallRow = { day: string; start: string; end: string };
 
 const arr = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
 const str = (v: unknown): string => (v == null ? '' : String(v));
+// Oct 18 client ("filling out automatic"): an optional part left off is not a "No" answer.
+const optInNone = (_v: unknown): string => ''; // Oct 18 client: always "Not answered"
 const opt = <T extends string>(v: unknown, allowed: readonly T[]): T | undefined => (allowed.includes(v as T) ? (v as T) : undefined);
 
 export function VolunteerRegistration() {
+  // Oct 22: opened from the sign-in screen's "Apply here" — start at the top, not the old scroll spot.
+  useEffect(() => { try { window.scrollTo(0, 0); } catch { /* ignore */ } }, []);
   const [done, setDone] = useState(false);
   if (done) return <ThankYou kind="volunteer" />;
   return (
@@ -186,6 +193,9 @@ export function VolunteerApplicationForm({ initial, onSubmit, submitLabel, selfE
   const [flexibleContact, setFlexibleContact]   = useState<YesNo | undefined>(opt(a.flexibleContact, ['yes', 'no'] as const));
   const [areas, setAreas]                       = useState<string[]>(arr<string>(a.areas));
   const [areaOther, setAreaOther]               = useState(str(a.areaOther));
+  // Oct 30 client: runs to our Lakewood / Fallsburg locations (sets the 🚚 tags on the driver).
+  const [travelPlaces, setTravelPlaces]         = useState<string[]>(arr<string>(a.travelPlaces).filter((p) => p === 'lakewood' || p === 'fallsburg'));
+  const [travelDays, setTravelDays]             = useState(str(a.travelDays));
 
   // ---- Dispatching (opt-in) ----
   const [wantDispatch, setWantDispatch]     = useState(!!disp);
@@ -295,6 +305,8 @@ export function VolunteerApplicationForm({ initial, onSubmit, submitLabel, selfE
           flexibleContact,
           areas,
           areaOther,
+          travelPlaces, // Oct 30 client
+          travelDays: travelPlaces.length ? travelDays.trim() : '',
           dispatching: wantDispatch ? {
             days: dispatchDays,
             shifts: dispatchShifts,
@@ -479,6 +491,22 @@ export function VolunteerApplicationForm({ initial, onSubmit, submitLabel, selfE
                      placeholder="Other area (optional)" />
             </div>
           </Field>
+
+          {/* Oct 30 client: sometimes food goes from Monsey to our Lakewood / Fallsburg locations. */}
+          <Field label={TRAVEL_QUESTION} help="Tick any. We'll only ask you when something needs to go there." optional>
+            <div data-travel-question>
+              <CheckGroup<string>
+                values={travelPlaces} onChange={setTravelPlaces}
+                options={TRAVEL_OPTS} />
+              {travelPlaces.length > 0 && (
+                <div className="mt-3">
+                  <label htmlFor="vol-travel-days" className="block text-[13px] font-semibold text-muted mb-1">Which days usually?</label>
+                  <Input id="vol-travel-days" value={travelDays} onChange={(e) => setTravelDays(e.target.value)} maxLength={60}
+                         placeholder="e.g. Thursdays" />
+                </div>
+              )}
+            </div>
+          </Field>
         </Section>
 
         {/* ============================================================ */}
@@ -609,18 +637,24 @@ export function ApplicationSummary({ answers }: { answers: ApplicationAnswers })
       ['Preferred day or time', str(a.preferredDayTime)],
       ['In case of need, can we contact you at a different time?', yn(a.flexibleContact)],
       ['Which areas can you serve?', [list(a.areas), str(a.areaOther)].filter(Boolean).join(', ')],
+      // Oct 30 client
+      [TRAVEL_QUESTION, (() => {
+        const places = arr<string>(a.travelPlaces).map((p) => TRAVEL_OPTS.find((o) => o.value === p)?.label ?? p);
+        if (!places.length) return a.travelPlaces !== undefined ? 'No' : '';
+        return `${places.join(', ')}${str(a.travelDays) ? ` · ${str(a.travelDays)}` : ''}`;
+      })()],
     ]],
     ['Dispatching Volunteer', disp ? [
       ['Available days', list(disp.days)],
       ['Available shifts', list(disp.shifts)],
       ['How many shifts can you commit to?', label(COMMIT_OPTS, disp.commitment)],
-    ] : [['I would like to help with dispatching', 'No']]],
+    ] : [['I would like to help with dispatching', optInNone(a.dispatching)]]], // Oct 18 client: not "No" when they never chose
     ['Center Stocking Volunteer', stock ? [
       ['I would like to help with:', list(stock.tasks)],
       ['How many hours can you volunteer per shift?', label(STOCKING_HOURS_OPTS, stock.hoursPerShift)],
       ['What days are you available?', list(stock.days)],
       ['What time of day?', list(stock.times)],
-    ] : [['I would like to help at the center', 'No']]],
+    ] : [['I would like to help at the center', optInNone(a.centerStocking)]]],
     ['Suggestions, Comments & Feedback', [
       ["Anything else you'd like us to know?", str(a.anythingElse)],
       ['Do you have any suggestions or feedback that would help improve the program?', str(a.feedback)],

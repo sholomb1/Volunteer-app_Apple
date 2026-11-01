@@ -38,6 +38,8 @@ export type AuthUser = {
   testMode?: 'sandbox' | 'live_test';
   // Oct 2: null/undefined = role default menu; array = only these sections.
   accessSections?: string[] | null;
+  // Oct 29 client (one login per person): the driver profile this office login also drives as (null = none).
+  driverProfileId?: number | null;
 };
 
 // Whether the API server is running in sandbox-available mode (dev box only).
@@ -64,6 +66,12 @@ export function canWrite(role?: string | null): boolean {
 export function canManageUsers(role?: string | null): boolean {
   return role === 'admin';
 }
+// Oct 21 client (Yakov, dispatcher access): office-only changes — delete a driver or store,
+// create/edit/delete steady schedules, message templates, text groups, notification types and
+// the admin settings. Dispatchers (and view-only logins) don't get these buttons.
+export function canOfficeOnly(role?: string | null): boolean {
+  return ['admin', 'coordinator', 'staff'].includes(String(role ?? ''));
+}
 // Sep 10 client: dispatcher visibility is a strict allow-list of THREE
 // tabs — Members (volunteers), Pickups, Send Out Messages (sms-combo) —
 // plus 'change-password' so the dispatcher can rotate their own login.
@@ -79,12 +87,27 @@ const DISPATCHER_ALLOWED_TABS = new Set([
   'volunteers',        // Members
   'suppliers',         // Suppliers
   'my-shift',          // My Shift
+  'food-handle',       // Oct 30 client: Food to handle (package + add to the ordering platform)
   'donations',         // Food Donations (Oct 7 client)
   'change-password',   // rotate own password
 ]);
+// Oct 21 client (Yakov): "they should have it" — dispatchers get Messaging (Driver messages,
+// Who gets texts, How texting works, Chat: Stores, SMS Composer), whatever their page access says.
+// Oct 22 client (dispatcher view): Messaging = Driver messages only (Texts / App chat / WhatsApp).
+const DISPATCHER_MESSAGING_TABS = new Set(['driver-replies']);
+// Oct 22 client (dispatcher view): never shown to a dispatcher login, whatever its page access says
+// (the server refuses them too: apps/api/src/dispatcher-rules.ts).
+const DISPATCHER_HIDDEN_TABS = new Set(['suppliers', 'signups', 'who-gets-texts', 'texting-rules', 'chat-stores', 'chat-volunteers', 'sms-combo', 'emails']);
+export function isDispatcherLogin(role?: string | null): boolean {
+  return String(role ?? getUser()?.role ?? '').toLowerCase() === 'dispatcher';
+}
+/** Oct 22 client: true = this page is never shown to this (dispatcher) login. Pass the page key itself. */
+export function dispatcherHiddenTab(role: string | null | undefined, tabKey: string): boolean {
+  return String(role ?? '').toLowerCase() === 'dispatcher' && DISPATCHER_HIDDEN_TABS.has(tabKey);
+}
 // Oct 2 client (invite + access levels): which main-menu section each page is in.
 const TAB_SECTION: Record<string, string> = {
-  live: 'live', pickups: 'pickups', calendar: 'pickups', steady: 'pickups', donations: 'pickups',
+  live: 'live', pickups: 'pickups', calendar: 'pickups', steady: 'pickups', donations: 'pickups', 'food-handle': 'pickups', // Oct 30 client
   volunteers: 'volunteers', suppliers: 'suppliers', coverage: 'map',
   tasks: 'tasks', recruiting: 'tasks', prospects: 'tasks', reports: 'reports',
   'sms-combo': 'messaging', 'chat-volunteers': 'messaging', 'chat-stores': 'messaging', 'driver-replies': 'messaging',
@@ -95,6 +118,8 @@ export function canSeeTab(role: string | null | undefined, tabKey: string): bool
   const isDispatcher = (role ?? '').toLowerCase() === 'dispatcher';
   if (tabKey === 'my-shift') return isDispatcher;
   if (tabKey === 'change-password') return true;
+  if (isDispatcher && DISPATCHER_HIDDEN_TABS.has(tabKey)) return false; // Oct 22 client
+  if (isDispatcher && DISPATCHER_MESSAGING_TABS.has(tabKey)) return true; // Oct 21 client
   const sections = getUser()?.accessSections;
   if (Array.isArray(sections) && sections.length > 0) {
     const sec = TAB_SECTION[tabKey];
@@ -453,8 +478,8 @@ export const volunteer = {
   history: () => api<{ profile: { name: string }; stats: HistoryStats; data: any[] }>('/api/me/history'),
   // Client Aug 18: mobile-app usage tracking. Native app calls this on
   // launch + on foreground so the office can see who actually opens the app.
-  ping:    (platform?: string, version?: string) =>
-    api<{ data: { ok: true } }>('/api/me/ping', { method: 'POST', body: JSON.stringify({ platform, version }) }),
+  ping:    (platform?: string, version?: string, versionCode?: number) =>
+    api<{ data: { ok: true } }>('/api/me/ping', { method: 'POST', body: JSON.stringify({ platform, version, versionCode }) }),
   claim:   (id: number) => api(`/api/me/open-pickups/${id}/claim`, { method: 'POST' }),
   signup:  (id: number) => api<{ data: { pickupInstanceId: number; slot: number } }>(`/api/me/pickups/${id}/signup`, { method: 'POST' }),
   release: (id: number) => api(`/api/me/pickups/${id}/signup`, { method: 'DELETE' }),
@@ -695,19 +720,26 @@ export type VolunteerSelfProfile = {
   quietDays: number;
   vacationFrom: string | null;
   vacationUntil: string | null;
+  deleteRequestedAt?: string | null; // Oct 25 client: when "Request to delete my account" was last sent
 };
 // Oct 14 client: driver app Settings + My application (apps/api/src/routes/me-settings.ts).
 // channel = "How should we reach you about pickups?" (Text / WhatsApp / Both / App only / Nothing).
 export type ReachChoice = 'text' | 'whatsapp' | 'both' | 'app' | 'none';
+// Oct 28 client: 📱 App notifications / 🟢 WhatsApp / 💬 Text message ticks — any mix, or none.
+export type AlertChoices = { app: boolean; whatsapp: boolean; text: boolean };
 export type DriverSettings = {
   channel: ReachChoice; notifChannel: string; contactChannel: string; smsOptIn: boolean; whatsappReady: boolean;
+  alerts?: AlertChoices; // Oct 28 client (an older API leaves it out: derived from notifChannel / contactChannel)
   isAvailable: boolean; unavailableUntil: string | null; vacationFrom: string | null; vacationUntil: string | null;
   quietDays: number; quietWindows: Array<{ start: string; end: string; days?: number }>; // Oct 14 client: + days (bit 0 = Sunday)
   texting: { texting: string; quiet: string | null; days: string | null; away: string | null; check: boolean; quietMinutes: number };
   steadyReminders: boolean; hasSteady: boolean;
+  waConfirm?: WaConfirmInfo; // Oct 30 client: confirm WhatsApp
 };
+// Oct 30 client: confirm WhatsApp — confirmed = he wrote to us on WhatsApp, or our last WhatsApp went through.
+export type WaConfirmInfo = { chose: boolean; confirmed: boolean; state: 'working' | 'waiting' | 'failed' | null; askedAt: string | null; asks: number; link: string };
 export type DriverSettingsPatch = Partial<{
-  channel: ReachChoice; quietWindows: Array<{ start: string; end: string; days?: number }>; quietDays: number;
+  channel: ReachChoice; alerts: AlertChoices; quietWindows: Array<{ start: string; end: string; days?: number }>; quietDays: number;
   vacationFrom: string | null; vacationUntil: string | null; steadyReminders: boolean; smsOptIn: boolean;
 }>;
 export type MyApplicationData = { answers: Record<string, any>; hasApplication: boolean; receivedAt: string | null; updatedAt: string | null; changed?: string[] };
@@ -728,6 +760,8 @@ export const volunteerSelf = {
 // Scrubs PII from volunteer/supplier row + anonymizes users row. Not recoverable.
 export const account = {
   delete: () => api<{ data: { deleted: true } }>('/api/me/account', { method: 'DELETE' }),
+  // Oct 25 client: drivers only ask the office (nothing is deleted); DELETE above refuses driver logins.
+  requestDelete: () => api<{ data: { requestedAt: string; already?: boolean } }>('/api/me/account/delete-request', { method: 'POST' }),
 };
 
 // Supplier self-profile
@@ -850,6 +884,8 @@ export const adminCRUD = {
       template_status: string; day_of_week: number; suppliers: string | null;
       flat_driver_ids: number[]; today_dow_drivers: number[];
       future_count: number; ending_soon_count: number; this_week_signups: number;
+      pickup_type?: string | null; driver_names?: string[] | null; // Oct 23 client: steady calendar
+      candle?: import('./candle-time').CandleInfo | null; // Oct 23 client: Friday time from candle lighting
       coverage_status: 'committed'|'ending_soon'|'future_scheduled'|'temporarily_covered'|'needs_steady_driver'|'paused';
     }> }>('/api/weekly-coverage'),
 
@@ -925,12 +961,14 @@ export const adminCRUD = {
 
   // App usage report — every volunteer's last-app-open + count + freshness bucket.
   // Server bucket values: 'today' | 'week' | 'month' | 'stale' | 'never'.
-  appUsage:      () => api<{ data: Array<{
-    id: number; first_name: string; last_name: string; unit_number: number | null;
-    last_app_open_at: string | null; app_open_count: number | null;
-    last_app_platform: string | null; last_app_version: string | null;
-    bucket: 'today' | 'week' | 'month' | 'stale' | 'never';
-  }> }>('/api/reports/app-usage'),   // Oct 14 client: the office filter blocks URLs with "activity" (page was empty)
+  appUsage:      () => api<{ data: AppUsageRow[];
+    summary?: { drivers: number; usedThisWeek: number; oldVersion: number; neverOpened: number; notIn14Days: number };
+    store?: { code: number; name: string };
+    latest?: { android: { name: string; code: number | null } | null; ios: { name: string; code: number | null } | null } }>('/api/reports/app-usage'),
+  // Oct 29 client: App usage -> "Remind old versions to update" (office only; never sends on dev).
+  updateReminder: () => api<{ data: UpdateReminderView }>('/api/admin/update-reminder'),
+  sendUpdateReminder: (title: string, body: string) => api<{ data: { sent: number; devices: number; message?: string; view: UpdateReminderView } }>(
+    '/api/admin/update-reminder/send', { method: 'POST', body: JSON.stringify({ title, body }) }),   // Oct 14 client: the office filter blocks URLs with "activity" (page was empty)
 
   // Options (statuses, types, urgency levels)
   options:        (category?: string) => api<{ data: any[] }>(`/api/options${category ? `?category=${encodeURIComponent(category)}` : ''}`),
@@ -974,7 +1012,7 @@ export const adminCRUD = {
 
   // Neighborhoods (Wesley Hills, Pomona, Monsey Center, …) + coverage report
   neighborhoods: () => api<{ data: Neighborhood[] }>('/api/neighborhoods'),
-  coverage:      () => api<{ data: NeighborhoodCoverage[] }>('/api/neighborhoods/coverage'),
+  coverage:      () => api<CoverageResponse>('/api/neighborhoods/coverage'),
   createNeighborhood: (body: { name: string; sortOrder?: number }) =>
     api<{ data: Neighborhood }>('/api/neighborhoods', { method: 'POST', body: JSON.stringify(body) }),
   patchNeighborhood:  (id: number, body: Partial<Neighborhood>) =>
@@ -996,9 +1034,22 @@ export type Neighborhood = {
   id: number; name: string; slug: string; sortOrder: number;
   status: 'active' | 'archived'; createdAt?: string;
 };
-export type NeighborhoodCoverage = Neighborhood & {
+// Oct 30 client (Coverage map): per area the drivers who cover it (office pick, else
+// their application answers) + its stores. color: 0 drivers red, 1–2 orange, 3+ green.
+export type CoverageDriver = { id: number; name: string; unit: number | null; phone: string | null; lastActive: string | null; from: 'office' | 'application' | 'none' };
+export type CoverageStore = { id: number; name: string; address: string | null; lat: number | null; lng: number | null; nextPickup: string | null; usualDrivers: string[]; areaId: number | null; areaName: string | null };
+export type NeighborhoodCoverage = {
+  id: number; name: string; slug: string | null; sortOrder: number | null;
   supplierCount: number; volunteerCount: number;
-  coverage: 'none' | 'low' | 'ok' | 'healthy';
+  coverage: 'none' | 'low' | 'good'; color: 'red' | 'orange' | 'green';
+  center: [number, number] | null;
+  drivers: CoverageDriver[]; stores: CoverageStore[];
+};
+export type CoverageResponse = {
+  data: NeighborhoodCoverage[];
+  unmatched: Array<{ id: number; name: string; unit: number | null; answers: string[] }>;
+  storesWithoutArea: CoverageStore[];
+  totals: { drivers: number; driversWithAreas: number; fromApplication: number; fromOffice: number; stores: number };
 };
 
 export type NotificationType = {
@@ -1090,6 +1141,20 @@ export type UpcomingDropInfo = {
 };
 export const upcomingSms = {
   get: () => api<{ data: UpcomingDropInfo }>(`/api/sms/upcoming-drop`),
+  // Oct 20 client: the light count for Send SMS → "Send all currently open pickups (N)" —
+  // exactly what sendNow(false) would send right now. Gives up after 10 s.
+  sendNowCount: async () => {
+    const ctl = new AbortController();
+    let late = false;
+    const t = setTimeout(() => { late = true; ctl.abort(); }, 10_000);
+    try {
+      return await api<{ data: { pickups: number; recipients: number; skipped?: string; at: string } }>(
+        `/api/sms/upcoming-drop/send-now/count`, { signal: ctl.signal });
+    } catch (e) {
+      if (late) throw new Error("Couldn't check the open pickups (it took too long).");
+      throw e;
+    } finally { clearTimeout(t); }
+  },
   sendNow: (dryRun = false) =>
     api<{ data: { pickups: number; sent: number; skipped?: string; preview?: string; recipients?: number; dryRun: boolean } }>(
       `/api/sms/upcoming-drop/send-now${dryRun ? '?dryRun=true' : ''}`,
@@ -1180,7 +1245,8 @@ export type CenterHelpTemplate = {
   is_recurring: boolean; notes: string | null; created_at: string;
   volunteer_ids: number[];
 };
-export type CenterHelpSignup = { id: number; first_name: string; last_name: string; unit_number: number | null; phone_primary: string | null };
+// Oct 16 client: typed = a person on the center help list who is not a driver (id null, typed_id = their list id).
+export type CenterHelpSignup = { id: number | null; first_name: string; last_name: string; unit_number: number | null; phone_primary: string | null; typed?: boolean; typed_id?: number; removed_from_list?: boolean };
 export type CenterHelpInstance = {
   id: number; template_id: number | null; task_type: CenterHelpTaskType;
   starts_at: string; ends_at: string; volunteers_needed: number;
@@ -1203,12 +1269,55 @@ export const centerHelp = {
   },
   patchInstance:  (id: number, body: Partial<{ volunteersNeeded: number; notes: string | null; startsAt: string; endsAt: string; cancel: boolean }>) =>
     api<{ data: any }>(`/api/center-help/instances/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-  assign:         (id: number, volunteerIds: number[]) =>
-    api<{ data: { added: number } }>(`/api/center-help/instances/${id}/assign`, { method: 'POST', body: JSON.stringify({ volunteerIds }) }),
+  assign:         (id: number, volunteerIds: number[], typedIds: number[] = []) =>
+    api<{ data: { added: number } }>(`/api/center-help/instances/${id}/assign`, { method: 'POST', body: JSON.stringify({ volunteerIds, typedIds }) }),
+  // Oct 16 client: Center Help calendar + Weekly template, same as the dispatcher one.
+  unassign:       (id: number, who: { volunteerId: number } | { typedId: number }) =>
+    api<{ data: { removed: number } }>(`/api/center-help/instances/${id}/unassign`, { method: 'POST', body: JSON.stringify(who) }),
+  cancelDay:      (id: number, scope: 'one' | 'future') =>
+    api<{ data: any }>(`/api/center-help/instances/${id}/cancel`, { method: 'POST', body: JSON.stringify({ scope }) }),
+  createOne:      (body: { taskType: CenterHelpTaskType; date: string; startTime: string; endTime: string; needed: number; notes: string | null; volunteerIds: number[]; typedIds: number[] }) =>
+    api<{ data: any }>('/api/center-help/instances', { method: 'POST', body: JSON.stringify(body) }),
+  template:       () => api<{ data: CenterHelpWeekTemplate }>('/api/center-help/template'),
+  applyTemplate:  (fromDate: string, rows: CenterHelpApplyRow[]) =>
+    api<{ data: Record<string, number> }>('/api/center-help/template/apply', { method: 'POST', body: JSON.stringify({ fromDate, rows }) }),
   signupSelf:     (id: number) =>
     api<{ data: { ok: boolean } }>(`/api/center-help/instances/${id}/signup`, { method: 'POST' }),
   cancelSelf:     (id: number) =>
     api<{ data: { ok: boolean } }>(`/api/center-help/instances/${id}/signup`, { method: 'DELETE' }),
+};
+
+// Oct 16 client: Center Help Weekly template (GET /api/center-help/template).
+export type CenterHelpTplRow = {
+  id: number; taskType: CenterHelpTaskType; dow: number; startTime: string; endTime: string;
+  needed: number; notes: string | null; volunteerIds: number[]; typed: Array<{ pid: number; name: string }>;
+};
+export type CenterHelpWeekTemplate = {
+  templates: CenterHelpTplRow[]; people: CenterHelpPersonRow[];
+  drivers: Array<{ id: number; name: string; unit: number | null; deleted: boolean }>;
+  today: string; maxDay: string;
+};
+export type CenterHelpApplyRow = {
+  templateId: number | null; remove: boolean; taskType: CenterHelpTaskType; dow: number;
+  startTime: string; endTime: string; needed: number; notes: string | null; volunteerIds: number[]; typedIds: number[];
+};
+
+// Oct 15 client (Yakov): "People willing to help in the center" list, same idea as the
+// Dispatcher roster. A driver from the directory, or a typed name (+ phone). Office only.
+export type CenterHelpPersonRow = {
+  id: number; volunteerId: number | null; name: string; phone: string | null;
+  unitNumber: number | null; notes: string | null; addedAt: string;
+  source: 'driver' | 'typed'; driverRemoved: boolean;
+};
+export const centerHelpPeople = {
+  list: () => api<{ data: CenterHelpPersonRow[] }>('/api/center-help/people'),
+  candidates: (q: string) =>
+    api<{ data: DispatcherCandidate[] }>(`/api/center-help/people/candidates${q ? `?q=${encodeURIComponent(q)}` : ''}`),
+  add: (body: { volunteerId?: number; name?: string; phone?: string | null; notes?: string | null }) =>
+    api<{ data: any }>('/api/center-help/people', { method: 'POST', body: JSON.stringify(body) }),
+  update: (id: number, body: { name?: string; phone?: string | null; notes?: string | null }) =>
+    api<{ data: any }>(`/api/center-help/people/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  remove: (id: number) => api<{ data: { id: number } }>(`/api/center-help/people/${id}`, { method: 'DELETE' }),
 };
 
 export type VolunteerGroup = { id: number; name: string; is_default_broadcast: boolean; member_count: number };
@@ -1220,7 +1329,7 @@ export const volunteerGroups = {
   patch:  (id: number, body: Partial<{ name: string; isDefaultBroadcast: boolean }>) =>
     api<{ data: VolunteerGroup }>(`/api/volunteer-groups/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   addMembers:    (id: number, volunteerIds: number[], sendWelcome = false) =>
-    api<{ data: { added: number; welcomed?: number; welcomeRequested?: boolean } }>(`/api/volunteer-groups/${id}/members`, { method: 'POST', body: JSON.stringify({ volunteerIds, sendWelcome }) }),
+    api<{ data: { added: number; welcomed?: number | null; welcomeRequested?: boolean; welcomeSending?: boolean } }>(`/api/volunteer-groups/${id}/members`, { method: 'POST', body: JSON.stringify({ volunteerIds, sendWelcome }) }),
   removeMember:  (id: number, volunteerId: number) =>
     api<{ data: { ok: true } }>(`/api/volunteer-groups/${id}/members/${volunteerId}`, { method: 'DELETE' }),
   remove: (id: number) => api<{ data: { ok: true } }>(`/api/volunteer-groups/${id}`, { method: 'DELETE' }),
@@ -1239,35 +1348,47 @@ export type SmsThreadRow = {
   unit_number: number | null; last_body: string | null;
   // Consolidated brief #1 (Aug 18): per-thread unread count for badges.
   unread_in_count?: string | number;
+  // Oct 28 client: texts + WhatsApp in one list (withWa) — how the last message / his last reply came.
+  last_channel?: MsgChannel; last_in_channel?: MsgChannel | null; wa_count?: string | number;
+  phones?: string[];
 };
+export type MsgChannel = 'text' | 'whatsapp'; // Oct 28 client
 export type SmsThreadMessage = {
   id: string | number; direction: 'in' | 'out'; body: string; created_at: string;
   volunteer_id: string | null; sent_by_user_id: string | null; meta: Record<string, any>;
   phone_last10?: string; // Oct 14 client: which of the driver's numbers
+  // Oct 28 client (withWa): how it came / went; WhatsApp we sent has a status (queued / sent / failed).
+  mkey?: string; channel?: MsgChannel; status?: string | null; error?: string | null;
 };
 export const smsThreads = {
   // includeAutomated=false (default) → only real conversations (threads with an
   // inbound message); the response `meta.hidden` reports how many automated,
   // outbound-only threads were filtered out.
-  list: (opts: { includeShop?: boolean; includeAutomated?: boolean } = {}) => {
+  // Oct 28 client: withWa → WhatsApp conversations in the same list.
+  list: (opts: { includeShop?: boolean; includeAutomated?: boolean; withWa?: boolean } = {}) => {
     const qs = new URLSearchParams();
     if (opts.includeShop) qs.set('includeShop', '1');
     if (opts.includeAutomated) qs.set('includeAutomated', '1');
+    if (opts.withWa) qs.set('withWa', '1');
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     return api<{ data: SmsThreadRow[]; meta?: { total?: number; hidden?: number } }>(
       `/api/sms/threads${suffix}`);
   },
   // Oct 11 client: newest messages first-loaded; `total` = all in the thread; limit for "Show all".
-  get:  (phone: string, opts: { includeShop?: boolean; limit?: number } = {}) => {
+  // Oct 28 client: withWa → his WhatsApp messages too; replyChannel = how he last wrote; waTo = his WhatsApp number.
+  get:  (phone: string, opts: { includeShop?: boolean; limit?: number; withWa?: boolean } = {}) => {
     const qs = new URLSearchParams();
     if (opts.includeShop) qs.set('includeShop', '1');
     if (opts.limit) qs.set('limit', String(opts.limit));
+    if (opts.withWa) qs.set('withWa', '1');
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
-    return api<{ data: { phone: string; contact: any | null; messages: SmsThreadMessage[]; total?: number; numbers?: string[]; textTo?: string } }>( // Oct 14 client: all the driver's numbers
+    return api<{ data: { phone: string; contact: any | null; messages: SmsThreadMessage[]; total?: number; numbers?: string[]; textTo?: string;
+                         replyChannel?: MsgChannel; waTo?: string } }>( // Oct 14 client: all the driver's numbers
       `/api/sms/threads/${encodeURIComponent(phone)}${suffix}`);
   },
-  send: (phone: string, body: string) => api<{ data: { sent: number } }>(
-    '/api/sms/send-one', { method: 'POST', body: JSON.stringify({ phone, body }) }),
+  // Oct 23 client: confirmNight = "Send now anyway" in the late-night prompt (late-night.tsx).
+  send: (phone: string, body: string, confirmNight = false) => api<{ data: { sent: number } }>(
+    '/api/sms/send-one', { method: 'POST', body: JSON.stringify({ phone, body, ...(confirmNight ? { confirmNight: true } : {}) }) }),
   // Consolidated brief #1 (Aug 18): mark thread + global unread count.
   markRead: (phone: string) => api<{ data: { marked: number } }>(
     `/api/sms/threads/${encodeURIComponent(phone)}/read`, { method: 'POST' }),
@@ -1300,6 +1421,27 @@ export type AppVersionInfo = {
     minVersionCode: number | null;
     iosAppStoreUrl: string | null;
   };
+};
+// Oct 21 client: Reports -> App usage row (+ days used in 7 / 30 days, version code, old app flag).
+export type AppUsageRow = {
+  id: number; first_name: string; last_name: string; unit_number: number | null;
+  last_app_open_at: string | null; app_open_count: number | null;
+  last_app_platform: string | null; last_app_version: string | null;
+  has_login?: boolean; has_device?: boolean;
+  days_7?: number; days_30?: number; version_code?: number | null; is_old?: boolean;
+  bucket: 'today' | 'week' | 'month' | 'stale' | 'never' | 'no_login';
+};
+// Oct 29 client: App usage -> "Remind old versions to update" preview.
+export type UpdateReminderView = {
+  latest: { android: { name: string; code: number | null } | null; ios: { name: string; code: number | null } | null };
+  count: number; byPlatform: { android: number; ios: number };
+  sendCount: number; sendByPlatform: { android: number; ios: number };
+  recentlyReminded: number; noPush: number;
+  people: Array<{ volunteerId: number; name: string; platform: 'android' | 'ios'; version: string | null;
+                  lastOpenAt: string | null; canPush: boolean; remindedAt: string | null }>;
+  title: string; body: string; links: { android: string; ios: string }; guardDays: number;
+  last: { at: string; people: number; by: string | null } | null;
+  devBox: boolean; blocked: string | null;
 };
 export const appVersion = {
   get: () => api<{ data: AppVersionInfo }>('/api/app/version'),
@@ -1443,7 +1585,7 @@ export const whatsappAdmin = {
 // /api/wa/outbound every 5s and hands messages to the tablet's WhatsApp
 // Business via a deep link + auto-tap.
 export const waBridge = {
-  send: (body: { phone?: string; conversationKey?: string; text: string }) =>
+  send: (body: { phone?: string; conversationKey?: string; text: string; confirmNight?: boolean; mediaUrl?: string; mediaType?: string; mediaName?: string }) => // Oct 23 client: late-night prompt; Oct 27 client: + test picture
     api<{ ok: boolean; id: number | null }>('/api/wa/bridge/send', {
       method: 'POST', body: JSON.stringify(body),
     }),

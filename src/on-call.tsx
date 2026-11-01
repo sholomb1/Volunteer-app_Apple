@@ -10,6 +10,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Phone } from 'lucide-react';
 import { api } from './api';
 import { fmtDay, fmtTime, fmtTimeEastern, nyToday } from './time-format';
+import { telHref, stripUnit } from './display'; // Oct 23 client: same style everywhere
+import { Name } from './display-ui';
+import { pickupLabel, hidePickupIds } from './pickup-label'; // Oct 22 client: pickups by name, never by id
 
 type Slot = { day: string; start: string; end: string; note?: string | null };
 const DAYS: Array<[string, string]> = [
@@ -226,65 +229,103 @@ export function OnCallHoursEditor({ endpoint, title = 'Happy to be called', who 
   );
 }
 
-/** Live Board: drivers who said they're happy to be called right now. */
-export function OnCallNowCard({ onOpenPerson }: { onOpenPerson?: (id: number) => void }) {
-  const q = useQuery({
+type OnCallNow = { volunteerId: string; name: string; unitNumber: number | null; phone: string | null; until: string; from?: string; note: string | null };
+function useOnCallNow() {
+  return useQuery({
     queryKey: ['on-call-now'],
-    queryFn: () => api<{ data: Array<{ volunteerId: string; name: string; unitNumber: number | null; phone: string | null; until: string; note: string | null }> }>('/api/on-call/now'),
+    queryFn: () => api<{ data: OnCallNow[] }>('/api/on-call/now'),
     refetchInterval: 60_000,
   });
-  const list = q.data?.data ?? [];
+}
+
+/**
+ * Live Board: drivers who said they're happy to be called right now.
+ * Oct 21 client (Cleaner Live Board): a small "📞 Drivers happy to be called (4)" button in the
+ * Live Board header; tap = the same list (call, "I called", log) in a pop-over. Was a card on the page.
+ */
+export function OnCallNowButton({ onOpenPerson }: { onOpenPerson?: (id: number) => void }) {
+  const q = useOnCallNow();
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const k = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, [open]);
+  const n = q.data?.data.length ?? 0;
+  return (
+    <div className="relative">
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-haspopup="dialog" data-testid="on-call-button"
+              title="Drivers who said a phone call is OK at this hour"
+              className={`haptic inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1 text-[12.5px] font-bold ${open ? 'border-forest bg-sage text-forest' : 'border-sage-line bg-paper text-forest hover:bg-sage/60'}`}>
+        <Phone size={13} /> Drivers happy to be called ({q.isLoading ? '…' : n})
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-[1400]" onClick={() => setOpen(false)} />
+          <div role="dialog" aria-label="Drivers happy to be called" data-testid="on-call-popover"
+               className="fixed inset-x-3 top-24 z-[1401] max-h-[72vh] overflow-y-auto rounded-[14px] border border-line bg-paper px-4 py-3 text-left shadow-lift sm:absolute sm:inset-x-auto sm:left-0 sm:top-full sm:mt-2 sm:w-[460px]">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <div className="text-[15px] font-extrabold text-ink">📞 Drivers happy to be called now</div>
+                <div className="text-[12px] text-muted">They said a phone call is OK at this hour. Tap a number to call; "I called" writes down how it went.</div>
+              </div>
+              <button type="button" onClick={() => setOpen(false)} aria-label="Close" className="haptic px-1 text-[20px] font-bold leading-none text-muted">×</button>
+            </div>
+            <OnCallNowList list={q.data?.data ?? []} loading={q.isLoading} onOpenPerson={(id) => { setOpen(false); onOpenPerson?.(id); }} />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function OnCallNowList({ list, loading, onOpenPerson }: { list: OnCallNow[]; loading: boolean; onOpenPerson?: (id: number) => void }) {
   // Oct 11 client: calls logged today → "Called 2:14 PM — No answer" on the row; one Log call form open at a time.
+  // Oct 21 client: only fetched while the list is open.
   const calls = useQuery({ queryKey: ['on-call-calls-today'], queryFn: () => api<{ data: CallRow[] }>('/api/on-call/calls/today'), refetchInterval: 60_000 });
   const lastCall = new Map<number, CallRow>();
   for (const c of calls.data?.data ?? []) if (!lastCall.has(c.volunteerId)) lastCall.set(c.volunteerId, c);
   const [logFor, setLogFor] = useState<number | null>(null);
+  if (loading) return <div className="text-[13px] text-muted mt-2">Loading…</div>;
+  if (list.length === 0) return <div className="text-[13px] text-muted mt-2">Nobody has said they're on call right now. Drivers add their hours in the app (Profile), or the office adds them in the driver's profile.</div>;
   return (
-    <div className="rounded-[14px] border border-line bg-paper px-4 py-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-[14px] font-extrabold text-ink">📞 On call now <span className="text-muted font-bold">({list.length})</span></div>
-        <div className="text-[12px] text-muted">Drivers happy to be called at this hour</div>
-      </div>
-      {q.isLoading ? <div className="text-[13px] text-muted mt-1">Loading…</div>
-        : list.length === 0 ? <div className="text-[13px] text-muted mt-1">Nobody has said they're on call right now. Drivers add their hours in the app (Profile), or the office adds them in the driver's profile.</div>
-        : (
-          <ul className="mt-2 divide-y divide-line">
-            {list.map((v) => {
-              const vid = Number(v.volunteerId);
-              const last = lastCall.get(vid);
-              return (
-              <li key={v.volunteerId} className="py-2">
-                <div className="flex items-center justify-between gap-3">
-                  <button type="button" onClick={() => onOpenPerson?.(vid)} className="text-left min-w-0">
-                    <div className="text-[14px] font-bold text-ink">{v.name}{v.unitNumber != null ? <span className="text-muted font-normal"> · #{v.unitNumber}</span> : null}</div>
-                    <div className="text-[12.5px] text-muted">until {fmtTime(v.until)}{v.note ? ` · ${v.note}` : ''}</div>
-                    {last && <div className="text-[12.5px] font-bold text-forest">Called {fmtTimeEastern(last.occurredAt)} — {last.outcome}{last.byName ? ` (${last.byName})` : ''}</div>}
-                  </button>
-                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                    {v.phone && (
-                      // Oct 11 client: tapping the number also opens Log call, so they remember to log it.
-                      <a href={`tel:${v.phone}`} onClick={() => setLogFor(vid)} className="haptic inline-flex items-center gap-1.5 rounded-[10px] border border-forest/40 px-3 py-2 text-[13px] font-bold text-forest">
-                        <Phone size={14} /> {fmtPhone(v.phone)}
-                      </a>
-                    )}
-                    <button type="button" onClick={() => setLogFor(logFor === vid ? null : vid)}
-                            className="haptic rounded-[10px] border border-line px-3 py-2 text-[13px] font-bold text-ink hover:bg-cream" title="Write down how the call went">📞 I called</button>
-                  </div>
-                </div>
-                {logFor === vid && <CallLogForm key={vid} volunteerId={vid} name={v.name.split(' ')[0] || v.name} onClose={() => setLogFor(null)} />}
-              </li>
-              );
-            })}
-          </ul>
-        )}
-    </div>
+    <ul className="mt-2 divide-y divide-line">
+      {list.map((v) => {
+        const vid = Number(v.volunteerId);
+        const last = lastCall.get(vid);
+        return (
+        <li key={v.volunteerId} className="py-2">
+          <div className="flex items-center justify-between gap-3">
+            <button type="button" onClick={() => onOpenPerson?.(vid)} className="text-left min-w-0">
+              <div className="text-[14px] font-bold text-ink"><Name>{stripUnit(v.name)}</Name></div>
+              <div className="text-[12.5px] text-muted">{/* Oct 15 client: "call any time" ends at 24:00, which showed "until 12:00 PM" */}{String(v.until).slice(0, 5) === '24:00' ? (String(v.from ?? '').slice(0, 5) === '00:00' ? 'Any time' : 'until midnight') : `until ${fmtTime(v.until)}`}{v.note ? ` · ${v.note}` : ''}</div>
+              {last && <div className="text-[12.5px] font-bold text-forest">Called {fmtTimeEastern(last.occurredAt)}{last.outcome !== 'Called' ? ` — ${last.outcome}` : ''}{last.byName ? ` (${last.byName})` : ''}</div>}
+            </button>
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+              {v.phone && (
+                // Oct 11 client: tapping the number also opens Log call, so they remember to log it.
+                <a href={telHref(v.phone)} onClick={() => setLogFor(vid)} className="haptic inline-flex items-center gap-1.5 rounded-[10px] border border-forest/40 px-3 py-2 text-[13px] font-bold text-forest">
+                  <Phone size={14} /> {fmtPhone(v.phone)}
+                </a>
+              )}
+              <button type="button" onClick={() => setLogFor(logFor === vid ? null : vid)}
+                      className="haptic rounded-[10px] border border-line px-3 py-2 text-[13px] font-bold text-ink hover:bg-cream" title="Write down how the call went">📞 I called</button>
+            </div>
+          </div>
+          {logFor === vid && <CallLogForm key={vid} volunteerId={vid} name={v.name.split(' ')[0] || v.name} onClose={() => setLogFor(null)} />}
+        </li>
+        );
+      })}
+    </ul>
   );
 }
 
 // ---- Oct 11 client: log the phone calls the office makes to on-call drivers.
 // API: POST/GET /api/volunteers/:id/call-log, GET /api/on-call/calls/today
 // (stored in the CRM log, so they also show in the driver's Recruiting history).
-export type CallRow = { id: number; volunteerId: number; occurredAt: string; byName: string | null; outcome: string; pickup: string | null; note: string | null };
+export type CallRow = { id: number; volunteerId: number; occurredAt: string; byName: string | null; outcome: string; pickup: string | null; note: string | null;
+  pickupRef?: string | null }; // Oct 16 client: the pickup's # (calls from a pickup card)
 type Outcome = 'will_take' | 'cant' | 'no_answer' | 'voicemail' | 'other';
 const OUTCOMES: Array<[Outcome, string]> = [
   ['will_take', 'Will take it'], ['cant', "Can't"], ['no_answer', 'No answer'], ['voicemail', 'Left a message'], ['other', 'Other'],
@@ -292,9 +333,9 @@ const OUTCOMES: Array<[Outcome, string]> = [
 type OpenPk = { id: number; ref_number?: string | null; scheduled_time: string | null; status: string; slots_capacity: number;
                 suppliers: string | null; steady_name?: string | null; contact_name: string | null; signups?: unknown[] };
 
-/** Oct 11 client: "Sun, Oct 11 · 2:14 PM — No answer — by Chaya · pickup #1089376 · note" */
+/** Oct 11 client: "Sun, Oct 11 · 2:14 PM — No answer — by Chaya · Bites cafe · note" (Oct 22 client: the pickup's name, never its number) */
 export function callLine(c: CallRow, withDay = true) {
-  return `${withDay ? `${fmtDay(c.occurredAt)} · ` : ''}${fmtTimeEastern(c.occurredAt)} — ${c.outcome}${c.byName ? ` — by ${c.byName}` : ''}${c.pickup ? ` · pickup ${c.pickup}` : ''}${c.note ? ` · ${c.note}` : ''}`;
+  return `${withDay ? `${fmtDay(c.occurredAt)} · ` : ''}${fmtTimeEastern(c.occurredAt)}${c.outcome !== 'Called' ? ` — ${c.outcome}` : ''}${c.byName ? ` — by ${c.byName}` : ''}${c.pickup ? ` · ${hidePickupIds(c.pickup)}` : ''}${c.note ? ` · ${c.note}` : ''}`;
 }
 
 /** Oct 11 client: small form — what happened on the call, which pickup (optional), a note. */
@@ -316,9 +357,7 @@ export function CallLogForm({ volunteerId, name, onClose }: { volunteerId: numbe
     queryFn: () => api<{ data: OpenPk[] }>(`/api/pickup-instances?from=${from}&to=${to}`),
     staleTime: 60_000,
   });
-  // Oct 14 client: say the day when it isn't today (late / reposted / tomorrow).
-  const dayWord = (d?: string | null) => { const s = String(d ?? '').slice(0, 10); if (!s || s === today) return '';
-    return s === to ? ' · tomorrow' : ` · ${new Date(`${s}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} (late)`; };
+  // Oct 14 client: say the day when it isn't today (late / reposted / tomorrow) — Oct 22 client: pickupLabel does it.
   const CLOSED = new Set(['completed', 'delivered', 'picked_up', 'cancelled', 'missed', 'expired', 'pending_confirmation']);
   const open = (pk.data?.data ?? []).filter((p: any) => !CLOSED.has(String(p.status).toLowerCase())
     && !p.is_test && !p.cancelled_at
@@ -339,7 +378,7 @@ export function CallLogForm({ volunteerId, name, onClose }: { volunteerId: numbe
     return (
       <div className="mt-2 rounded-[12px] border border-forest/30 bg-sage/40 px-3 py-2 text-[13.5px]">
         <b className="text-forest">Logged ✓</b>
-        {hint && <div className="mt-1 text-ink">Now assign {hint.driverName ?? name} on the pickup: <b>#{hint.ref ?? ''} {hint.label}</b> (Live Board → open the pickup → assign).</div>}
+        {hint && <div className="mt-1 text-ink">Now assign {hint.driverName ?? name} on the pickup: <b>{hint.label}</b> (Live Board → open the pickup → assign).</div>}
         {hint && onClose && <button type="button" onClick={onClose} className="haptic mt-1 text-[12.5px] font-bold text-forest hover:underline">Close</button>}
       </div>
     );
@@ -359,7 +398,8 @@ export function CallLogForm({ volunteerId, name, onClose }: { volunteerId: numbe
         <option value="">{pk.isLoading ? 'Loading pickups…' : open.length ? 'About which pickup? (optional)' : 'About which pickup? (none need a driver right now)'}</option>
         {open.map((p) => (
           <option key={p.id} value={p.id}>
-            #{p.ref_number ?? p.id} · {p.suppliers || p.steady_name || p.contact_name || 'Pickup'}{dayWord((p as any).scheduled_date)}{p.scheduled_time ? ` · ${fmtTime(p.scheduled_time)}` : ''}
+            {/* Oct 22 client: "Hive Discount Store · 9:00 AM" — the name (or street), never the pickup number. */}
+            {pickupLabel(p as any, today)}{String((p as any).scheduled_date ?? '').slice(0, 10) < today ? ' (late)' : ''}
           </option>
         ))}
       </select>

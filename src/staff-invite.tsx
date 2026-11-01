@@ -12,7 +12,9 @@ import { useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, setAuth, dispatchers } from './api';
 import { cx, SearchSelect } from './design';
+import { displayPhone } from './display'; // Oct 23 client
 import { IOS_APP_STORE_URL, PLAY_HTTPS_URL } from './app-version-check'; // Oct 14 client
+import { uiConfirm } from './ui-dialogs'; // Oct 29 client
 
 export const ACCESS_SECTIONS: { key: string; label: string; hint: string }[] = [
   { key: 'live',       label: 'Live Board',      hint: 'Open pickups right now' },
@@ -75,7 +77,8 @@ function Shell({ title, onClose, children }: { title: string; onClose: () => voi
 }
 
 type AppLinks = { web: string; android: string | null; ios: string | null };
-type InviteDone = { url: string; texted: boolean; username?: string; links?: AppLinks; textProblem?: string | null; sentTo?: string | null };
+type InviteDone = { url: string; texted: boolean; username?: string; links?: AppLinks; textProblem?: string | null; sentTo?: string | null;
+                    /** Oct 29 client (one login): dispatcher was added to his own driver login */ upgraded?: boolean; role?: string };
 const fmtWhen = (x: string | null | undefined) => x
   ? new Date(x).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
   : '';
@@ -90,8 +93,26 @@ export function portalLoginStatus(pl: any | null | undefined): { text: string; t
   return { text: pl.invitedAt ? `Invited ${fmtWhen(pl.invitedAt)}` : 'Portal login ✓', tone: 'ok' };
 }
 
+/** Oct 29 client (ONE login per person): dispatcher added to his own driver login — nothing to send. */
+function UpgradeResult({ done, onClose }: { done: InviteDone; onClose: () => void }) {
+  return (
+    <div className="space-y-3" data-testid="upgrade-result">
+      <div className="rounded-[12px] bg-sage/50 border border-sage-line px-4 py-3 text-[13px] leading-snug">
+        ✅ {done.role === 'dispatcher' || !done.role ? 'Dispatcher' : 'Office'} access is on, on his own login <b className="font-mono">{done.username}</b>.
+        Same username and password. No second login, no invite text.
+      </div>
+      <div className="text-[12.5px] text-muted leading-snug">
+        When he opens the app or the website, he sees <b>🚗 Driver view</b> / <b>🧭 Dispatcher view</b> to switch. The change shows
+        within a minute. Phone apps get the switch after the next app update.
+      </div>
+      <div className="flex justify-end"><button onClick={onClose} className="haptic rounded-[10px] border border-line px-4 py-2 text-[13px] font-bold">Done</button></div>
+    </div>
+  );
+}
+
 function InviteResult({ done, onClose }: { done: InviteDone; onClose: () => void }) {
   const [copied, setCopied] = useState<string | null>(null);
+  if (done.upgraded) return <UpgradeResult done={done} onClose={onClose} />;
   const copy = (k: string, v: string) => { void navigator.clipboard?.writeText(v); setCopied(k); };
   const row = (k: string, label: string, v: string) => (
     <div key={k}>
@@ -118,7 +139,8 @@ function InviteResult({ done, onClose }: { done: InviteDone; onClose: () => void
   );
 }
 
-type Prefill = { firstName?: string | null; lastName?: string | null; phone?: string | null; email?: string | null; hasVolunteerLogin?: boolean };
+type Prefill = { firstName?: string | null; lastName?: string | null; phone?: string | null; email?: string | null; hasVolunteerLogin?: boolean;
+                 /** Oct 29 client (one login): the driver profile (roster card) */ volunteerId?: number | null };
 
 export function InviteStaffModal({ onClose, prefill }: { onClose: () => void; prefill?: Prefill }) {
   const qc = useQueryClient();
@@ -128,6 +150,7 @@ export function InviteStaffModal({ onClose, prefill }: { onClose: () => void; pr
   const [email, setEmail] = useState(prefill?.email ?? '');
   const [username, setUsername] = useState('');
   const [hasVolLogin, setHasVolLogin] = useState(!!prefill?.hasVolunteerLogin);
+  const [volunteerId, setVolunteerId] = useState<number | null>(prefill?.volunteerId ?? null); // Oct 29 client
   const [role, setRole] = useState<'dispatcher' | 'staff' | 'coordinator' | 'admin'>('dispatcher');
   const [sections, setSections] = useState<string[]>(PRESETS[0]!.sections!);
   const [sendText, setSendText] = useState(true);
@@ -138,29 +161,35 @@ export function InviteStaffModal({ onClose, prefill }: { onClose: () => void; pr
   const people = (roster.data?.data ?? []) as any[];
   const pick = (p: any) => {
     setFirst(p.firstName ?? ''); setLast(p.lastName ?? ''); setPhone(p.phone ?? ''); setEmail(p.email ?? '');
-    setHasVolLogin(p.userId != null);
+    setHasVolLogin(p.userId != null); setVolunteerId(p.id != null ? Number(p.id) : null);
   };
   const mut = useMutation({
     mutationFn: () => api<{ data: { inviteUrl: string; texted: boolean; username: string; links: AppLinks } }>('/api/admin-users/new-access', {
       method: 'POST',
-      body: JSON.stringify({ firstName, lastName, phone, email: hasVolLogin ? '' : email, username, role, accessSections: sections, sendText }),
+      body: JSON.stringify({ firstName, lastName, phone, email: hasVolLogin ? '' : email, username: hasVolLogin ? '' : username, role,
+                             accessSections: sections, sendText: hasVolLogin ? false : sendText, ...(volunteerId ? { volunteerId } : {}) }),
     }),
     onSuccess: (r) => {
+      if ((r.data as any).upgraded) { // Oct 29 client: the same login, no invite
+        setDone({ url: '', texted: false, upgraded: true, username: r.data.username, role: (r.data as any).role });
+        for (const k of ['admin-dispatchers', 'admin-dispatchers-attendance', 'dispatchers', 'dispatcher-roster']) qc.invalidateQueries({ queryKey: [k] });
+        return;
+      }
       setDone({ url: r.data.inviteUrl, texted: r.data.texted, username: r.data.username, links: r.data.links, textProblem: (r.data as any).textProblem, sentTo: (r.data as any).sentTo });
       for (const k of ['admin-dispatchers', 'admin-dispatchers-attendance', 'dispatchers']) qc.invalidateQueries({ queryKey: [k] });
     },
     onError: (e: any) => setErr(e?.message || 'Invite failed'),
   });
   const inp = 'mt-1 w-full rounded-[10px] border border-line bg-paper px-3 py-2 text-[13px] font-normal';
-  if (done) return <Shell title="Portal login created" onClose={onClose}><InviteResult done={done} onClose={onClose} /></Shell>;
+  if (done) return <Shell title={done.upgraded ? 'Dispatcher turned on' : 'Portal login created'} onClose={onClose}><InviteResult done={done} onClose={onClose} /></Shell>;
   return (
-    <Shell title="Create a portal login" onClose={onClose}>
+    <Shell title={hasVolLogin ? 'Make dispatcher (same login)' : 'Create a portal login'} onClose={onClose}>
       {!prefill && (
         <div className="block text-[12px] font-bold">Choose from dispatchers
           <div className="mt-1">
             <SearchSelect items={people} getKey={(p: any) => p.id}
                           getLabel={(p: any) => `${p.firstName} ${p.lastName}`}
-                          getHint={(p: any) => `${p.phone ?? 'no phone'} · ${portalLoginStatus(p.portalLogin).text}`}
+                          getHint={(p: any) => `${p.phone ? displayPhone(p.phone) : 'no phone'} · ${portalLoginStatus(p.portalLogin).text}`}
                           onPick={pick} placeholder={roster.isLoading ? 'Loading…' : 'Type a name or phone…'}
                           emptyText="No dispatcher matches — type the details below" />
           </div>
@@ -170,9 +199,9 @@ export function InviteStaffModal({ onClose, prefill }: { onClose: () => void; pr
         <label className="block text-[12px] font-bold">First name<input value={firstName} onChange={(e) => setFirst(e.target.value)} className={inp} /></label>
         <label className="block text-[12px] font-bold">Last name<input value={lastName} onChange={(e) => setLast(e.target.value)} className={inp} /></label>
         <label className="block text-[12px] font-bold">Cell phone<input value={phone} onChange={(e) => setPhone(e.target.value)} className={inp} placeholder="845-555-1234" /></label>
-        <label className="block text-[12px] font-bold">Username
+        {!hasVolLogin && <label className="block text-[12px] font-bold">Username
           <input value={username} onChange={(e) => setUsername(e.target.value)} className={inp}
-                 placeholder={hasVolLogin ? 'blank = first.last' : (email.trim() ? 'blank = their email' : 'blank = their phone')} /></label>
+                 placeholder={email.trim() ? 'blank = their email' : 'blank = their phone'} /></label>}
         {!hasVolLogin && <label className="block text-[12px] font-bold col-span-2">Email (optional)<input value={email} onChange={(e) => setEmail(e.target.value)} className={inp} /></label>}
         <label className="block text-[12px] font-bold col-span-2">Role
           <select value={role} onChange={(e) => setRole(e.target.value as any)} className={inp}>
@@ -181,24 +210,26 @@ export function InviteStaffModal({ onClose, prefill }: { onClose: () => void; pr
           </select></label>
       </div>
       {hasVolLogin && (
-        <div className="rounded-[10px] bg-amber-soft/60 border border-amber/40 px-3 py-2 text-[12px]">
-          This person is also a volunteer and already uses their phone for the volunteer app. The portal login is
-          separate and gets its own username, so both keep working.
+        <div data-testid="one-login-note" className="rounded-[10px] bg-sage/50 border border-sage-line px-3 py-2 text-[12.5px] leading-snug">
+          {/* Oct 29 client: ONE login per person */}
+          <b>One login.</b> They already have a driver app login. Dispatcher access is added to <b>that same login</b>:
+          same username and password, no second login, no invite text. They get a
+          <b> 🚗 Driver view</b> / <b>🧭 Dispatcher view</b> switch.
         </div>
       )}
       <div className="text-[12px] font-bold">What can they open?</div>
       <AccessPicker value={sections} onChange={setSections} />
-      <label className="flex items-center gap-2 text-[12.5px]">
+      {!hasVolLogin && <label className="flex items-center gap-2 text-[12.5px]">
         <input type="checkbox" checked={sendText} onChange={(e) => setSendText(e.target.checked)} className="h-4 w-4 accent-forest" />
         Text them the link, username and app links <span className="text-muted">(wording: Messaging → Groups → Message templates)</span>
-      </label>
+      </label>}
       {err && <div className="text-[12px] text-clay">{err}</div>}
       <div className="flex justify-end gap-2">
         <button onClick={onClose} className="haptic rounded-[10px] border border-line px-4 py-2 text-[13px] font-bold text-muted">Cancel</button>
-        <button disabled={!firstName.trim() || (!phone.trim() && !email.trim() && !username.trim()) || sections.length === 0 || mut.isPending}
+        <button disabled={!firstName.trim() || (!phone.trim() && !email.trim() && !username.trim() && !volunteerId) || sections.length === 0 || mut.isPending}
                 onClick={() => { setErr(null); mut.mutate(); }}
                 className="haptic rounded-[10px] bg-forest px-4 py-2 text-[13px] font-bold text-paper disabled:opacity-50">
-          {mut.isPending ? 'Creating…' : 'Create login'}
+          {mut.isPending ? (hasVolLogin ? 'Turning on…' : 'Creating…') : hasVolLogin ? 'Turn on dispatcher' : 'Create login'}
         </button>
       </div>
     </Shell>
@@ -208,6 +239,7 @@ export function InviteStaffModal({ onClose, prefill }: { onClose: () => void; pr
 type LoginUser = {
   id: number; firstName: string | null; lastName: string | null; accessSections?: string[] | null;
   invitePending?: boolean; phone?: string | null; username?: string | null; email?: string | null; role?: string | null;
+  /** Oct 29 client (one login): this login is also the driver's own app login */ driverLogin?: boolean;
 };
 
 /** Oct 5 client: edit a portal login (name, username, phone, role, access) and resend its link. */
@@ -237,6 +269,12 @@ export function AccessModal({ user, onClose }: { user: LoginUser; onClose: () =>
     onSuccess: (r) => { refresh(); setResent({ url: r.data.inviteUrl, texted: r.data.texted, username: r.data.username, links: r.data.links, textProblem: (r.data as any).textProblem, sentTo: (r.data as any).sentTo }); },
     onError: (e: any) => setErr(e?.message || 'Could not create a new link'),
   });
+  // Oct 29 client (one login): dispatcher off -> the same login is a driver login again.
+  const driverOnly = useMutation({
+    mutationFn: () => api(`/api/admin-users/${user.id}/driver-only`, { method: 'POST', body: '{}' }),
+    onSuccess: () => { refresh(); qc.invalidateQueries({ queryKey: ['dispatcher-roster'] }); onClose(); },
+    onError: (e: any) => setErr(e?.message || 'Could not turn off dispatcher'),
+  });
   const name = [user.firstName, user.lastName].filter(Boolean).join(' ');
   const inp = 'mt-1 w-full rounded-[10px] border border-line bg-paper px-3 py-2 text-[13px] font-normal';
   if (resent) return <Shell title={`New link for ${name}`} onClose={onClose}><InviteResult done={resent} onClose={onClose} /></Shell>;
@@ -258,6 +296,16 @@ export function AccessModal({ user, onClose }: { user: LoginUser; onClose: () =>
         Use the standard menu for their role
       </label>
       {!useDefault && <AccessPicker value={sections} onChange={setSections} />}
+      {user.driverLogin && String(user.role) === 'dispatcher' && (
+        <div className="rounded-[10px] border border-line bg-cream/50 px-3 py-2 text-[12px] flex flex-wrap items-center justify-between gap-2">
+          <span>This is also <b>{user.firstName ?? 'their'}</b>'s driver login (one login).</span>
+          <button disabled={driverOnly.isPending} data-testid="turn-off-dispatcher"
+                  onClick={() => { void uiConfirm(`Turn off dispatcher for ${name}?\n\nThe same login goes back to the driver app only (same username and password).`).then((ok) => { if (ok) driverOnly.mutate(); }); }}
+                  className="haptic rounded-[10px] border border-clay/40 px-3 py-1.5 text-[12px] font-bold text-clay disabled:opacity-50">
+            {driverOnly.isPending ? '…' : 'Turn off dispatcher'}
+          </button>
+        </div>
+      )}
       {err && <div className="text-[12px] text-clay">{err}</div>}
       <div className="flex flex-wrap justify-between gap-2">
         <button onClick={() => resend.mutate()} disabled={resend.isPending}
@@ -279,7 +327,7 @@ export function AcceptInvite() {
   const { token = '' } = useParams<{ token: string }>();
   const info = useQuery({
     queryKey: ['invite', token], retry: false,
-    queryFn: () => api<{ data: { firstName: string; role: string; username: string; links?: { android: string; ios: string } } }>(`/api/auth/invite/${token}`),
+    queryFn: () => api<{ data: { firstName: string; role: string; username: string; reset?: boolean; links?: { android: string; ios: string } } }>(`/api/auth/invite/${token}`),
   });
   // Oct 14 client: a volunteer sees "You're all set" with the app links instead of jumping into the web portal.
   const [allSet, setAllSet] = useState<{ token: string; user: any } | null>(null);
@@ -295,16 +343,27 @@ export function AcceptInvite() {
     onError: (e: any) => setErr(e?.message || 'Could not set your password'),
   });
   const inp = 'mt-1 w-full rounded-[12px] border border-line bg-paper px-3 py-2.5 text-[15px]';
+  const isReset = !!info.data?.data.reset; // Oct 22 client: an existing login (Forgot or reset password?)
   return (
     <div className="min-h-screen bg-cream flex items-start justify-center px-4 pt-16">
       <div className="w-full max-w-sm rounded-[18px] border border-line bg-paper p-6 space-y-4 shadow-card">
         <img src={`${(import.meta as any).env?.BASE_URL ?? '/'}zlz-logo-wordmark.png`} alt="Zeh L'Zeh" className="h-[72px] w-auto object-contain mx-auto" />
-        {allSet ? <VolunteerAllSet username={info.data?.data.username ?? ''} links={info.data?.data.links}
+        {allSet ? <VolunteerAllSet reset={isReset} username={info.data?.data.username ?? ''} links={info.data?.data.links}
                                    onWeb={() => { setAuth(allSet.token, allSet.user); window.location.href = portalBase() + '/'; }} /> :
-         info.isLoading ? <div className="text-[14px] text-muted">Checking your invite…</div> :
-         info.isError ? <div className="text-[14px] text-clay">{(info.error as Error)?.message || 'This invite link has expired. Ask the office for a new one.'}</div> : (
+         info.isLoading ? <div className="text-[14px] text-muted">Checking your link…</div> :
+         info.isError ? (
+          <div className="space-y-3">
+            <div className="text-[14px] text-clay">{(info.error as Error)?.message || 'This link has expired or was already used.'}</div>
+            <a href={portalBase() + '/'} className="haptic block w-full rounded-[12px] border border-forest/40 px-4 py-2.5 text-center text-[14px] font-bold text-forest">Go to sign in</a>
+          </div>
+         ) : (
           <>
-            <div className="text-[15px]">Welcome, <b>{info.data!.data.firstName}</b>! Choose a password to finish setting up your account.</div>
+            {isReset ? (
+              <>
+                <div className="text-[20px] font-display font-semibold" data-testid="reset-title">Set a new password</div>
+                <div className="text-[15px]">Hi <b>{info.data!.data.firstName}</b>, choose a new password. Other phones or computers signed in to this account will be signed out.</div>
+              </>
+            ) : <div className="text-[15px]">Welcome, <b>{info.data!.data.firstName}</b>! Choose a password to finish setting up your account.</div>}
             <div className="text-[12.5px] text-muted">Your username: <b>{info.data!.data.username}</b></div>
             <label className="block text-[12.5px] font-bold">New password (at least 8 characters)
               <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} className={inp} autoComplete="new-password" /></label>
@@ -314,7 +373,7 @@ export function AcceptInvite() {
             {err && <div className="text-[12px] text-clay">{err}</div>}
             <button disabled={pw.length < 8 || pw !== pw2 || accept.isPending} onClick={() => { setErr(null); accept.mutate(); }}
                     className="haptic w-full rounded-[12px] bg-forest px-4 py-3 text-[15px] font-bold text-paper disabled:opacity-50">
-              {accept.isPending ? 'Setting up…' : 'Set password & sign in'}
+              {accept.isPending ? (isReset ? 'Saving…' : 'Setting up…') : isReset ? 'Save new password & sign in' : 'Set password & sign in'}
             </button>
           </>
         )}
@@ -324,7 +383,7 @@ export function AcceptInvite() {
 }
 
 /** Oct 14 client: after a volunteer chooses a password — get the app and log in. */
-function VolunteerAllSet({ username, links, onWeb }: { username: string; links?: { android: string; ios: string }; onWeb: () => void }) {
+function VolunteerAllSet({ username, links, onWeb, reset }: { username: string; links?: { android: string; ios: string }; onWeb: () => void; reset?: boolean }) {
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
   const isAndroid = /android/i.test(ua);
   const isIOS = /iphone|ipad|ipod/i.test(ua) || (/macintosh/i.test(ua) && typeof navigator !== 'undefined' && navigator.maxTouchPoints > 1);
@@ -334,8 +393,8 @@ function VolunteerAllSet({ username, links, onWeb }: { username: string; links?:
   const small = 'haptic block w-full rounded-[12px] border border-forest/40 px-4 py-2.5 text-center text-[14px] font-bold text-forest';
   return (
     <div className="space-y-3" data-testid="invite-all-set">
-      <div className="text-[18px] font-display font-semibold">You're all set ✅</div>
-      <div className="text-[15px]">Open the Zeh L'Zeh app and log in with <b className="font-mono">{username}</b> and the password you just chose.</div>
+      <div className="text-[18px] font-display font-semibold">{reset ? 'Password changed ✅' : "You're all set ✅"}</div>
+      <div className="text-[15px]">{reset ? 'In the Zeh L\'Zeh app, sign in again with ' : 'Open the Zeh L\'Zeh app and log in with '}<b className="font-mono">{username}</b> and the {reset ? 'new password' : 'password you just chose'}.</div>
       {isAndroid ? <a href={android} className={big}>Get the app on Google Play</a>
        : isIOS ? <a href={ios} className={big}>Get the app on the App Store</a>
        : (

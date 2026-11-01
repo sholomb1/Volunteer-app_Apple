@@ -82,6 +82,11 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const data = (event.notification.data ?? {}) as Record<string, string>;
+  // Oct 29 client: "update ready" push carries a full store link -- open it as-is.
+  if (data.type === 'app_update' && /^https:\/\//.test(data.url ?? '')) {
+    event.waitUntil(self.clients.openWindow ? self.clients.openWindow(data.url).then(() => undefined) : Promise.resolve());
+    return;
+  }
   const target = data.url ? `/rescue${data.url.startsWith('/') ? data.url : '/' + data.url}` : '/rescue/';
   event.waitUntil((async () => {
     const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });

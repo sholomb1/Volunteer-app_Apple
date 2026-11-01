@@ -7,7 +7,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Send } from 'lucide-react';
 import { dm, getUser } from './api';
 import { cx } from './design';
-import { fmtTimeEastern } from './time-format';
+import { msgWhen } from './display'; // Oct 27 client: "Always write date"
 
 // Oct 9 client: `big` = driver app (16px input so iPhones don't zoom, larger
 // messages + send button). Office screens leave it off and look the same.
@@ -54,7 +54,7 @@ export function ChatThread({ userId, title, subtitle, color, big = false }: {
                                  mine ? 'bg-forest text-paper' : 'bg-paper border border-line text-ink')}>
                 <div>{m.body}</div>
                 <div className={cx('mt-0.5', big ? 'text-[12px]' : 'text-[10px]', mine ? 'text-paper/70' : 'text-muted')}>
-                  {fmtTimeEastern(m.created_at)}
+                  {msgWhen(m.created_at)}
                 </div>
               </div>
             </div>

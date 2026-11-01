@@ -2,42 +2,111 @@
  * Settings → Notifications panel. Per-event SMS routing — each event type
  * has a list of phone numbers and an enabled toggle per number. Call sites
  * in the backend pass the event key to notifyOffice(event, text).
+ * Oct 25 client: each event also has "Text the office: On / Off". Off = nobody
+ * gets that text (API portal_settings 'office_texts_off'); the bell alert still shows.
+ * Oct 26 client: friendlier — plain titles, a green sample of the exact text (made-up names),
+ * and plain sections. Titles / sections / samples come with the same list call (no extra request).
  */
 import { uiConfirm } from './ui-dialogs';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Clock } from 'lucide-react';
-import { notificationPrefs, type NotificationPref, type NotificationEvent, type OnCallWindow } from './api';
+import { api, notificationPrefs, type NotificationPref, type NotificationEvent, type OnCallWindow } from './api';
 import { cx, Button } from './design';
+import { displayPhone } from './display'; // Oct 23 client
+
+// Oct 25 client: the list call also returns the "Text the office: Off" list.
+type PrefsList = Awaited<ReturnType<typeof notificationPrefs.list>> & { textsOff?: string[]; sections?: string[] };
+/** Oct 26 client: the API adds a plain title, a section and a sample text to each event. */
+type OfficeTextEvent = NotificationEvent & { title?: string; section?: string; example?: string | null };
+const PREFS_KEY = ['notification-prefs'];
 
 export function NotificationsPanel() {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ['notification-prefs'], queryFn: notificationPrefs.list });
-  const events: NotificationEvent[] = q.data?.events ?? [];
+  const q = useQuery({ queryKey: PREFS_KEY, queryFn: notificationPrefs.list as () => Promise<PrefsList> });
+  const events: OfficeTextEvent[] = q.data?.events ?? [];
   const prefs: NotificationPref[]   = q.data?.data ?? [];
+  const textsOff: string[]          = q.data?.textsOff ?? [];
 
-  const grouped = events.map((ev) => ({
-    event: ev,
-    rows: prefs.filter((p) => p.eventType === ev.key),
-  }));
+  // Oct 26 client: plain sections ("Drivers", "Pickups", ...), in the order the API sends.
+  const sectionNames = [...new Set([...(q.data?.sections ?? []), ...events.map((ev) => ev.section ?? 'Other')])];
+  const sections = sectionNames
+    .map((name) => ({
+      name,
+      items: events.filter((ev) => (ev.section ?? 'Other') === name)
+        .map((ev) => ({ event: ev, rows: prefs.filter((p) => p.eventType === ev.key) })),
+    }))
+    .filter((s) => s.items.length > 0);
 
-  function invalidate() { qc.invalidateQueries({ queryKey: ['notification-prefs'] }); }
+  function invalidate() { qc.invalidateQueries({ queryKey: PREFS_KEY }); }
+
+  // Oct 25 client: On / Off per text kind. Shows at once; the server keeps the list.
+  const saveOff = useMutation({
+    mutationFn: (off: string[]) => api<{ data: { off: string[] } }>('/api/notification-prefs/texts-off', { method: 'PUT', body: JSON.stringify({ off }) }),
+    onMutate: async (off) => {
+      await qc.cancelQueries({ queryKey: PREFS_KEY });
+      const prev = qc.getQueryData<PrefsList>(PREFS_KEY);
+      if (prev) qc.setQueryData<PrefsList>(PREFS_KEY, { ...prev, textsOff: off });
+      return { prev };
+    },
+    onError: (_e, _off, ctx) => { if (ctx?.prev) qc.setQueryData(PREFS_KEY, ctx.prev); },
+    onSettled: invalidate,
+  });
+  function setTextOff(key: string, off: boolean) {
+    const cur = qc.getQueryData<PrefsList>(PREFS_KEY)?.textsOff ?? textsOff;
+    const next = off ? [...new Set([...cur, key])] : cur.filter((k) => k !== key);
+    saveOff.mutate(next);
+  }
 
   if (q.isLoading) return <div className="text-[14px] text-muted">Loading…</div>;
 
   return (
     <div className="space-y-3">
-      <p className="text-[13.5px] text-muted">
-        Each event below sends an SMS to the phones listed. Toggle a number off to mute that event for that phone, or add new phones per event.
-      </p>
-      {grouped.map(({ event, rows }) => (
-        <EventBlock key={event.key} event={event} rows={rows} onChanged={invalidate} />
+      <div className="space-y-1 text-[13.5px] text-muted">
+        <p>These are the texts the office gets. The green box shows what each text says (the names and times are only an example).</p>
+        <p>Switch "Text the office" to Off to stop that text for everyone; the bell alert in the portal still shows. It goes to the office numbers, or to the phones you add under it.</p>
+        <p className="text-[12.5px]">On a phone, the text comes without the emoji and a few symbols.</p>
+      </div>
+      {saveOff.error && <p className="text-clay text-[12.5px]">Could not save: {(saveOff.error as Error).message}</p>}
+      {sections.map((s) => (
+        <section key={s.name} className="pt-3" data-testid="office-text-section">
+          <h3 className="mb-2 px-1 text-[12.5px] font-extrabold uppercase tracking-[.08em] text-forest">{s.name}</h3>
+          <div className="space-y-3">
+            {s.items.map(({ event, rows }) => (
+              <EventBlock key={event.key} event={event} rows={rows} onChanged={invalidate}
+                          textOff={textsOff.includes(event.key)} onTextOff={(off) => setTextOff(event.key, off)} />
+            ))}
+          </div>
+        </section>
       ))}
     </div>
   );
 }
 
-function EventBlock({ event, rows, onChanged }: { event: NotificationEvent; rows: NotificationPref[]; onChanged: () => void }) {
+/** Oct 25 client: "Text the office: On / Off" for one kind of text. */
+function TextOfficeSwitch({ off, onChange }: { off: boolean; onChange: (off: boolean) => void }) {
+  const btn = (label: string, active: boolean, value: boolean) => (
+    <button type="button" aria-pressed={active} onClick={() => { if (!active) onChange(value); }}
+            className={cx('haptic px-3.5 py-1 text-[12.5px] font-extrabold transition',
+                          active ? (value ? 'bg-clay text-paper' : 'bg-forest text-paper') : 'bg-paper text-muted hover:text-ink')}>
+      {label}
+    </button>
+  );
+  return (
+    <div className="flex flex-wrap items-center gap-2" data-testid="office-text-switch" data-off={off ? '1' : '0'}>
+      <span className="text-[13.5px] font-bold text-ink">Text the office:</span>
+      <span className="inline-flex overflow-hidden rounded-full border-[1.4px] border-line">
+        {btn('On', !off, false)}
+        {btn('Off', off, true)}
+      </span>
+      {off && <span className="w-full text-[12.5px] text-clay font-semibold">Off: nobody gets this text (the bell alert in the portal still shows)</span>}
+    </div>
+  );
+}
+
+function EventBlock({ event, rows, onChanged, textOff, onTextOff }: {
+  event: OfficeTextEvent; rows: NotificationPref[]; onChanged: () => void; textOff: boolean; onTextOff: (off: boolean) => void;
+}) {
   const [newPhone, setNewPhone] = useState('');
   const [newLabel, setNewLabel] = useState('');
   const add = useMutation({
@@ -46,13 +115,21 @@ function EventBlock({ event, rows, onChanged }: { event: NotificationEvent; rows
   });
 
   return (
-    <div className="border border-line bg-paper rounded-[14px] overflow-hidden">
-      <div className="px-4 py-2.5 bg-forest text-paper">
-        <div className="text-[13px] font-extrabold uppercase tracking-[.06em]">{event.label}</div>
-        <div className="text-[11.5px] opacity-80 mt-0.5 font-mono">{event.key}</div>
+    <div className="border border-line bg-paper rounded-[14px] overflow-hidden" data-event={event.key}>
+      <div className="px-4 pt-3.5">
+        <div className="text-[15px] font-bold leading-snug text-ink" title={event.label}>{event.title ?? event.label}</div>
       </div>
-      <div className="p-3 space-y-2">
-        {rows.length === 0 && <div className="text-[13px] text-muted">No phones — this event will silently drop.</div>}
+      <div className="px-4 pb-3.5 pt-2.5 space-y-3">
+        {event.example && (
+          <div className={cx('rounded-[12px] border border-sage-line bg-sage/50 px-3.5 py-2.5 transition', textOff && 'opacity-50')}
+               data-testid="office-text-example">
+            <div className="text-[10.5px] font-extrabold uppercase tracking-[.08em] text-forest">The text says</div>
+            <div className="mt-1 whitespace-pre-line break-words text-[13.5px] leading-relaxed text-forest-deep">{event.example}</div>
+          </div>
+        )}
+        <TextOfficeSwitch off={textOff} onChange={onTextOff} />
+        <div className={cx('space-y-2 transition', textOff && 'opacity-50 grayscale')}>
+        {rows.length === 0 && <div className="text-[13px] text-muted">No phones listed: this text goes to the office numbers.</div>}
         {rows.map((r) => <PrefRow key={r.id} row={r} onChanged={onChanged} />)}
         <form onSubmit={(e) => { e.preventDefault(); if (newPhone.trim().length >= 7) add.mutate(); }}
               className="flex flex-col sm:flex-row gap-2 pt-2 border-t border-line">
@@ -67,6 +144,7 @@ function EventBlock({ event, rows, onChanged }: { event: NotificationEvent; rows
           </Button>
         </form>
         {add.error && <p className="text-clay text-[12.5px]">{(add.error as Error).message}</p>}
+        </div>
       </div>
     </div>
   );
@@ -90,7 +168,7 @@ function PrefRow({ row, onChanged }: { row: NotificationPref; onChanged: () => v
   return (
     <div className={cx('rounded-[10px]', row.enabled ? 'bg-sage/40' : 'bg-cream/60')}>
       <div className="flex items-center gap-3 px-3 py-2">
-        <span className="font-mono text-[13.5px] text-ink">{row.phone}</span>
+        <span className="text-[13.5px] text-ink">{displayPhone(row.phone)}</span>
         {row.label && <span className="text-[12.5px] text-muted">{row.label}</span>}
         <button onClick={() => setShowSched((v) => !v)}
                 className={cx('haptic ml-auto flex items-center gap-1 rounded-full px-2 py-0.5 text-[11.5px] font-bold border',

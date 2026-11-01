@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { MapPin, X } from 'lucide-react';
 import { API_BASE, api, getToken } from './api';
+import { displayPhone, shortAddress as displayShortAddress, shortAddressOf } from './display'; // Oct 23 client
 
 export type PickedPlace = {
   placeId: string; name: string; formatted: string;
@@ -192,13 +193,13 @@ export function MissingLocationsModal({ onClose, onSaved }: { onClose: () => voi
                       <div className="min-w-0 flex-1 grid sm:grid-cols-2 gap-x-4 gap-y-0.5">
                         <div className="min-w-0">
                           <div className="font-bold text-ink truncate">{r.name}</div>
-                          <div className="text-muted truncate">{[r.have.addressLine1, r.have.city].filter(Boolean).join(', ') || 'No address'}{r.have.contactPhone ? ` · ${r.have.contactPhone}` : ''}</div>
+                          <div className="text-muted truncate">{shortAddressOf(r.have.addressLine1, r.have.city) || 'No address'}{r.have.contactPhone ? ` · ${displayPhone(r.have.contactPhone)}` : ''}</div>
                         </div>
                         <div className="min-w-0">
                           {r.match ? (
                             <>
                               <div className="font-semibold text-ink truncate">📍 {r.match.name}</div>
-                              <div className="text-muted truncate">{r.match.address.replace(/,\s*USA$/, '')}{r.match.phone ? ` · ${r.match.phone}` : ''}</div>
+                              <div className="text-muted truncate">{displayShortAddress(r.match.address)}{r.match.phone ? ` · ${displayPhone(r.match.phone)}` : ''}</div>
                             </>
                           ) : <div className="text-muted">—</div>}
                           <div className={r.confident ? 'text-forest' : 'text-[#9a7415]'}>

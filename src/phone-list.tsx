@@ -19,15 +19,11 @@ export type PhoneRow = { phone: string; label: string };
 export type PhonesState = { rows: PhoneRow[]; textTo: string; callAt: string }; // textTo / callAt = 10 digits
 export type PhonesView = { numbers: Array<{ phone: string; label: string | null; call?: boolean; text?: boolean }>; callAt: string | null; textTo: string | null } | null | undefined;
 
-/** A typed number -> 10 digits, or '' when it isn't a 10-digit US number (a leading 1 is dropped). */
-export function digits10(p: unknown): string {
-  let d = String(p ?? '').replace(/\D/g, '');
-  if (d.length === 11 && d.startsWith('1')) d = d.slice(1);
-  return d.length === 10 ? d : '';
-}
+// Oct 23 client ("same style everywhere"): the one phone format lives in src/display.ts.
+import { digits10, displayPhone } from './display';
+export { digits10 };
 export function fmtPhone(p: unknown): string {
-  const d = digits10(p);
-  return d ? `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}` : String(p ?? '');
+  return digits10(p) ? displayPhone(p) : String(p ?? '');
 }
 
 /** Editor state from what the API returned (`phones`), or from a single old phone field. */

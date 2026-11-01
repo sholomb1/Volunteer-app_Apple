@@ -10,11 +10,13 @@ import { ArrowLeft, Phone, Send, User2 } from 'lucide-react';
 import { volunteer, admin, adminCRUD, getUser, API_BASE, getToken, api, type OpenPickup } from '../api';
 import { Avatar, SlotAvatars, SlotLabel, StatusTimeline, StickyCTA, cx } from '../design';
 import { fmtTimeEastern, nyToday } from '../time-format';
+import { displayPhone, msgWhen, shortAddress, whenAt } from '../display'; // Oct 23 client: same style everywhere
 import { DROPOFF, DROPOFF_MAPS_URL } from '../dropoff';
 import { uiConfirm, uiNotify } from '../ui-dialogs';
 import { driverError, fmtWhenLine, storeName, useBack, useTakePickup } from './driver-card';
 import { StorePhotoCard } from '../store-photo'; // Oct 14 client
 import { readExtraContacts, telHref } from '../extra-contacts'; // Oct 12 client
+import { getViewMode } from '../view-switch'; // Oct 31 client: Driver view = what a driver sees
 
 // Oct 9 client: plain message when the proof photo can't be sent (weak signal).
 const PHOTO_UPLOAD_ERR = "Couldn't upload the photo — weak signal? Tap to try again.";
@@ -77,7 +79,10 @@ export function PickupDetail() {
   // get auto-promoted to admin mode because they have no volunteer profile.
   // Oct 5: dispatchers too — they have no volunteer list, so /pickup/mine|open/:id showed "no longer available".
   const isStaffUser = me && (me.role === 'admin' || me.role === 'coordinator' || me.role === 'staff' || me.role === 'dispatcher');
-  const mode = ((rawMode === 'mine' || rawMode === 'open') && isStaffUser) ? 'admin' : rawMode;
+  // Oct 31 client: "in your personal view you should only see what a regular person can see" — an office
+  // login in the Driver view gets the driver's pickup page, never the office one.
+  const inDriverView = !!me && getViewMode(me.id) === 'driver';
+  const mode = ((rawMode === 'mine' || rawMode === 'open') && isStaffUser && !inDriverView) ? 'admin' : rawMode;
 
   // fgh103 (Aug 17): live-poll + focus-refetch on the detail screen too so
   // if a driver sits on the detail after another driver claims, they see the
@@ -266,20 +271,15 @@ export function PickupDetail() {
         <button onClick={back} aria-label="Back" className="haptic grid h-[44px] w-[44px] place-items-center rounded-full bg-paper border border-line"><ArrowLeft size={20} /></button>
         {/* C3 Aug 13 — reference so drivers can quote it on the phone.
             Oct 9 client: drivers go by the text code (below); the portal # stays small for them. */}
-        {pickup.ref_number && (
-          isAdmin ? (
-            <span className="ml-auto inline-flex items-center rounded-full bg-cream border border-line px-3 py-1 text-[14px] text-forest font-extrabold tracking-wider">
-              #{pickup.ref_number}
-            </span>
-          ) : (
-            <span className="ml-auto text-[12px] text-muted">#{pickup.ref_number}</span>
-          )
-        )}
+        {/* Oct 22 client: no pickup numbers for drivers (they use the text code); a tiny grey ref for the office. */}
+        {pickup.ref_number && isAdmin ? (
+          <span className="ml-auto text-[11px] text-muted">ref {pickup.ref_number}</span>
+        ) : <span className="ml-auto" />}
         <Avatar initials={((me?.firstName?.[0] ?? '') + (me?.lastName?.[0] ?? '')) || '·'} />
       </div>
 
       <main className="flex-1 px-5 pb-4">
-        <h1 className="font-display font-semibold text-[32px] leading-[1.08] tracking-[-0.02em] mt-1">{storeName(pickup)}</h1>
+        <h1 className="font-display font-semibold text-[32px] leading-[1.08] tracking-[-0.02em] mt-1"><bdi dir="auto">{storeName(pickup)}</bdi></h1>
         {whenLine && <div className="font-display font-bold text-[22px] text-forest mt-2">{whenLine}</div>}
         {/* Oct 9 client: the same number the texts use. Hidden when this pickup was never texted. */}
         {!isAdmin && pickup.text_code && (
@@ -306,7 +306,7 @@ export function PickupDetail() {
         {!isAdmin && stage < 3 && extraContacts.map((c, i) => (
           <a key={i} href={telHref(c.phone)} data-extra-call
              className="haptic mt-2 flex items-center justify-center gap-2 min-h-[48px] rounded-[14px] bg-paper border border-sage-line text-forest font-bold text-[16px]">
-            <Phone size={18} /> Call {c.name || 'other contact'} · {c.phone}
+            <Phone size={18} /> Call {c.name ? <bdi dir="auto">{c.name}</bdi> : 'other contact'} · {displayPhone(c.phone)}
           </a>
         ))}
 
@@ -353,11 +353,11 @@ export function PickupDetail() {
               <span className="grid h-[40px] w-[40px] place-items-center rounded-[10px] bg-sage text-forest"><User2 size={20} /></span>
               <div className="flex-1 min-w-0">
                 <div className="text-[13px] font-extrabold uppercase tracking-[.06em] text-muted">{label}</div>
-                <div className="text-[17px] font-bold mt-0.5">{name}</div>
+                <div className="text-[17px] font-bold mt-0.5"><bdi dir="auto">{name}</bdi></div>
                 {addr ? (
-                  <a href={href} target="_blank" rel="noopener noreferrer"
+                  <a href={href} target="_blank" rel="noopener noreferrer" title={addr}
                      className="text-[15px] font-bold text-forest underline underline-offset-2 mt-0.5 inline-flex items-center min-h-[44px]">{/* Oct 14 client: 44px tap */}
-                    {addr}  ·  Open in Maps →
+                    {shortAddress(addr)}  ·  Open in Maps →
                   </a>
                 ) : dlvName ? (
                   <div className="text-[14px] text-muted mt-0.5">No address yet. Call the office if you need it.</div>
@@ -605,13 +605,7 @@ export function PickupDetail() {
 function fmtOpensAt(iso: string): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return '';
-  const t = d.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
-  const day = d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-  const today = nyToday();
-  const tomorrow = new Date(Date.parse(today + 'T12:00:00Z') + 86400e3).toISOString().slice(0, 10);
-  if (day <= today) return t;
-  if (day === tomorrow) return `tomorrow ${t}`;
-  return `${d.toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'short' })} ${t}`;
+  return whenAt(d); // Oct 23 client: one date + time format
 }
 
 function inferStage(p: any) {
@@ -657,6 +651,7 @@ function ChatPanel({ pickupId }: { pickupId: number }) {
                                   mine ? 'bg-forest text-paper' : 'bg-sage text-ink')}>
                  {!mine && <div className="text-[13px] font-bold opacity-70">{m.first_name} {m.last_name}</div>}
                  <div>{m.body}</div>
+                 <div className={cx('mt-0.5 text-[12px]', mine ? 'text-paper/70' : 'text-muted')}>{msgWhen(m.created_at)}</div>{/* Oct 27 client: "Always write date" */}
                </div>
              </div>
            );

@@ -11,6 +11,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Loader2, Check, Circle, Mail, LogOut, Menu, X, Home, Calendar, Map as MapIcon, MessageSquare, User, Settings as SettingsIcon, FileText } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { getUser, setAuth } from './api';
+import { STATUS } from './display'; // Oct 23 client: one status map
 
 export function cx(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(' ');
@@ -152,22 +153,26 @@ export function StatusTimeline({ stages, current }: { stages: TLStage[]; current
 
 // ---------------- Status pill ----------------
 
+// Oct 23 client ("same style everywhere"): finished / on-the-way words + colors come from the one map
+// (src/display.ts STATUS); the driver's own "Coming up" / "Ready to go" stay.
 export function StatusPill({ status }: { status: string }) {
-  const map: Record<string, { bg: string; fg: string; label: string }> = {
-    pending:     { bg: 'bg-amber-soft', fg: 'text-[#9a7415]', label: 'Waiting for a driver' },
-    scheduled:   { bg: 'bg-amber-soft', fg: 'text-[#9a7415]', label: 'Coming up' }, // Oct 8: also shows on a driver's own card
-    confirmed:   { bg: 'bg-sage',       fg: 'text-forest',    label: 'Ready to go' },
-    in_progress: { bg: 'bg-clay-soft',  fg: 'text-clay',      label: 'On the way' },
-    en_route:    { bg: 'bg-clay-soft',  fg: 'text-clay',      label: 'On the way' },
-    picked_up:   { bg: 'bg-clay-soft',  fg: 'text-clay',      label: 'Picked up' },
-    delivered:   { bg: 'bg-sage',       fg: 'text-forest',    label: 'Delivered' },
-    completed:   { bg: 'bg-sage',       fg: 'text-forest',    label: 'Delivered' },
-    cancelled:   { bg: 'bg-line',       fg: 'text-muted',     label: 'Cancelled' },
-    missed:      { bg: 'bg-clay-soft',  fg: 'text-clay',      label: 'Missed' },
+  const S = STATUS;
+  const map: Record<string, { cls: string; label: string }> = {
+    pending:     { cls: S.needs_confirmation.pill, label: 'Waiting for a driver' },
+    scheduled:   { cls: S.needs_confirmation.pill, label: 'Coming up' }, // Oct 8: also shows on a driver's own card
+    confirmed:   { cls: S.covered.pill,            label: 'Ready to go' },
+    in_progress: { cls: S.on_the_way.pill,         label: S.on_the_way.word },
+    en_route:    { cls: S.on_the_way.pill,         label: S.on_the_way.word },
+    picked_up:   { cls: S.on_the_way.pill,         label: 'Picked up' },
+    delivered:   { cls: S.done.pill,               label: S.done.word },
+    completed:   { cls: S.done.pill,               label: S.done.word },
+    cancelled:   { cls: S.cancelled.pill,          label: S.cancelled.word },
+    missed:      { cls: S.missed.pill,             label: S.missed.word },
+    expired:     { cls: S.expired.pill,            label: S.expired.word },
   };
   // Oct 8: never show a raw code like "in_progress" to a driver.
-  const m = map[status] ?? { bg: 'bg-line', fg: 'text-muted', label: String(status || '').replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()) };
-  return <span className={cx('inline-flex items-center text-[13px] font-bold rounded-full px-2.5 py-1', m.bg, m.fg)}>{m.label}</span>;
+  const m = map[status] ?? { cls: S.cancelled.pill, label: String(status || '').replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()) };
+  return <span className={cx('inline-flex items-center text-[13px] font-bold rounded-full border px-2.5 py-1', m.cls)}>{m.label}</span>;
 }
 
 // ---------------- App bar + screen scaffold ----------------

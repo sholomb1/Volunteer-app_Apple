@@ -6,6 +6,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import { Button, cx, SearchSelect, DateInput } from './design';
 import { fmtTime } from './time-format';
+import { flyerNames } from './steady-calendar'; // Oct 28 client: one clear name per pickup on the flyer
+import { tidyPlaceName } from './pickup-label';
 import { uiConfirm } from './ui-dialogs';
 
 type EmailRow = { kind: string; title: string; on: boolean; last: { at: string; count: number; sent: number } | null };
@@ -249,7 +251,7 @@ function loadImg(src: string): Promise<HTMLImageElement | null> {
   return new Promise((res) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = src; });
 }
 
-export async function downloadNeededCalendar(rows: Array<{ name: string; suppliers?: string | null; pickup_time?: string | null; day_of_week: number }>) {
+export async function downloadNeededCalendar(rows: Array<{ name: string; suppliers?: string | null; pickup_time?: string | null; day_of_week: number; candle?: { text: string } | null }>) {
   const days = [0, 1, 2, 3, 4, 5, 6].filter((d) => rows.some((r) => Number(r.day_of_week) === d));
   if (days.length === 0) return;
   const [logo, van] = await Promise.all([
@@ -294,9 +296,10 @@ export async function downloadNeededCalendar(rows: Array<{ name: string; supplie
     for (const r of rows.filter((rr) => Number(rr.day_of_week) === d)) {
       round(x, y, colW, cardH, 12); g.fillStyle = '#ffffff'; g.fill();
       g.strokeStyle = '#e6e0d3'; g.lineWidth = 1; g.stroke();
-      g.fillStyle = '#1f2a24'; g.font = font(700, 16); g.fillText(fit(r.name, colW - 26), x + 14, y + 27);
-      const sub = r.suppliers && r.suppliers !== r.name ? r.suppliers : '';
-      const time = r.pickup_time ? fmtTime(String(r.pickup_time).slice(0, 5)) : '';
+      // Oct 28 client: "Bravo · 10:00 AM · Bravo Pizza (K)" → "Bravo Pizza (K)" / "10:00 AM" (store only when it adds something).
+      const { title, sub } = flyerNames(r.name, r.suppliers, tidyPlaceName);
+      g.fillStyle = '#1f2a24'; g.font = font(700, 16); g.fillText(fit(title || r.name, colW - 26), x + 14, y + 27);
+      const time = r.candle?.text ?? (r.pickup_time ? fmtTime(String(r.pickup_time).slice(0, 5)) : ''); // Oct 23 client: candle lighting
       g.fillStyle = '#5b6459'; g.font = font(400, 14);
       g.fillText(fit([time, sub].filter(Boolean).join(' · '), colW - 26), x + 14, y + 50);
       y += cardH + gap;

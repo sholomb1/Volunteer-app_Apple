@@ -20,7 +20,7 @@ import { useLocationReporting, getTrackingEnabled, setTrackingEnabled } from '..
 import { nyToday } from '../time-format';
 import { DriverCard, useTakePickup, fmtWhenLine, storeName } from './driver-card';
 import { uiConfirm } from '../ui-dialogs';
-import { PauseSheet, PausedBox, REACH_SHORT, quietShort, useDriverSettings, usePause } from '../driver-settings'; // Oct 14 client
+import { PauseSheet, PausedBox, alertsOf, alertsShort, noAlerts, quietShort, useDriverSettings, usePause } from '../driver-settings'; // Oct 14 client
 
 const DONE = new Set(['completed', 'delivered', 'cancelled', 'missed']);
 // Oct 9 client: same "finished" rule as the Mine tab — the pickup is over, or
@@ -60,10 +60,10 @@ export function VolunteerHome({ user }: { user: AuthUser }) {
   const quiet = quietShort(st);
   const statusLine = !st ? ''
     : pause.paused ? `⏸ ${pause.pausedLine}`
-    : st.channel === 'none' ? '🔕 No pickup messages'
-    : st.channel === 'app' ? '🔔 Pickups by: App only'
-    : !st.smsOptIn && st.channel === 'text' ? '📩 Texts are turned off'
-    : `📩 Pickups by: ${REACH_SHORT[st.channel]}${quiet ? ` · Quiet ${quiet}` : ''}`;
+    // Oct 28 client: the three ticks (App / WhatsApp / Text).
+    : noAlerts(alertsOf(st)) ? '🔕 No pickup messages'
+    : !st.smsOptIn && alertsShort(alertsOf(st)) === 'Text' ? '📩 Texts are turned off'
+    : `📩 Pickups by: ${alertsShort(alertsOf(st))}${quiet ? ` · Quiet ${quiet}` : ''}`;
 
   return (
     <div className="min-h-screen pb-[80px]">
@@ -113,8 +113,8 @@ export function VolunteerHome({ user }: { user: AuthUser }) {
                 <button key={p.assignment_id ?? p.pickup_instance_id} onClick={() => nav(`/pickup/mine/${p.pickup_instance_id}`)}
                         className="haptic w-full min-h-[48px] flex items-center justify-between gap-3 px-4 py-2.5 text-left">
                   <span className="min-w-0 text-[15px]">
-                    <span className="font-bold text-forest">{fmtWhenLine(p.scheduled_date, p.scheduled_time).replace(' · ', ' ')}</span>
-                    <span className="text-ink/80"> — {storeName(p)}</span>
+                    <span className="font-bold text-forest">{fmtWhenLine(p.scheduled_date, p.scheduled_time)}</span>
+                    <span className="text-ink/80"> — <bdi dir="auto">{storeName(p)}</bdi></span>
                   </span>
                   <ArrowRight size={16} className="shrink-0 text-muted" />
                 </button>
@@ -148,6 +148,7 @@ export function VolunteerHome({ user }: { user: AuthUser }) {
         </FadeUp>
 
         <FadeUp delay={0.12}>
+          {/* Oct 31 client: Food to handle is office-only for now (no link in the driver view). */}
           <CenterHelpSectionForVolunteer />
         </FadeUp>
       </main>

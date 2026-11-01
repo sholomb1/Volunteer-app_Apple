@@ -7,11 +7,12 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import { cx } from './design';
+import { displayPhone, shortAddressOf } from './display'; // Oct 23 client: same style everywhere
 
 export type Family = { id: number; name: string; addressLine1: string | null; city: string | null; contactPhone: string | null; notes: string | null };
 
 const input = 'w-full rounded-[10px] border-[1.4px] border-line-2 bg-paper px-3 py-2.5 text-[13.5px] focus:border-forest focus:ring-2 focus:ring-forest/15 outline-none';
-const addr = (f: Family) => [f.addressLine1, f.city].filter(Boolean).join(', ');
+const addr = (f: Family) => shortAddressOf(f.addressLine1, f.city); // Oct 23 client: one short-address rule
 
 export function FamilyPicker({ value, onChange }: { value: number | ''; onChange: (id: number | '') => void }) {
   const qc = useQueryClient();
@@ -48,7 +49,7 @@ export function FamilyPicker({ value, onChange }: { value: number | ''; onChange
       <div className="flex items-start justify-between gap-3 rounded-[12px] border border-forest/40 bg-sage/40 px-3 py-2.5">
         <div className="min-w-0 text-[13.5px]">
           <div className="font-bold text-ink">{chosen.name}</div>
-          <div className="text-muted">{addr(chosen) || 'No address'}{chosen.contactPhone ? ` · ${chosen.contactPhone}` : ''}</div>
+          <div className="text-muted">{addr(chosen) || 'No address'}{chosen.contactPhone ? ` · ${displayPhone(chosen.contactPhone)}` : ''}</div>
           {chosen.notes && <div className="text-[12px] text-muted italic mt-0.5">{chosen.notes}</div>}
         </div>
         <button type="button" onClick={() => onChange('')} className="haptic text-[12.5px] font-bold text-forest underline shrink-0">Change</button>
@@ -97,7 +98,7 @@ export function FamilyPicker({ value, onChange }: { value: number | ''; onChange
           <button key={f.id} type="button" onClick={() => onChange(f.id)}
                   className={cx('haptic block w-full text-left px-3 py-2 hover:bg-sage/40')}>
             <div className="text-[13.5px] font-bold text-ink">{f.name}</div>
-            <div className="text-[12px] text-muted">{addr(f) || 'No address'}{f.contactPhone ? ` · ${f.contactPhone}` : ''}</div>
+            <div className="text-[12px] text-muted">{addr(f) || 'No address'}{f.contactPhone ? ` · ${displayPhone(f.contactPhone)}` : ''}</div>
           </button>
         ))}
       </div>

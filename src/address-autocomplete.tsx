@@ -29,6 +29,7 @@ type Suggestion = {
   main: string;
   secondary: string;
   full: string;
+  isPlace?: boolean; // Oct 28 client: a business (Google 'establishment'), not just a street address
 };
 
 // Minimal UUID v4 for the session token (no external dependency).
@@ -52,7 +53,7 @@ export function AddressAutocomplete({
 }: {
   value: string;
   onChange: (v: string) => void;
-  onPick?: (info: { address: string; placeId: string }) => void;
+  onPick?: (info: { address: string; placeId: string; name?: string }) => void; // Oct 28 client: + name of a business
   placeholder?: string;
   className?: string;
   disabled?: boolean;
@@ -144,7 +145,9 @@ export function AddressAutocomplete({
 
   function pick(s: Suggestion) {
     onChange(s.full);
-    onPick?.({ address: s.full, placeId: s.placeId.startsWith('local:') ? '' : s.placeId });
+    onPick?.({ address: s.full, placeId: s.placeId.startsWith('local:') ? '' : s.placeId,
+      // Oct 28 client: picking a business ("Monsey Takeout") also gives its name
+      ...(s.isPlace && s.main && !/^\d/.test(s.main.trim()) ? { name: s.main.trim() } : {}) });
     setOpen(false);
     setSuggestions([]);
     // Google recommends a fresh session token after each pick.

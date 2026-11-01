@@ -9,6 +9,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import { cx, SearchBar, DateInput } from './design';
+import { ReporterBox } from './report-problem'; // Oct 16 client: Text them + Copy for Claude
 
 type Task = {
   id: number; title: string; kind: Kind; relatedType: 'volunteer' | 'supplier' | 'prospect' | null;
@@ -48,6 +49,7 @@ export function TasksPanel() {
   params.set('status', scope === 'mine' ? 'open' : scope === 'done' ? 'done' : scope);
   if (scope === 'mine') params.set('assignee', 'me');
   if (kind) params.set('kind', kind);
+  params.set('bugReports', 'hide'); // Oct 16 client: they have their own "Bug reports" tab
   const tasks = useQuery({
     queryKey: ['tasks', scope, kind],
     queryFn: () => api<{ data: Task[] }>(`/api/tasks?${params.toString()}`),
@@ -183,6 +185,8 @@ function TaskModal({ task, onClose }: { task: Task | null; onClose: () => void }
           <div className="font-display font-semibold text-[16px]">{task ? 'Task' : 'New task'}</div>
           <button onClick={onClose} className="haptic grid h-8 w-8 place-items-center rounded-full hover:bg-cream text-muted">✕</button>
         </div>
+        {/* Oct 16 client: report/comment → From + 💬 Text them + 📋 Copy for Claude; other tasks → 📋 Copy for Claude */}
+        {task && <ReporterBox taskId={task.id} rev={history.dataUpdatedAt} onSent={refresh} copyAlways />}
         <label className={lbl}>Title<input value={title} onChange={(e) => setTitle(e.target.value)} className={inp} /></label>
         <div className="grid grid-cols-2 gap-3">
           <label className={lbl}>Type

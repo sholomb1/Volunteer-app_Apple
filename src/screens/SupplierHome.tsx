@@ -29,8 +29,10 @@ import { Plus, MessageSquare, ArrowLeft, Edit3, RotateCcw, Phone, ChevronDown, C
 import { api, supplier, dm, type AuthUser } from '../api';
 import { AppBar, Avatar, Card, FadeUp, Skeleton, cx } from '../design';
 import { ChatThread } from '../chat-thread';
-import { fmtTime, fmtDay } from '../time-format';
+import { fmtDay } from '../time-format';
 import { StorePhotoThumb } from '../store-photo'; // Oct 14 client
+import { STATUS } from '../display'; // Oct 23 client: one status map
+import { fmtWhenLine } from './driver-card';
 
 // Oct 9 client: same office number the driver screens use (Chat.tsx / Login.tsx).
 const OFFICE_PHONE = '(845) 363-5323';
@@ -233,7 +235,7 @@ export function SupplierHome({ user, listOnly }: { user: AuthUser; listOnly?: bo
       <main className="px-5">
         <FadeUp>
           <div className="text-[14px] font-bold text-muted">Donor</div>
-          <h1 className="font-display font-semibold text-[24px] leading-tight">{storeName}</h1>
+          <h1 className="font-display font-semibold text-[24px] leading-tight"><bdi dir="auto">{storeName}</bdi></h1>
         </FadeUp>
 
         {/* Big CTA */}
@@ -330,25 +332,27 @@ export function SupplierHome({ user, listOnly }: { user: AuthUser; listOnly?: bo
 // Oct 9 client: past pickups say what happened — never "Looking for a driver…".
 function statusLine(p: StorePickup, isPast?: boolean): { text: string; tone: string } {
   const s = String(p.status);
-  if (s === 'cancelled') return { text: 'Cancelled', tone: 'text-muted' };
-  if (s === 'missed') return { text: 'No driver came', tone: 'text-clay' };
-  if (s === 'completed' || s === 'delivered') return { text: 'Done — picked up. Thank you!', tone: 'text-forest' };
+  // Oct 23 client: colors (and the Cancelled word) from the one status map; the store's own sentences stay.
+  if (s === 'cancelled') return { text: STATUS.cancelled.word, tone: STATUS.cancelled.text };
+  if (s === 'missed') return { text: 'No driver came', tone: STATUS.missed.text };
+  if (s === 'completed' || s === 'delivered') return { text: 'Done — picked up. Thank you!', tone: STATUS.done.text };
   if (s === 'picked_up' || p.pickedUpAt) return { text: `Picked up${p.drivers ? ` by ${p.drivers}` : ''}`, tone: 'text-forest' };
   // Oct 14 client: a steady pickup waiting for the store's YES / NO said "Looking for a driver".
-  if (s === 'pending_confirmation') return { text: 'Waiting for you: is there food today? Answer our text YES or NO.', tone: 'text-[#8a6011]' };
-  if (isPast) return p.drivers ? { text: `Done — ${p.drivers}`, tone: 'text-forest' } : { text: 'No driver came', tone: 'text-clay' };
+  if (s === 'pending_confirmation') return { text: 'Waiting for you: is there food today? Answer our text YES or NO.', tone: STATUS.needs_confirmation.text };
+  if (isPast) return p.drivers ? { text: `Done — ${p.drivers}`, tone: STATUS.done.text } : { text: 'No driver came', tone: STATUS.missed.text };
   if (p.drivers) return { text: `✓ ${p.drivers} ${p.drivers.includes(',') ? 'are' : 'is'} on the way`, tone: 'text-forest' };
-  return { text: 'Looking for a driver…', tone: 'text-[#8a6011]' };
+  return { text: 'Looking for a driver…', tone: STATUS.needs_confirmation.text };
 }
 
 function SupplierRow({ p, day, muted, isPast, onCancel, onEdit }: { p: StorePickup; day: string; muted?: boolean; isPast?: boolean; onCancel?: () => void; onEdit?: () => void }) {
   // p.time is a wall-clock time (already Eastern) — format as-is.
-  const dt = `${day}${p.time ? ` · ${fmtTime(p.time)}` : ''}${p.steady ? ' · steady' : ''}`;
+  // Oct 23 client: the one date + time format ("Today 4:00 PM" / "Tomorrow 9:00 AM" / "Thu Oct 23 · 4:00 PM")
+  const dt = `${p.date ? fmtWhenLine(String(p.date).slice(0, 10), p.time, null, true) : day}${p.steady ? ' · steady' : ''}`;
   const st = statusLine(p, isPast);
   const editable = !isPast && ['pending', 'scheduled', 'confirmed'].includes(String(p.status));
   return (
     <Card className={cx('!p-3.5', muted && 'bg-cream/60 border-line/60')}>
-      <div className={cx('text-[15px] font-bold', st.tone)}>{st.text}</div>
+      <div className={cx('text-[15px] font-bold', st.tone)}><bdi dir="auto">{st.text}</bdi></div>
       <div className="text-[14px] text-muted font-semibold mt-0.5">{dt}</div>
       {/* Oct 14 client: small thumbnail of the photo the store added. */}
       {p.photoUrl ? (

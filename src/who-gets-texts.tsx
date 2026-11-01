@@ -13,7 +13,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from './api';
+import { api, canOfficeOnly, getUser } from './api';
 import { uiConfirm, uiNotify } from './ui-dialogs';
 
 type Quiet = { windows: string[]; days: string[]; away: string | null; minutes: number; mostOfDay: boolean;
@@ -53,6 +53,7 @@ const REASON_LABEL: Record<string, string> = {
   no_phone: 'No phone number', status: 'Status (do not contact / alumni / archived)', shabbos: 'Shabbos / Yom Tov',
   outside_helper: 'Outside helper (never texted)', // Oct 13 client
   whatsapp_only: 'WhatsApp only (no texts)', // Oct 14 client
+  not_fly: "Not 'On the fly' (center / steady only)", // Oct 29 client: roles
 };
 
 const nyNowSlot = () => {
@@ -178,6 +179,7 @@ function DayChart({ onOpenPerson }: { onOpenPerson?: (id: number) => void }) {
 
 export function WhoGetsTextsPanel({ onOpenPerson }: { onOpenPerson?: (id: number) => void }) {
   const qc = useQueryClient();
+  const office = canOfficeOnly(getUser()?.role); // Oct 21 client: dispatchers see this page, the office changes it
   const q = useQuery({ queryKey: ['who-gets-texts'], queryFn: () => api<{ data: Data }>('/api/texting/who-gets-texts').then((r) => r.data), staleTime: 20_000 });
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
@@ -274,7 +276,7 @@ export function WhoGetsTextsPanel({ onOpenPerson }: { onOpenPerson?: (id: number
         <div className="text-[12px] text-muted">Drivers we KNOW have WhatsApp — they messaged us on WhatsApp, or our WhatsApp to them went through. Not based on what they chose in the app.</div>
       )}
       {d.waBridge && !d.waBridge.ok && (
-        <div className="text-[12px] font-bold text-[#9a7415]">⚠ WhatsApp: {d.waBridge.reason}. WhatsApp-only drivers get texts instead until it works.</div>
+        <div className="text-[12px] font-bold text-[#9a7415]">⚠ WhatsApp: {d.waBridge.reason}. WhatsApp-only drivers (Text not ticked) get no pickup messages until it works.</div>
       )}
       {filter === 'outside' && (
         <div className="text-[12px] text-muted">People who covered a pickup but aren't our volunteers (added in "Drivers on this pickup"). They never get our texts and are never in a text group. Open one and press "Make a volunteer" to change that.</div>
@@ -293,8 +295,7 @@ export function WhoGetsTextsPanel({ onOpenPerson }: { onOpenPerson?: (id: number
                 <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${dot}`} aria-hidden />
                 <div className="min-w-0 flex-1">
                   <div className="text-[13.5px]">
-                    <button type="button" onClick={() => onOpenPerson?.(r.id)} className="haptic font-bold text-ink hover:underline text-left">{r.name}</button>
-                    {r.unit && <span className="text-muted"> #{r.unit}</span>}
+                    <button type="button" onClick={() => onOpenPerson?.(r.id)} className="haptic font-bold text-ink hover:underline text-left"><bdi dir="auto">{r.name}</bdi></button>
                     {r.phoneLast4 && <span className="text-muted"> · {r.multiPhone || r.textPhoneSeparate ? '💬 texts to ' : ''}…{r.phoneLast4}</span>}
                     {r.inactive && <span className="ml-1.5 rounded-full bg-line/70 px-1.5 py-0.5 text-[10.5px] font-bold text-muted">inactive</span>}
                     {r.state === 'outside_helper' && <span className="ml-1.5 rounded-full bg-amber-soft px-1.5 py-0.5 text-[10.5px] font-bold text-[#8a6011]">Outside helper</span>}
@@ -325,16 +326,16 @@ export function WhoGetsTextsPanel({ onOpenPerson }: { onOpenPerson?: (id: number
                   )}
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {r.textsOff && r.state !== 'outside_helper' && confirmOn !== r.id && (
+                  {office && r.textsOff && r.state !== 'outside_helper' && confirmOn !== r.id && (
                     <button type="button" onClick={() => { setSendText(true); setConfirmOn(r.id); }}
                             className="haptic rounded-[9px] border border-forest/50 px-2.5 py-1 text-[12px] font-bold text-forest">Turn texts back on</button>
                   )}
-                  {r.inactive && filter === 'inactive' && (
+                  {office && r.inactive && filter === 'inactive' && (
                     <button type="button" disabled={makeActive.isPending}
                             onClick={async () => { if (await uiConfirm(`Make ${r.name} active again? Their status changes from "inactive" to "active".`, { okLabel: 'Make active' })) makeActive.mutate(r.id); }}
                             className="haptic rounded-[9px] border border-forest/50 px-2.5 py-1 text-[12px] font-bold text-forest disabled:opacity-50">Make active again</button>
                   )}
-                  {!r.inGroup && d.group && r.state !== 'outside_helper' && (
+                  {office && !r.inGroup && d.group && r.state !== 'outside_helper' && (
                     <button type="button" disabled={addToGroup.isPending}
                             onClick={async () => { if (await uiConfirm(`Add ${r.name} to the ${d.group!.name}? They will start getting pickup texts.`, { okLabel: 'Add' })) addToGroup.mutate({ id: r.id, groupId: d.group!.id }); }}
                             className="haptic rounded-[9px] border border-line px-2.5 py-1 text-[12px] font-bold text-ink disabled:opacity-50">Add to Default group</button>

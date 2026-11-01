@@ -21,7 +21,9 @@ const RULES: Rule[] = [
     title: 'Who gets pickup texts',
     bullets: [
       'Drivers in the Default text group. Adding someone to the group is the office review — new drivers get nothing until then. "Inactive" is only a label: inactive drivers in the group still get texts. Do not contact, alumni and archived drivers never do.',
-      'Each driver\'s own settings are followed: quiet hours (several allowed, even past midnight), quiet days, Away dates, "App only" (app pop-ups, no texts) and a pause by the office.',
+      'Each driver\'s own settings are followed: quiet hours (several allowed, even past midnight), quiet days, Away dates and a pause by the office.',
+      // Oct 28 client: the three ticks (text-recipients.ts alertChoices / driver-prefs.ts).
+      'Each driver ticks how he gets pickup messages: 📱 App notifications, 🟢 WhatsApp, 💬 Text message — one, two, all three or none. A text goes if Text is ticked, WhatsApp if WhatsApp is ticked, an app pop-up if App is ticked. Backup: if WhatsApp can\'t reach a driver (the WhatsApp phone is down, or his WhatsApp failed), he gets the same message as a text instead. All three off = no pickup messages (the app warns first).',
       'Outside helpers (people not on our list who covered a pickup) never get our automatic texts.',
       'STOP turns off all our texts to that phone; START turns them back on. To see who gets a text and why not: Messaging → Who gets texts, or tap "N drivers" on a pickup.',
     ],
@@ -86,9 +88,11 @@ const RULES: Rule[] = [
   {
     title: 'The nightly thank-you text',
     bullets: [
-      'Once a day at 10 PM (Friday and before Yom Tov: 45 minutes before candle lighting; none on Yom Tov) to the Default text group. Each driver\'s settings and quiet hours apply.',
+      'Once a day at 10 PM (Friday and before Yom Tov: 1 hour before candle lighting; none on Yom Tov) to the Default text group. Each driver\'s settings and quiet hours apply.',
       'It names the unit numbers of drivers who really covered a pickup today: picked it up or finished it, signed in at the kiosk today, or took a pickup today that was for today. Only being on a steady list does not count.',
       'Drivers without a unit number (like outside helpers) are not listed. If nobody covered a pickup today, no thank-you is sent.',
+      // Oct 23 client: weekly Friday / erev Yom Tov thank-you
+      'Friday and erev Yom Tov use a special weekly message: everyone who drove this week (Sunday to today, same rules) and how many pickups they covered together, ending "Have a wonderful Shabbos!" (or Yom Tov). If nobody drove today but some did this week, it thanks this week\'s drivers only. Up to 40 numbers per list, then "and more".',
     ],
   },
 ];

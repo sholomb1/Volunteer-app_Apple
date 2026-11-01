@@ -17,6 +17,10 @@ import { AddressAutocomplete } from '../address-autocomplete';
 // Oct 11 client: opt-in kiosk mode (start/exit with the kiosk PIN).
 import { useKioskLockdown, requestKioskFullscreen, buryKioskHistory } from './lockdown';
 import { kioskMode, pinTries } from './kiosk-mode';
+import { dayText, whenAt } from '../display'; // Oct 23 client: same style everywhere
+import { QuickKiosk } from './quick-kiosk'; // Oct 30 client: new approved kiosk design
+import { TapButton } from './tap-button';
+import { LabelPage } from './label-face';
 
 type PickerDriver = { volunteerId: number; name: string; pendingPickups: number };
 type NameCandidate = { volunteerId: number; name: string };
@@ -236,10 +240,12 @@ export function KioskApp() {
         </div>
       )}
       {/* Oct 6 client: the kiosk opens straight on the code pad (quick drop-off).
-          The older detailed flow is still at ?classic=1. */}
+          The older detailed flow is still at ?classic=1.
+          Oct 30 client: the new approved design (quick-kiosk.tsx) — labels, printing, thank-you and
+          feedback are all inside it now. */}
       {screen.kind === 'welcome' && (CLASSIC
         ? <Welcome onStart={() => setScreen({ kind: 'signin' })} />
-        : <QuickKiosk secret={secret} onLabels={(labels, name) => setScreen({ kind: 'labels', labels, volunteerName: name, autoDone: true })} />)}
+        : <QuickKiosk secret={secret} />)}
       {screen.kind === 'signin'   && <Signin  secret={secret}
         onSigned={(d) => setScreen({ kind: 'stores', dropoffId: d.dropoffId, volunteerName: d.volunteerName, stores: d.stores, lines: [], recentCompleted: d.recentCompleted, allSuppliers: d.allSuppliers })}
         onAdminPick={(p) => setScreen({ kind: 'picker', ...p })}
@@ -273,7 +279,9 @@ export function KioskApp() {
           allSuppliers: screen.allSuppliers ?? [],
         })} />}
       {screen.kind === 'stores'   && <Stores  secret={secret} screen={screen}
-        onPickStore={(s) => setScreen({ ...screen, kind: 'entry', store: s })}
+        // Oct 27 client: an earlier "No labels yet" pickup joins the list when tapped.
+        onPickStore={(s) => setScreen({ ...screen, kind: 'entry', store: s,
+          stores: screen.stores.some((x) => x.supplierId === s.supplierId) ? screen.stores : [...screen.stores, s] })}
         onLabels={(labels) => setScreen({ kind: 'labels', labels, volunteerName: screen.volunteerName })}
         onChangeStore={() => setScreen({
           kind: 'vendorPicker',
@@ -427,27 +435,28 @@ function HelpOverlay({ onClose, onStartOver, onAdmin }: {
         <div className="text-[13px] uppercase tracking-[.15em] text-muted font-extrabold">How to drop off</div>
         <div className="text-[30px] font-extrabold text-forest mt-1 leading-tight">Zeh L'Zeh Kiosk — 4 quick steps</div>
 
-        {/* Oct 7 client: matches the new kiosk (code pad → store → items → labels). */}
+        {/* Oct 30 client: matches the new kiosk (code → store → what you brought → labels → feedback). */}
         <ol className="mt-6 space-y-5">
-          {/* Oct 9 client: the name list only shows when two drivers share the digits. */}
           <HelpStep n="1" title="Type the last 4 digits of your phone">
-            (If two people share them, tap your name.)<br />
-            New, or no code? Tap <b>I'm new / no code</b> and type your name.
+            Or tap <b>Scan my name tag</b>. Then tap <b>Yes, that's me</b>.<br />
+            New, or no code? Tap <b>I'm new / I have no code</b>.
           </HelpStep>
           <HelpStep n="2" title="Tap the store">
             Your pickup is already on the screen.<br />
-            Not there? Type the store name, or tap <b>+ Store not on the list</b>.
+            Not there? Tap a different store, or <b>Store not on the list</b>.
           </HelpStep>
-          <HelpStep n="3" title="How many items?">
-            Tap <b>+</b> or <b>−</b>. Brought from more than one store? Tap <b>+ Another store</b>.
+          <HelpStep n="3" title="What did you bring?">
+            Tap <b>Trays</b>, <b>Boxes</b>, <b>Bags</b>, <b>Cases</b> or <b>Containers</b>, then <b>+</b> or <b>−</b>.<br />
+            Pick <b>Fleishig</b>, <b>Milchig</b>, <b>Pareve</b>, <b>Mixed</b> or <b>Not sure</b>. Brought a few kinds? Tap each one.
           </HelpStep>
-          <HelpStep n="4" title="Print labels & finish">
-            Stick one label on each item. Want to tell the office something? Tap <b>+ Add a note</b>.
+          <HelpStep n="4" title="Print labels">
+            Stick one label on each item. No labels needed? Tap <b>Don't need labels</b>.<br />
+            Want to tell us something? Tap <b>Yes, tell us</b> at the end.
           </HelpStep>
         </ol>
 
         <div className="mt-8 text-[15px] text-muted">
-          Something wrong? Just leave the food with a note and call the office — we'll fix it.
+          Something not working? That's fine — leave the food and call the office. Our team will look into it.
         </div>
 
         <div className="mt-8 flex flex-wrap items-center justify-end gap-3">
@@ -602,10 +611,10 @@ function KioskModeSheet({ secret, modeOn, onCancel, onStarted, onExited }: {
               : err && <div className="mt-3 text-[16px] text-clay font-bold text-center">{err}</div>}
             <div className="mt-5 grid grid-cols-3 gap-2">
               {['1','2','3','4','5','6','7','8','9'].map((d) => (
-                <button key={d} disabled={busy || waiting} onClick={() => addDigit(d)} className={btn}>{d}</button>
+                <TapButton key={d} disabled={busy || waiting} onTap={() => addDigit(d)} className={btn}>{d}</TapButton>
               ))}
-              <button onClick={backspace} disabled={busy} className={btn} aria-label="Delete">⌫</button>
-              <button disabled={busy || waiting} onClick={() => addDigit('0')} className={btn}>0</button>
+              <TapButton onTap={backspace} disabled={busy} className={btn} ariaLabel="Delete">⌫</TapButton>
+              <TapButton disabled={busy || waiting} onTap={() => addDigit('0')} className={btn}>0</TapButton>
               <button onClick={() => void submit()} disabled={busy || waiting || pin.length < 4}
                       className="h-16 rounded-[14px] bg-forest text-paper text-[20px] font-extrabold active:scale-95 disabled:opacity-40">
                 {busy ? '…' : 'OK'}
@@ -675,13 +684,13 @@ function AdminPinPrompt({ secret, onCancel, onOk }: {
         {err && <div className="mt-3 text-[14px] text-clay font-bold text-center">{err}</div>}
         <div className="mt-6 grid grid-cols-3 gap-2">
           {['1','2','3','4','5','6','7','8','9'].map((d) => (
-            <button key={d} onClick={() => addDigit(d)}
-                    className="h-14 rounded-[12px] bg-cream border-2 border-line text-[22px] font-extrabold text-ink active:scale-95">{d}</button>
+            <TapButton key={d} onTap={() => addDigit(d)}
+                    className="h-14 rounded-[12px] bg-cream border-2 border-line text-[22px] font-extrabold text-ink">{d}</TapButton>
           ))}
-          <button onClick={backspace}
-                  className="h-14 rounded-[12px] bg-cream border-2 border-line text-[16px] font-extrabold text-ink active:scale-95">⌫</button>
-          <button onClick={() => addDigit('0')}
-                  className="h-14 rounded-[12px] bg-cream border-2 border-line text-[22px] font-extrabold text-ink active:scale-95">0</button>
+          <TapButton onTap={backspace}
+                  className="h-14 rounded-[12px] bg-cream border-2 border-line text-[16px] font-extrabold text-ink">⌫</TapButton>
+          <TapButton onTap={() => addDigit('0')}
+                  className="h-14 rounded-[12px] bg-cream border-2 border-line text-[22px] font-extrabold text-ink">0</TapButton>
           <button onClick={onCancel}
                   className="h-14 rounded-[12px] bg-paper border-2 border-line text-[13px] font-bold text-muted active:scale-95">Cancel</button>
         </div>
@@ -850,6 +859,8 @@ function Welcome({ onStart }: { onStart: () => void }) {
   );
 }
 
+// Oct 30 client: "📷 Scan my name tag" (camera + the browser's QR reader; name-tag-scan.tsx).
+import { NameTagScanner } from './name-tag-scan';
 function Signin({ secret, onSigned, onAdminPick, onNamePick, onPickupPick, onWalkIn }: {
   secret: string;
   onSigned: (d: { dropoffId: number; volunteerName: string; stores: KioskStore[]; recentCompleted?: import('./kiosk-api').KioskRecentCompleted[]; allSuppliers?: VendorOption[] }) => void;
@@ -868,6 +879,21 @@ function Signin({ secret, onSigned, onAdminPick, onNamePick, onPickupPick, onWal
   const [guestMode, setGuestMode]   = useState(false);
   const [guestName, setGuestName]   = useState('');
   const [guestPhone, setGuestPhone] = useState('');
+  const [scanning, setScanning]     = useState(false); // Oct 30 client
+
+  // Oct 30 client: a scanned name tag signs in exactly like the 4 digits (same reply, same next screens).
+  async function submitTag(token: string) {
+    setScanning(false); setBusy(true); setErr(null);
+    try {
+      const r = await kiosk.signinQr(secret, token);
+      const d = r.data as any;
+      if (d.needsPickupSelection) { onPickupPick({ volunteerId: d.volunteerId, volunteerName: d.volunteerName, greeting: d.greeting, options: d.options, allSuppliers: d.allSuppliers }); return; }
+      if (d.needsVendorPick)      { onWalkIn({ dropoffId: d.dropoffId, volunteerName: d.volunteerName, greeting: d.greeting, allSuppliers: d.allSuppliers }); return; }
+      onSigned(d as { dropoffId: number; volunteerName: string; stores: KioskStore[] });
+    } catch (e: any) {
+      setErr(e?.message || "This name tag wasn't recognized. Please type your 4-digit code.");
+    } finally { setBusy(false); }
+  }
 
   async function submitCode(finalCode?: string) {
     const c = (finalCode ?? code).slice(0, 4);
@@ -1041,6 +1067,13 @@ function Signin({ secret, onSigned, onAdminPick, onNamePick, onPickupPick, onWal
         <KeyBtn onClick={() => setCode('')} muted>clear</KeyBtn>
       </div>
 
+      {/* Oct 30 client: sign in with the QR code on the driver's name tag */}
+      <TapButton onTap={() => { setErr(null); setScanning(true); }} disabled={busy} ariaLabel="Scan my name tag"
+                 className="mt-5 w-full max-w-[400px] h-16 rounded-[16px] border-[2px] border-forest bg-sage/50 text-forest text-[22px] font-extrabold transition-transform">
+        📷 Scan my name tag
+      </TapButton>
+      {scanning && <NameTagScanner onToken={(t) => void submitTag(t)} onClose={() => setScanning(false)} />}
+
       <div className="mt-6 flex flex-col items-center gap-2">
         <button onClick={() => { setGuestMode(true); setErr(null); }}
                 className="text-[16px] font-extrabold text-forest underline underline-offset-2 py-2">
@@ -1055,12 +1088,19 @@ function Signin({ secret, onSigned, onAdminPick, onNamePick, onPickupPick, onWal
   );
 }
 
+// Oct 19 client: "the buttons don't press" on the kiosk tablet. A normal click only fires when the
+// finger lifts without moving; on the scrolling sign-in page a slightly moving, slow or heavy
+// press turned into a scroll / long-press and was lost. TapButton reacts the moment the finger
+// touches (pointerdown), ignores the follow-up click, blocks the long-press menu and double-tap
+// zoom, and flashes + buzzes so people see the press landed.
+// (TapButton lives in tap-button.tsx since Oct 30 — shared with the new quick kiosk.)
+
 function KeyBtn({ onClick, children, muted }: { onClick: () => void; children: React.ReactNode; muted?: boolean }) {
   return (
-    <button onClick={onClick}
-            className={`h-20 rounded-[16px] text-[32px] font-extrabold border-[2px] transition ${muted ? 'bg-paper border-line text-muted' : 'bg-paper border-line text-ink hover:bg-sage/40 hover:border-forest'}`}>
+    <TapButton onTap={onClick}
+               className={`h-20 rounded-[16px] text-[32px] font-extrabold border-[2px] transition-transform ${muted ? 'bg-paper border-line text-muted' : 'bg-paper border-line text-ink'}`}>
       {children}
-    </button>
+    </TapButton>
   );
 }
 
@@ -1095,7 +1135,7 @@ function NamePicker({ secret, screen, onCancel, onSigned, onPickupPick, onWalkIn
         {screen.candidates.map((c) => (
           <button key={c.volunteerId} onClick={() => pick(c)} disabled={busyId !== null}
                   className="w-full text-left rounded-[16px] border-[2px] border-line bg-paper px-6 py-5 text-[22px] font-extrabold hover:border-forest disabled:opacity-40">
-            {busyId === c.volunteerId ? 'Loading…' : c.name}
+            {busyId === c.volunteerId ? 'Loading…' : <bdi dir="auto">{c.name}</bdi>}
           </button>
         ))}
         {err && <div className="text-clay text-[17px] font-bold bg-clay/10 rounded-[12px] py-2 px-3">{err}</div>}
@@ -1459,7 +1499,7 @@ function DriverPicker({ secret, screen, onSigned, onPickupPick, onCancel }: {
             {screen.drivers.map((d) => (
               <button key={d.volunteerId} onClick={() => pick(d)} disabled={busyId !== null}
                       className="rounded-[16px] border-[2px] border-line bg-paper p-5 text-left hover:border-forest transition disabled:opacity-50">
-                <div className="text-[22px] font-extrabold text-ink">{d.name}</div>
+                <div className="text-[22px] font-extrabold text-ink"><bdi dir="auto">{d.name}</bdi></div>
                 <div className="text-[15px] text-muted mt-1">
                   {d.pendingPickups} pending pickup{d.pendingPickups === 1 ? '' : 's'}
                 </div>
@@ -1496,7 +1536,7 @@ function Stores({ secret, screen, onPickStore, onLabels, onChangeStore, onBack }
   // which auto-fires the printer on mount. Notes/timeIssues are passed null
   // (they were optional textareas today; drivers left them blank ~always).
   async function finish() {
-    if (!allStoresHaveLines || finishing) return;
+    if (!allStoresHaveLines || screen.stores.length === 0 || finishing) return;
     setFinishing(true); setErr(null);
     try {
       const r = await kiosk.complete(secret, screen.dropoffId, null, null);
@@ -1507,13 +1547,23 @@ function Stores({ secret, screen, onPickStore, onLabels, onChangeStore, onBack }
     }
   }
 
+  // Oct 27 client: a "No labels yet" row starts a drop-off for that store
+  // (same as tapping a store above), so the driver can add items + print.
+  const storeIds = new Set(screen.stores.map((s) => s.supplierId));
+  const hasStores = screen.stores.length > 0;
+  const canFinish = hasStores && allStoresHaveLines;
+
+  // Oct 27 client: this screen scrolls and starts at the top. It used to be
+  // centered in a box that can't scroll, so a long "Recently completed" list
+  // pushed the driver's store (top) and the print button (bottom) off the
+  // tablet screen, and he saw only the old list.
   return (
-    <Center>
+    <div className="h-full w-full overflow-y-auto flex flex-col items-center px-10 pt-12 pb-10">
       <div className="text-[36px] font-extrabold text-forest text-center">Hi {screen.volunteerName.split(' ')[0]}!</div>
       <div className="text-[22px] text-muted mt-2 text-center">
-        Here are the stores you picked up from today. Tap each one and enter what you brought.
+        {hasStores ? 'Tap your store and add what you brought.' : 'Tap below to drop off food.'}
       </div>
-      <div className="mt-8 w-full max-w-[720px] space-y-3">
+      <div className="mt-6 w-full max-w-[720px] space-y-3">
         {screen.stores.map((s) => {
           const done = (linesByStore.get(s.supplierId)?.length ?? 0) > 0;
           return (
@@ -1524,11 +1574,11 @@ function Stores({ secret, screen, onPickStore, onLabels, onChangeStore, onBack }
                 {done ? '✓' : (linesByStore.get(s.supplierId)?.length ?? 0)}
               </div>
               <div className="flex-1 min-w-0">
-                <div className="text-[26px] font-extrabold text-ink truncate">{s.supplierName}</div>
+                <div className="text-[26px] font-extrabold text-ink truncate"><bdi dir="auto">{s.supplierName}</bdi></div>
                 <div className="text-[16px] text-muted mt-0.5">
                   {done
-                    ? `${linesByStore.get(s.supplierId)!.length} item${linesByStore.get(s.supplierId)!.length === 1 ? '' : 's'} entered · tap to edit`
-                    : 'Not yet entered — tap to add items'}
+                    ? `${linesByStore.get(s.supplierId)!.length} item${linesByStore.get(s.supplierId)!.length === 1 ? '' : 's'} added · tap to change`
+                    : 'Tap to add items'}
                 </div>
               </div>
               <div className="text-[26px] text-forest">→</div>
@@ -1536,58 +1586,68 @@ function Stores({ secret, screen, onPickStore, onLabels, onChangeStore, onBack }
           );
         })}
       </div>
+      {err && <div className="text-clay text-[19px] font-bold text-center bg-clay/10 rounded-[16px] py-3 px-4 mt-6 max-w-[560px]">{err}</div>}
+      {hasStores && (
+        <PrimaryButton onClick={finish} disabled={!canFinish || finishing} className="mt-6">
+          {finishing
+            ? 'Printing labels…'
+            : canFinish
+              ? 'Done — print labels'
+              : `Add items for ${screen.stores.length - screen.stores.filter((s) => (linesByStore.get(s.supplierId)?.length ?? 0) > 0).length} more store(s)`}
+        </PrimaryButton>
+      )}
       {/* Aug 19 client bug 1 — even with an assigned pickup, a driver can pick
           a different supplier (their actual pickup may not match what was
           scheduled). Opens the same all-suppliers picker walk-ins use, with
-          a manual-entry escape hatch. Hidden if we somehow have no supplier
-          list (older backend, or empty supplier table). */}
-      {screen.allSuppliers && screen.allSuppliers.length > 0 && (
-        <button onClick={onChangeStore}
-                className="mt-6 w-full max-w-[720px] py-4 rounded-[16px] border-2 border-forest bg-sage/40 text-forest text-[18px] font-extrabold hover:bg-sage/60 active:scale-95">
-          + Choose a different store
+          a manual-entry escape hatch. Oct 27: with no store above, this is the
+          big main button ("Drop off food now"). */}
+      {screen.allSuppliers && screen.allSuppliers.length > 0 && (hasStores ? (
+        <button onClick={onChangeStore} disabled={finishing}
+                className="mt-4 w-full max-w-[720px] py-4 rounded-[16px] border-2 border-forest bg-sage/40 text-forest text-[20px] font-extrabold hover:bg-sage/60 active:scale-95 disabled:opacity-40">
+          + Food from a different store
         </button>
-      )}
-      {/* C5 Aug 13 — recently-completed drop-offs from the last 14 days
-          so a driver can identify a pickup they need reprinted labels for.
-          Reprint action lives at the office for now (they can look up ref#). */}
+      ) : (
+        <PrimaryButton onClick={onChangeStore} className="mt-6">Drop off food now →</PrimaryButton>
+      ))}
+      {/* C5 Aug 13 — earlier pickups (server sends at most 4, no ids). Oct 27:
+          a "No labels yet" row can print — it opens that store to add items. */}
       {screen.recentCompleted && screen.recentCompleted.length > 0 && (
         <div className="mt-10 w-full max-w-[720px]">
-          <div className="text-[15px] uppercase tracking-[.15em] font-extrabold text-muted mb-2">Recently completed</div>
+          <div className="text-[15px] uppercase tracking-[.15em] font-extrabold text-muted mb-2">Earlier pickups</div>
           <div className="space-y-2">
-            {screen.recentCompleted.map((rc) => (
+            {screen.recentCompleted.slice(0, 4).map((rc) => (
               <div key={rc.pickupId}
                    className="w-full flex items-center gap-4 rounded-[16px] border border-line bg-cream/60 px-5 py-3 text-left">
-                <span className="text-[15px] font-extrabold tracking-widest bg-paper border border-line text-forest px-2.5 py-0.5 rounded-full">
-                  #{rc.refNumber ?? rc.pickupId}
-                </span>
                 <div className="flex-1 min-w-0">
-                  <div className="text-[19px] font-extrabold text-ink truncate">{rc.supplierName}</div>
+                  <div className="text-[19px] font-extrabold text-ink truncate"><bdi dir="auto">{rc.supplierName}</bdi></div>
                   <div className="text-[14px] text-muted mt-0.5">
                     {rc.completedAt
-                      ? new Date(rc.completedAt).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit', hour12:true })
-                      : String(rc.scheduledDate).slice(0, 10)}
+                      ? whenAt(rc.completedAt) // Oct 23 client: one date + time format
+                      : dayText(String(rc.scheduledDate).slice(0, 10))}
                     {' · '}
                     {rc.labelsPrinted ? <span className="text-forest font-bold">Labels printed</span> : <span className="text-clay font-bold">No labels yet</span>}
                   </div>
                 </div>
+                {!rc.labelsPrinted && (
+                  <button onClick={() => onPickStore(
+                            storeIds.has(rc.supplierId)
+                              ? screen.stores.find((s) => s.supplierId === rc.supplierId)!
+                              : { supplierId: rc.supplierId, supplierName: rc.supplierName, pickupIds: [rc.pickupId], scheduledDate: String(rc.scheduledDate).slice(0, 10) })}
+                          disabled={finishing}
+                          className="shrink-0 rounded-[14px] bg-forest text-paper px-5 py-3 text-[18px] font-extrabold active:scale-95 disabled:opacity-40">
+                    Print labels
+                  </button>
+                )}
               </div>
             ))}
           </div>
         </div>
       )}
-      {err && <div className="text-clay text-[19px] font-bold text-center bg-clay/10 rounded-[16px] py-3 px-4 mt-6 max-w-[560px]">{err}</div>}
-      <PrimaryButton onClick={finish} disabled={!allStoresHaveLines || finishing} className="mt-10">
-        {finishing
-          ? 'Finishing + printing labels…'
-          : allStoresHaveLines
-            ? 'Done — finish + print labels'
-            : `Enter items for ${screen.stores.length - Array.from(linesByStore.keys()).length} more store(s)`}
-      </PrimaryButton>
       <button onClick={onBack} disabled={finishing}
-              className="mt-4 text-[16px] font-bold text-muted underline underline-offset-2 py-2 disabled:opacity-40">
+              className="mt-6 text-[16px] font-bold text-muted underline underline-offset-2 py-2 disabled:opacity-40">
         ← Back to sign-in
       </button>
-    </Center>
+    </div>
   );
 }
 
@@ -1816,22 +1876,7 @@ function Labels({ labels, volunteerName, kioskSecret, onFinish, autoDone }:
   );
 }
 
-function LabelPage({ label }: { label: KioskLabel }) {
-  // Each label is a full page (3-inch square) with a 3-inch circle centered.
-  // Round-die thermal labels: printer only sees the paper as square; the die
-  // hides everything outside the circle. Content clips inside the circle.
-  return (
-    <div className="label-page">
-      <div className="label-circle">
-        <div className="label-store">{label.supplierName}</div>
-        <div className="label-date">{label.date}</div>
-        <div className="label-idx">{label.index} of {label.total}</div>
-        <div className="label-desc">{label.description}</div>
-        <div className="label-meta">{label.category} · {label.unit}</div>
-      </div>
-    </div>
-  );
-}
+// (LabelPage lives in label-face.tsx since Oct 30 — new-kiosk labels get the round kind layout.)
 
 // ---------------- Primitives ----------------
 
@@ -1895,372 +1940,4 @@ function groupLinesBySupplier(lines: KioskLine[]): Map<number, KioskLine[]> {
   return m;
 }
 
-// ==================== Oct 6 client: QUICK drop-off ====================
-// Opens straight on the code pad (no Start button). Code → "Dropping off
-// from" (today's/yesterday's pickups already ticked) → how many items per
-// store (= labels) → print & finish, or finish without labels (bulk).
-// 60 seconds untouched → back to the code pad, nothing saved.
-type QuickRow = { key: string; pickupId: number | null; supplierId: number | null; otherName: string | null; label: string; sub: string };
-type QuickStep =
-  | { kind: 'code' }
-  | { kind: 'names'; code: string; candidates: NameCandidate[] }
-  | { kind: 'guest' }
-  | { kind: 'pick' }
-  | { kind: 'count' }
-  | { kind: 'thanks'; firstName: string; summary: string };
-const QUICK_IDLE_MS = 60 * 1000;
-
-function quickWhen(date: string, time: string | null): string {
-  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-  const day = date === today ? 'Today' : 'Yesterday';
-  if (!time) return day;
-  const [h, m] = time.split(':').map(Number);
-  return `${day} · ${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
-}
-
-function QuickKiosk({ secret, onLabels }: {
-  secret: string;
-  onLabels: (labels: KioskLabel[], name: string) => void;
-}) {
-  const [step, setStep]       = useState<QuickStep>({ kind: 'code' });
-  const [code, setCode]       = useState('');
-  const [busy, setBusy]       = useState(false);
-  const [err, setErr]         = useState<string | null>(null);
-  const [who, setWho]         = useState<{ volunteerId: number | null; name: string; guestPhone?: string } | null>(null);
-  const [rows, setRows]       = useState<QuickRow[]>([]);
-  const [picked, setPicked]   = useState<Set<string>>(new Set());
-  const [counts, setCounts]   = useState<Record<string, number>>({});
-  const [stores, setStores]   = useState<VendorOption[]>([]);
-  const [search, setSearch]   = useState('');
-  const [showAll, setShowAll] = useState(false);
-  const [guestName, setGuestName]   = useState('');
-  const [guestPhone, setGuestPhone] = useState('');
-  const [note, setNote]         = useState<string | null>(null);
-  const [newStore, setNewStore] = useState<string | null>(null);
-
-  // Oct 9 client: one id per drop-off attempt; every tap/retry sends the same
-  // one so the server saves it once. New id after Start over / next driver.
-  const requestId = useRef<string | null>(null);
-  const saving = useRef(false);
-
-  function resetAll() {
-    requestId.current = null; saving.current = false;
-    setNote(null); setNewStore(null);
-    setStep({ kind: 'code' }); setCode(''); setBusy(false); setErr(null); setWho(null);
-    setRows([]); setPicked(new Set()); setCounts({}); setSearch(''); setShowAll(false);
-    setGuestName(''); setGuestPhone('');
-  }
-
-  // 60-second idle → back to the code pad. Nothing has been saved yet.
-  useEffect(() => {
-    if (step.kind === 'code' && !code) return;
-    if (step.kind === 'thanks') return;
-    let t: any = null;
-    const reset = () => { if (t) clearTimeout(t); t = setTimeout(resetAll, QUICK_IDLE_MS); };
-    reset();
-    const events = ['pointerdown', 'keydown', 'touchstart', 'wheel'];
-    events.forEach((e) => window.addEventListener(e, reset, { passive: true }));
-    return () => { if (t) clearTimeout(t); events.forEach((e) => window.removeEventListener(e, reset)); };
-  }, [step.kind, code]);
-
-  // Thank-you shows for 5 seconds (Oct 9 client), then the pad is ready for the next driver.
-  useEffect(() => {
-    if (step.kind !== 'thanks') return;
-    const t = setTimeout(resetAll, 5000);
-    return () => clearTimeout(t);
-  }, [step.kind]);
-
-  function loadPicks(d: any) {
-    // Hide pickups more than 2 hours away; newest first.
-    const nowNY = new Date().toLocaleString('sv-SE', { timeZone: 'America/New_York' }).slice(0, 16).replace(' ', 'T');
-    const soon = new Date(Date.parse(nowNY + ':00Z') + 2 * 3600e3).toISOString().slice(0, 16);
-    const ps = (d.pickups ?? [])
-      .map((p: any) => ({ ...p, at: `${p.date}T${p.time ?? '00:00'}` }))
-      .filter((p: any) => p.at <= soon)
-      .sort((a: any, b: any) => (a.at < b.at ? 1 : -1));
-    const r: QuickRow[] = ps.map((p: any) => ({
-      key: `p:${p.pickupId}`, pickupId: p.pickupId, supplierId: p.supplierId, otherName: null, label: p.label, sub: quickWhen(p.date, p.time),
-    }));
-    setRows(r); setPicked(new Set()); setStores(d.allSuppliers ?? []);
-    setShowAll(r.length === 0); setSearch('');
-    setWho({ volunteerId: d.volunteerId, name: d.name });
-    setStep({ kind: 'pick' });
-  }
-
-  async function lookup(c: string, resolveVolunteerId?: number) {
-    setBusy(true); setErr(null);
-    try {
-      const r = await kiosk.quickLookup(secret, { code: c, resolveVolunteerId });
-      if (r.data.needsPick) { setStep({ kind: 'names', code: c, candidates: r.data.candidates ?? [] }); return; }
-      loadPicks(r.data);
-    } catch (e: any) {
-      setErr(e?.status === 404 ? "We don't know that code. Try again." : (e?.message || 'Something went wrong. Please try again.'));
-      setCode('');
-    } finally { setBusy(false); }
-  }
-
-  function addDigit(d: string) {
-    if (busy) return;
-    setErr(null);
-    setCode((prev) => {
-      const next = (prev + d).slice(0, 4);
-      if (next.length === 4 && prev.length < 4) setTimeout(() => lookup(next), 80);
-      return next;
-    });
-  }
-  function backspace() { setErr(null); setCode((p) => p.slice(0, -1)); }
-
-  useEffect(() => {
-    if (step.kind !== 'code') return;
-    function onKey(e: KeyboardEvent) {
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
-      if (/^[0-9]$/.test(e.key)) { e.preventDefault(); addDigit(e.key); }
-      else if (e.key === 'Backspace') { e.preventDefault(); backspace(); }
-      else if (e.key === 'Escape') { e.preventDefault(); setCode(''); setErr(null); }
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step.kind, busy]);
-
-  async function startGuest() {
-    if (!guestName.trim()) { setErr('Please enter your name.'); return; }
-    setBusy(true); setErr(null);
-    try {
-      const r = await kiosk.quickStores(secret);
-      setWho({ volunteerId: null, name: guestName.trim(), guestPhone: guestPhone.trim() });
-      setRows([]); setPicked(new Set()); setStores(r.data); setShowAll(true); setSearch('');
-      setStep({ kind: 'pick' });
-    } catch (e: any) { setErr(e?.message || 'Something went wrong. Please try again.'); }
-    finally { setBusy(false); }
-  }
-
-  // Oct 6 client: one tap on a store goes straight to "How many items?".
-  function choose(row: QuickRow) {
-    setRows((r) => r.some((x) => x.key === row.key) ? r : [...r, row]);
-    setPicked((s) => new Set(s).add(row.key));
-    setSearch(''); setShowAll(false); setNewStore(null);
-    setStep({ kind: 'count' });
-  }
-  function unchoose(key: string) {
-    const n = new Set(picked); n.delete(key); setPicked(n);
-    if (n.size === 0) setStep({ kind: 'pick' });
-  }
-
-  const chosen = rows.filter((r) => picked.has(r.key));
-  const totalLabels = chosen.reduce((n, r) => n + (counts[r.key] ?? 1), 0);
-
-  async function finish(printLabels: boolean) {
-    if (!who || chosen.length === 0 || saving.current) return;
-    saving.current = true;
-    if (!requestId.current) requestId.current = (globalThis.crypto as any)?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    setBusy(true); setErr(null);
-    try {
-      const r = await kiosk.quickFinish(secret, {
-        clientRequestId: requestId.current ?? undefined,
-        volunteerId: who.volunteerId, guestName: who.volunteerId ? undefined : who.name, guestPhone: who.guestPhone,
-        printLabels, note: note?.trim() || undefined,
-        items: chosen.map((x) => ({ pickupId: x.pickupId, supplierId: x.supplierId, otherName: x.otherName, count: counts[x.key] ?? 1 })),
-      });
-      const first = who.name.split(' ')[0];
-      if (printLabels && r.data.labels.length) { onLabels(r.data.labels, who.name); return; }
-      const n = chosen.reduce((t, x) => t + (counts[x.key] ?? 1), 0);
-      const summary = `Recorded ${n} item${n === 1 ? '' : 's'} from ${chosen.map((x) => x.label).join(' + ')}.`;
-      setStep({ kind: 'thanks', firstName: first, summary });
-    } catch (e: any) {
-      setErr(e?.message || 'Something went wrong. Please try again.');
-    } finally { setBusy(false); saving.current = false; }
-  }
-
-  const back = (
-    <button onClick={resetAll} className="mt-5 text-[17px] font-bold text-muted underline underline-offset-2 py-2">Start over</button>
-  );
-  const errBox = err && <div className="text-clay text-[19px] font-bold text-center bg-clay/10 rounded-[16px] py-3 px-4 mt-4 w-full max-w-[560px]">{err}</div>;
-
-  if (step.kind === 'thanks') {
-    return (
-      <Center>
-        <div className="text-[80px]">✅</div>
-        <div className="text-[44px] font-extrabold text-forest text-center">Thank you, {step.firstName}!</div>
-        <div className="text-[24px] text-ink font-bold text-center mt-3">{step.summary}</div>
-      </Center>
-    );
-  }
-
-  if (step.kind === 'names') {
-    return (
-      <div className="h-full w-full flex flex-col items-center pt-16 pb-6 px-6 overflow-y-auto">
-        <Big>Tap your name</Big>
-        <div className="mt-6 w-full max-w-[560px] space-y-3">
-          {step.candidates.map((c) => (
-            <button key={c.volunteerId} disabled={busy} onClick={() => lookup(step.code, c.volunteerId)}
-                    className="w-full rounded-[16px] border-[2px] border-line bg-paper px-6 py-5 text-[26px] font-extrabold text-ink text-left hover:border-forest">
-              {c.name}
-            </button>
-          ))}
-        </div>
-        {errBox}
-        {back}
-      </div>
-    );
-  }
-
-  if (step.kind === 'guest') {
-    return (
-      <div className="h-full w-full flex flex-col items-center pt-16 pb-6 px-6 overflow-y-auto">
-        <Big>What's your name?</Big>
-        <div className="mt-6 w-full max-w-[560px] space-y-4">
-          <KioskInput placeholder="Full name" value={guestName} onChange={setGuestName} autoFocus />
-          <input value={guestPhone} onChange={(e) => setGuestPhone(e.target.value)} placeholder="Phone (optional)" inputMode="tel"
-                 className="w-full rounded-[16px] border-[2px] border-line bg-paper px-5 py-4 text-[24px] outline-none focus:border-forest" />
-          <PrimaryButton onClick={startGuest} disabled={busy || !guestName.trim()}>Next →</PrimaryButton>
-        </div>
-        {errBox}
-        {back}
-      </div>
-    );
-  }
-
-  if (step.kind === 'pick') {
-    const q = search.trim().toLowerCase();
-    const matches = stores.filter((s) => !q || s.supplierName.toLowerCase().includes(q) || s.city.toLowerCase().includes(q)).slice(0, 40);
-    const first = (who?.name ?? '').split(' ')[0];
-    const mine = rows.filter((r) => r.pickupId && !picked.has(r.key));
-    const listOpen = showAll || mine.length === 0;
-    return (
-      <div className="h-full w-full flex flex-col items-center pt-16 pb-6 px-6 overflow-y-auto">
-        <Big>{mine.length ? `Hi ${first}! Which store is this from?` : `Hi ${first}! Where's this food from?`}</Big>
-        <div className="mt-6 w-full max-w-[620px] space-y-3">
-          {mine.map((r) => (
-            <button key={r.key} onClick={() => choose(r)}
-                    className="w-full rounded-[16px] border-[2px] border-line bg-paper px-5 py-4 text-left hover:border-forest active:bg-sage/40">
-              <span className="block text-[24px] font-extrabold text-ink truncate">{r.label}</span>
-              {r.sub && <span className="block text-[16px] text-muted">{r.sub}</span>}
-            </button>
-          ))}
-          {!listOpen && (
-            <button onClick={() => setShowAll(true)}
-                    className="w-full rounded-[16px] border-[2px] border-dashed border-line px-5 py-4 text-[20px] font-extrabold text-forest">
-              + Another store
-            </button>
-          )}
-          {listOpen && newStore === null && (
-            <div className="rounded-[16px] border-[2px] border-line bg-paper p-3">
-              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Type the store name" autoFocus={mine.length > 0}
-                     className="w-full rounded-[12px] border-[2px] border-line bg-paper px-4 py-3 text-[22px] outline-none focus:border-forest" />
-              <div className="mt-2 max-h-[300px] overflow-y-auto">
-                {matches.map((s) => (
-                  <button key={s.supplierId}
-                          onClick={() => choose({ key: `s:${s.supplierId}`, pickupId: null, supplierId: s.supplierId, otherName: null, label: s.supplierName, sub: s.city })}
-                          className="w-full text-left px-4 py-3 rounded-[10px] text-[20px] font-bold text-ink hover:bg-sage/40">
-                    {s.supplierName}{s.city && <span className="text-muted font-normal text-[16px]"> · {s.city}</span>}
-                  </button>
-                ))}
-                {q && matches.length === 0 && <div className="px-4 py-3 text-[18px] text-muted">No store by that name.</div>}
-              </div>
-            </div>
-          )}
-          {listOpen && newStore === null && (
-            <button onClick={() => setNewStore(search.trim())}
-                    className="w-full rounded-[16px] border-[2px] border-dashed border-forest px-5 py-4 text-[20px] font-extrabold text-forest">
-              + Store not on the list
-            </button>
-          )}
-          {newStore !== null && (
-            <div className="rounded-[16px] border-[2px] border-forest bg-paper p-4 space-y-3">
-              <div className="text-[20px] font-extrabold text-ink">Store name</div>
-              <input value={newStore} onChange={(e) => setNewStore(e.target.value)} autoFocus placeholder="e.g. Corner Bakery"
-                     className="w-full rounded-[12px] border-[2px] border-line bg-paper px-4 py-3 text-[22px] outline-none focus:border-forest" />
-              <PrimaryButton disabled={!newStore.trim()}
-                             onClick={() => choose({ key: `o:${newStore.trim().toLowerCase()}`, pickupId: null, supplierId: null, otherName: newStore.trim(), label: newStore.trim(), sub: '' })}>
-                Next →
-              </PrimaryButton>
-              <button onClick={() => setNewStore(null)} className="w-full text-[17px] font-bold text-muted underline underline-offset-2 py-1">Cancel</button>
-            </div>
-          )}
-          {errBox}
-        </div>
-        {picked.size > 0
-          ? <button onClick={() => setStep({ kind: 'count' })} className="mt-5 text-[17px] font-bold text-muted underline underline-offset-2 py-2">← Back</button>
-          : back}
-      </div>
-    );
-  }
-
-  if (step.kind === 'count') {
-    return (
-      <div className="h-full w-full flex flex-col items-center pt-16 pb-6 px-6 overflow-y-auto">
-        <Big>How many items?</Big>
-        <div className="text-[19px] text-muted mt-2 text-center">One label prints for each item.</div>
-        <div className="mt-6 w-full max-w-[620px] space-y-3">
-          {chosen.map((r) => {
-            const n = counts[r.key] ?? 1;
-            const set = (v: number) => setCounts((c) => ({ ...c, [r.key]: Math.max(1, Math.min(60, v)) }));
-            return (
-              <div key={r.key} className="flex items-center gap-4 rounded-[16px] border-[2px] border-line bg-paper px-5 py-4">
-                <span className="flex-1 min-w-0">
-                  <span className="block text-[24px] font-extrabold text-ink truncate">{r.label}</span>
-                  {r.sub && chosen.filter((x) => x.label === r.label).length > 1 && <span className="block text-[16px] text-muted">{r.sub}</span>}
-                  {chosen.length > 1 && <button onClick={() => unchoose(r.key)} className="text-[15px] font-bold text-muted underline underline-offset-2">Remove</button>}
-                </span>
-                <button onClick={() => set(n - 1)} disabled={n <= 1} aria-label="Less"
-                        className="h-16 w-16 rounded-[14px] border-[2px] border-line text-[34px] font-extrabold text-ink disabled:opacity-30">−</button>
-                <span className="w-16 text-center text-[38px] font-extrabold text-forest">{n}</span>
-                <button onClick={() => set(n + 1)} aria-label="More"
-                        className="h-16 w-16 rounded-[14px] border-[2px] border-forest bg-sage/40 text-[34px] font-extrabold text-forest">+</button>
-              </div>
-            );
-          })}
-          <div className="flex justify-center gap-8">
-            <button onClick={() => { setShowAll(false); setStep({ kind: 'pick' }); }} className="text-[18px] font-bold text-forest underline underline-offset-2 py-1">+ Another store</button>
-            {note === null && <button onClick={() => setNote('')} className="text-[18px] font-bold text-forest underline underline-offset-2 py-1">+ Add a note</button>}
-          </div>
-          {note !== null && (
-            <textarea value={note} onChange={(e) => setNote(e.target.value)} autoFocus rows={2} placeholder="Note for the office (optional)"
-                      className="w-full rounded-[16px] border-[2px] border-line bg-paper px-5 py-3 text-[20px] outline-none focus:border-forest" />
-          )}
-          {errBox}
-          <PrimaryButton onClick={() => finish(true)} disabled={busy}>
-            {busy ? 'Finishing…' : `Print ${totalLabels} label${totalLabels === 1 ? '' : 's'} & finish`}
-          </PrimaryButton>
-          <button onClick={() => finish(false)} disabled={busy}
-                  className="w-full rounded-[16px] border-[2px] border-forest text-forest py-4 text-[20px] font-extrabold">
-            Finish without labels
-          </button>
-        </div>
-        {back}
-      </div>
-    );
-  }
-
-  // Code pad — the home screen.
-  return (
-    <div className="h-full w-full flex flex-col items-center pt-16 pb-6 px-6 overflow-y-auto">
-      <div className="text-[22px] font-extrabold text-forest">Zeh L'Zeh drop-off</div>
-      <Big>Enter the last 4 digits of your phone</Big>
-      <div className="mt-6 flex gap-4">
-        {[0, 1, 2, 3].map((i) => (
-          <div key={i}
-               className={`w-16 h-20 rounded-[14px] border-[2px] flex items-center justify-center text-[38px] font-extrabold ${code[i] ? 'bg-sage/50 border-forest text-forest' : 'bg-paper border-line text-muted'}`}>
-            {code[i] ?? ''}
-          </div>
-        ))}
-      </div>
-      {err && <div className="text-clay text-[18px] font-bold text-center bg-clay/10 rounded-[16px] py-3 px-4 mt-4 max-w-[540px]">{err}</div>}
-      <div className="mt-6 grid grid-cols-3 gap-3 w-full max-w-[400px]">
-        {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => (
-          <KeyBtn key={n} onClick={() => addDigit(String(n))}>{n}</KeyBtn>
-        ))}
-        {/* Oct 9 client: plain words instead of the arrow / "clear". */}
-        <KeyBtn onClick={backspace} muted><span className="text-[24px]">Delete</span></KeyBtn>
-        <KeyBtn onClick={() => addDigit('0')}>0</KeyBtn>
-        <KeyBtn onClick={() => { setCode(''); setErr(null); }} muted><span className="text-[24px]">Clear</span></KeyBtn>
-      </div>
-      <button onClick={() => { setErr(null); setStep({ kind: 'guest' }); }}
-              className="mt-6 text-[18px] font-extrabold text-forest underline underline-offset-2 py-2">
-        I'm new / no code
-      </button>
-    </div>
-  );
-}
+// Oct 30 client: the quick drop-off (the default kiosk screen) is in quick-kiosk.tsx.

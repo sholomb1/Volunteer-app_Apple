@@ -226,7 +226,7 @@ export function PortalSearchBar({ onPick }: { onPick: (tab: Tab, id?: number) =>
                   <Section icon={<Repeat size={13} />} title={`Steady templates · ${data!.steadyPickups.length}`}>
                     {data!.steadyPickups.map((sp) => (
                       <Row key={`sp${sp.id}`} onClick={() => go('steady', sp.id)}
-                           primary={sp.name ?? `Steady #${sp.id}`} secondary="" />
+                           primary={sp.name ?? 'Steady pickup'} secondary="" />
                     ))}
                   </Section>
                 )}

@@ -67,10 +67,12 @@ export function MyShiftPanel() {
 
   if (q.isLoading) return <div className="text-[13px] text-muted">Loading your shifts…</div>;
   if (q.isError) return <div className="text-[13px] text-clay">Couldn't load your shifts.</div>;
-  if (q.data && !q.data.volunteerLinked) {
+  // Oct 21 client (Yakov): no "isn't linked" wording — the server finds this login's shifts
+  // (by login, linked volunteer or phone); none found = a friendly line.
+  if (q.data && rows.length === 0) {
     return (
       <div className="rounded-[14px] border border-line bg-paper px-4 py-3 text-[13px] text-muted">
-        Your login isn't linked to a dispatcher profile yet, so there are no shifts to show. Ask the office to link it.
+        No shifts assigned to you yet — the office assigns shifts in Shifts.
       </div>
     );
   }

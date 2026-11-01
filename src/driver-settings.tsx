@@ -3,14 +3,17 @@
  * status line — how we reach the driver about pickups (Text / WhatsApp / Both /
  * App only / Nothing), and Pause (for today / a week / until I turn it back on /
  * Oct 14: until a date — "Paused until Sun, Oct 20", ends by itself).
+ * Oct 28 client: how we reach them is now three ticks — 📱 App notifications, 🟢 WhatsApp,
+ * 💬 Text message — any mix, or none (with a clear warning first). AlertTicks is used by the
+ * driver's Settings and the office driver card (same API call, same columns).
  * API: GET/PUT /api/me/settings (apps/api/src/routes/me-settings.ts).
  */
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type DriverSettings, type ReachChoice } from './api';
-import { DateInput } from './design';
+import { api, type AlertChoices, type DriverSettings, type ReachChoice } from './api';
+import { DateInput, cx } from './design';
 import { nyToday } from './time-format';
-import { uiNotify } from './ui-dialogs';
+import { uiConfirm, uiNotify } from './ui-dialogs';
 import { driverError } from './screens/driver-card';
 
 export const REACH_OPTIONS: Array<{ value: ReachChoice; icon: string; label: string; help: string; isNew?: boolean }> = [
@@ -23,6 +26,90 @@ export const REACH_OPTIONS: Array<{ value: ReachChoice; icon: string; label: str
 export const REACH_SHORT: Record<ReachChoice, string> = {
   text: 'Text', whatsapp: 'WhatsApp', both: 'Text + WhatsApp', app: 'App only', none: 'Nothing',
 };
+
+// Oct 28 client: the three ticks (driver Settings + office driver card).
+export const ALERT_OPTIONS: Array<{ key: keyof AlertChoices; icon: string; label: string; help: string }> = [
+  { key: 'app',      icon: '📱', label: 'App notifications', help: 'Pop-ups from this app on the phone.' },
+  { key: 'whatsapp', icon: '🟢', label: 'WhatsApp',          help: 'Pickup messages on WhatsApp.' },
+  { key: 'text',     icon: '💬', label: 'Text message',      help: 'Pickup texts to the phone.' },
+];
+export const ALL_OFF_WARNING = "With everything off, you won't get any pickup messages. Are you sure?";
+/** The ticks from the settings (an older API without `alerts`: from the two columns, same rule as the server). */
+export function alertsOf(s: Pick<DriverSettings, 'alerts' | 'notifChannel' | 'contactChannel'>): AlertChoices {
+  if (s.alerts) return s.alerts;
+  const n = String(s.notifChannel ?? 'both'), c = String(s.contactChannel ?? 'sms');
+  const msgs = n === 'both' || n === 'sms';
+  return { app: n === 'both' || n === 'app', whatsapp: msgs && (c === 'whatsapp' || c === 'both'), text: msgs && (c === 'sms' || c === 'both') };
+}
+export const noAlerts = (a: AlertChoices) => !a.app && !a.whatsapp && !a.text;
+/** "App + WhatsApp + Text" / "Nothing". */
+export function alertsShort(a: AlertChoices): string {
+  const parts = [a.app && 'App', a.whatsapp && 'WhatsApp', a.text && 'Text'].filter(Boolean) as string[];
+  return parts.length ? parts.join(' + ') : 'Nothing';
+}
+
+/** Oct 28 client: the three ticks. Each tap saves; turning the last one off asks first. */
+export function AlertTicks({ s, volunteerId, name, compact = false }: { s: DriverSettings; volunteerId?: number; name?: string; compact?: boolean }) {
+  const qc = useQueryClient();
+  const office = volunteerId != null;
+  const a = alertsOf(s);
+  const save = useMutation({
+    mutationFn: (alerts: AlertChoices) => api<{ data: DriverSettingsFull }>(settingsUrl(volunteerId), { method: 'PUT', body: JSON.stringify({ alerts }) }),
+    onSuccess: (r) => {
+      qc.setQueryData(settingsKey(volunteerId), r);
+      if (office) { qc.invalidateQueries({ queryKey: ['volunteer-alerts', volunteerId] }); qc.invalidateQueries({ queryKey: ['admin-volunteers'] }); }
+      else qc.invalidateQueries({ queryKey: ['volunteer-self'] });
+    },
+    onError: (e) => uiNotify(driverError(e, "Couldn't save, try again."), 'err'),
+  });
+  async function toggle(key: keyof AlertChoices) {
+    if (save.isPending) return;
+    const next = { ...a, [key]: !a[key] };
+    if (noAlerts(next)) {
+      const msg = office ? `With everything off, ${name || 'this driver'} won't get any pickup messages. Are you sure?` : ALL_OFF_WARNING;
+      if (!(await uiConfirm(msg, { okLabel: 'Yes, turn all off', cancelLabel: 'No' }))) return;
+    }
+    save.mutate(next, { onSuccess: () => uiNotify(noAlerts(next) ? 'Saved. No pickup messages.' : `Saved. Pickups by: ${alertsShort(next)}.`, 'ok') });
+  }
+  const none = noAlerts(a);
+  return (
+    <div data-alert-ticks>
+      <div className={compact ? 'flex flex-wrap gap-2' : 'space-y-2'} role="group" aria-label="How we send pickup messages">
+        {ALERT_OPTIONS.map((o) => {
+          const on = a[o.key];
+          const box = (
+            <span className={cx('grid place-items-center rounded-[6px] border-2 shrink-0', compact ? 'h-5 w-5' : 'h-7 w-7', on ? 'border-forest bg-forest text-paper' : 'border-line bg-paper')} aria-hidden>
+              {on && <svg viewBox="0 0 20 20" className={compact ? 'h-3.5 w-3.5' : 'h-5 w-5'} fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M4 10.5l4 4 8-9" /></svg>}
+            </span>
+          );
+          return compact ? (
+            <button key={o.key} type="button" role="checkbox" aria-checked={on} onClick={() => void toggle(o.key)} disabled={save.isPending} title={o.help}
+                    className={cx('haptic flex items-center gap-2 rounded-[10px] border px-3 py-2 text-[13px] font-bold disabled:opacity-60',
+                                  on ? 'border-forest bg-sage/50 text-forest' : 'border-line bg-paper text-ink hover:border-forest')}>
+              {box}<span aria-hidden>{o.icon}</span> {o.label}
+            </button>
+          ) : (
+            <button key={o.key} type="button" role="checkbox" aria-checked={on} onClick={() => void toggle(o.key)} disabled={save.isPending}
+                    className={cx('haptic w-full text-left flex items-center gap-3 rounded-[14px] border-[1.5px] px-3.5 py-3 min-h-[56px] transition',
+                                  on ? 'border-forest bg-sage/50' : 'border-line bg-paper')}>
+              <span className="text-[22px] w-7 text-center shrink-0" aria-hidden>{o.icon}</span>
+              <span className="flex-1 min-w-0">
+                <span className={cx('block text-[17px] font-bold', on ? 'text-forest' : 'text-ink')}>{o.label}</span>
+                <span className="block text-[14px] text-muted leading-snug">{o.help}</span>
+              </span>
+              {box}
+            </button>
+          );
+        })}
+      </div>
+      {none && (
+        <div data-alerts-off className={cx('mt-2 rounded-[12px] bg-clay/10 border border-clay/30 text-clay font-bold leading-snug', compact ? 'px-3 py-2 text-[13px]' : 'px-3.5 py-2.5 text-[15px]')}>
+          🔕 {office ? `${name || 'This driver'} won't get pickup messages.` : "You won't get pickup messages."}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export const shiftDay = (iso: string, n: number) => new Date(Date.parse(iso + 'T12:00:00Z') + n * 86400e3).toISOString().slice(0, 10);
 export const prettyDay = (iso: string) => new Date(iso + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });

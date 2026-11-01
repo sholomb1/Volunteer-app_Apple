@@ -13,6 +13,7 @@ import { Plus, X, Trash2, Phone, MessageSquare, Mail, Users2, Store, ChevronLeft
 import { api, crm, staffUsers, adminCRUD, type CrmInteraction, type FollowupDay, type StaffUser } from './api';
 import { Button, cx, SearchBar, DateInput } from './design';
 import { nyToday } from './time-format';
+import { hidePickupIds } from './pickup-label'; // Oct 22 client: old call logs say "pickup #1089376 (Bites)"
 import { RegistrationLinkCard } from './portal-sections';
 import { Gift } from 'lucide-react';
 
@@ -268,7 +269,7 @@ function InteractionRow({ row, onPick }: { row: CrmInteraction; onPick: () => vo
             · {CHANNEL_LABEL[row.channel]} · {row.direction === 'inbound' ? 'In' : 'Out'} · {occ.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
           </span>
         </div>
-        {row.summary && <div className="text-[13px] text-ink mt-1 line-clamp-2">{row.summary}</div>}
+        {row.summary && <div className="text-[13px] text-ink mt-1 line-clamp-2">{hidePickupIds(row.summary)}</div>}
         <div className="flex items-center gap-2 mt-1.5 flex-wrap">
           <span className={cx('text-[10.5px] font-bold py-0.5 px-2 rounded-full', STATUS_TONE[row.status] ?? 'bg-line text-muted')}>
             {STATUS_LABEL[row.status] ?? row.status}
@@ -658,7 +659,7 @@ export function ContactRecruitingHistory({ targetType, targetId, targetName }: {
                  {STATUS_LABEL[r.status] ?? r.status}
                </span>
              </div>
-             {r.summary && <div className="text-[12.5px] text-ink mt-1 line-clamp-2">{r.summary}</div>}
+             {r.summary && <div className="text-[12.5px] text-ink mt-1 line-clamp-2">{hidePickupIds(r.summary)}</div>}
              {r.nextFollowupAt && (
                <div className="text-[11px] text-clay font-bold mt-1">
                  Follow up {new Date(r.nextFollowupAt).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}

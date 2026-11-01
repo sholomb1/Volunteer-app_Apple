@@ -37,10 +37,10 @@ const SECTIONS: Section[] = [
   {
     key: 'live', icon: '📋', title: 'Live Board', tabs: ['live'], open: { tab: 'live' },
     bullets: [
-      'Every open pickup is a card. Tap a card to open the pickup. "Show covered pickups" also shows pickups that already have a driver.',
+      'The whole day on one page, opened at the current time (scroll up for earlier pickups). Green = covered, red = needs attention, orange = needs confirmation today (Confirm / Decline on the card), grey = finished or cancelled. "Hide finished" hides the grey ones. Tap a card to open the pickup.',
       'Tags on a card: ONE-TIME = a single pickup. STEADY = it repeats. 📱 STORE APP = the store sent it from its app. Reposted = it was put back in the queue (with when).',
-      '"Will go to 23 drivers at 9:00 AM" = the next text. "Sent 2×" = drivers were already texted twice. Tap it to see who got the text, and why others did not.',
-      { t: 'Buttons: Assign driver, Edit, Send SMS (asks before texting again), Repost (for a pickup whose time passed), Dismiss (close it, with a reason). "Waiting 3" at the top = past their time and still no driver.', write: true },
+      '"📤 Texted 2:06 PM · 12 min ago" = when drivers were last texted about it. Tap it to see who got the text, and why others did not. The top of the board says when the next pickup text goes out.',
+      { t: 'Buttons: Assign driver, Edit, Send SMS (asks before texting again), Repost (for a pickup whose time passed), Dismiss (close it, with a reason). "📞 Drivers happy to be called" at the top = who said a phone call is OK now.', write: true },
     ],
   },
   {
@@ -63,7 +63,7 @@ const SECTIONS: Section[] = [
   {
     key: 'pickups', icon: '📅', title: 'Pickups', tabs: ['pickups'], open: { tab: 'pickups', sub: 'today' },
     bullets: [
-      'Tabs: Today · List · Calendar · History (old pickups, 50 at a time, "Show more") · Steady (pickups that repeat) · Needs attention (time passed, no driver).',
+      'Tabs: Today · Calendar · History (any dates, also future ones, 50 at a time, "Show more") · Steady (pickups that repeat) · Needs attention (time passed, no driver).',
       { t: 'Steady → "New steady pickup" (top right) adds a pickup that repeats every week. Edit a steady one: this time only, this and later, or the whole schedule.', write: true },
       'Food check: a steady pickup can text the store "Do you have food today?". YES sends it to drivers, NO cancels today, no answer = an alert to call the store.',
       { t: 'Duplicate copies a pickup to a new date and time.', write: true },
@@ -79,7 +79,7 @@ const SECTIONS: Section[] = [
     bullets: [
       'Tap a driver to open the profile: Overview (At a glance = a one-line summary and the last 30 days), Alerts & schedule, Sign-up info, Pickup history.',
       'Alerts & schedule: does this driver get pickup texts, and if not, why. Text groups, quiet times, away dates, steady pickups.',
-      'On-call hours = "happy to be called". Pick "Weekdays (Mon–Thu)" or "Every day", or one day. "On call now" on the Live Board lists them; press "Log call" after you call.',
+      'On-call hours = "happy to be called". Pick "Weekdays (Mon–Thu)" or "Every day", or one day. "📞 Drivers happy to be called" on the Live Board lists them; press "Log call" after you call.',
       { t: 'New sign-ups: new drivers waiting for review. Approve (Active + Default text group) or Not now.', need: 'signups' },
     ],
     links: [{ tab: 'signups', label: 'New sign-ups' }],
@@ -181,7 +181,7 @@ const TOUR: { title: string; text: string; target?: string; need?: string }[] = 
   { title: "Welcome to the office portal 👋", text: 'This short tour shows the main parts. It takes 1 minute. You can open it again any time from the ? button at the top.' },
   { title: 'The menu', text: 'Everything is in the menu on the left (on a phone: ☰ at the top). You only see the parts you have access to.', target: 'nav' },
   { title: 'Live Board', text: 'All open pickups as cards. Tap a card to open it. Assign a driver, Edit, Send SMS or Dismiss right from the card.', target: 'Live Board', need: 'live' },
-  { title: 'Pickups', text: 'Today, List, Calendar, History, Steady (repeating) and Needs attention (no driver yet).', target: 'Pickups', need: 'pickups' },
+  { title: 'Pickups', text: 'Today, Calendar, History, Steady (repeating) and Needs attention (no driver yet).', target: 'Pickups', need: 'pickups' },
   { title: 'Drivers', text: 'Every driver: who gets texts and why, quiet times, on-call hours, and new sign-ups to approve.', target: 'Drivers', need: 'volunteers' },
   { title: 'Messaging', text: 'Driver texts and chat, code words, who gets texts, and sending texts.', target: 'Messaging', need: 'driver-messages' },
   { title: 'Alerts', text: 'The bell rings when something needs you: a reply, a driver gave a pickup back, a pickup with no driver. Dismiss when done.', target: 'bell' },
@@ -351,7 +351,7 @@ export function HelpMenu({ tabs, writeOk, pageLabel, onOpenTab }: {
                     onWhatsNew={openWhatsNew} />
       )}
       {view === 'whats-new' && <WhatsNewModal isAdmin={isAdmin} newSince={wnSince} onClose={() => setView(null)} />}
-      {view === 'reports' && <ProblemReportsModal onClose={() => setView(null)} onOpenTasks={tabs.includes('tasks') ? () => { setView(null); onOpenTab('tasks'); } : undefined} />}
+      {view === 'reports' && <ProblemReportsModal onClose={() => setView(null)} onOpenTasks={tabs.includes('bug-reports') || tabs.includes('tasks') ? () => { setView(null); onOpenTab(tabs.includes('bug-reports') ? 'bug-reports' : 'tasks'); } : undefined} />}
       <ReportProblemHost />
     </div>
   );

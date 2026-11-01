@@ -9,10 +9,11 @@
  */
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from './api';
+import { api, canOfficeOnly, getUser } from './api';
 import { cx } from './design';
 import { uiConfirm } from './ui-dialogs';
 import { OnCallHoursEditor, RecentCalls } from './on-call';
+import { LastChanged } from './change-history'; // Oct 16 client: "Last changed by … · when"
 import { OfficePauseReach } from './office-driver-app'; // Oct 14 client: same Pause + reach choice as the driver app
 import { fmtTime } from './time-format';
 import { QuietDaysPicker, liveTexting } from './quiet-days-picker'; // Oct 14 client: days for each quiet time
@@ -108,6 +109,7 @@ export function VolunteerAlertsTab({ volunteerId }: { volunteerId: number }) {
     mutationFn: (spId: string) => api(`/api/volunteers/${volunteerId}/alerts/steady/${spId}`, { method: 'DELETE' }),
     onSuccess: done, onError: fail,
   });
+  const office = canOfficeOnly(getUser()?.role); // Oct 21 client: text groups + steady timing = office only
   const steadyReminder = useMutation({
     mutationFn: (x: { spId: string; enabled: boolean; minutes?: number }) => api(`/api/steady-pickups/${x.spId}`, {
       method: 'PATCH', body: JSON.stringify({ reminderEnabled: x.enabled, ...(x.minutes ? { reminderMinutesBefore: x.minutes } : {}) }),
@@ -164,15 +166,7 @@ export function VolunteerAlertsTab({ volunteerId }: { volunteerId: number }) {
                 : 'Off — no text when they forget to sign in at the kiosk.'}>
           <Toggle label="Did you drop it off text" on={v.doneRemindersEnabled} disabled={busy} onChange={(on) => patch.mutate({ doneRemindersEnabled: on })} />
         </Line>
-        <Line label="Send by">
-          {(['sms', 'whatsapp', ...(v.canBoth || v.contactChannel === 'both' ? ['both'] : [])] as const).map((c) => (
-            <button key={c} disabled={busy} onClick={() => c !== v.contactChannel && patch.mutate({ contactChannel: c })}
-                    className={cx('haptic rounded-[10px] border px-3 py-1.5 text-[12.5px] font-bold',
-                                  v.contactChannel === c ? 'border-forest bg-forest text-paper' : 'border-line bg-paper text-ink hover:bg-cream')}>
-              {c === 'sms' ? 'Text' : c === 'whatsapp' ? 'WhatsApp' : 'Both'}
-            </button>
-          ))}
-        </Line>
+        {/* Oct 28 client: "Send by" (Text / WhatsApp / Both) is now the App / WhatsApp / Text ticks in "Pause & how we reach them" above. */}
         {/* Oct 9 client: more than one quiet time (e.g. 1–4 PM and 11 PM–7 AM). */}
         <div className="border-b border-line py-2 last:border-b-0">
           <div className="text-[13.5px] font-bold text-ink">Quiet times</div>
@@ -216,18 +210,18 @@ export function VolunteerAlertsTab({ volunteerId }: { volunteerId: number }) {
         </div>
       </Card>
 
-      <Card title="Text groups" help={`Every group, and whether ${name} is in it.${!v.smsOptIn ? ' (Automatic texts are turned off, so no group texts reach them now.)' : ''}`}>
+      <Card title="Text groups" help={`Every group, and whether ${name} is in it.${!v.smsOptIn ? ' (Automatic texts are turned off, so no group texts reach them now.)' : ''}${!office ? ' Only the office can change the groups — ask the office.' : ''}`}>
         {d.groups.map((g) => (
           <Line key={g.id}
                 label={<>{g.name}{g.isDefault && <span className="ml-1.5 rounded-full bg-sage px-2 py-0.5 text-[10.5px] font-extrabold uppercase tracking-[.04em] text-forest">default</span>}</>}
                 sub={<>{g.isDefault ? 'Gets the texts about open pickups. ' : ''}{g.memberCount} {g.memberCount === 1 ? 'person' : 'people'}
                       {g.isDefault && asked(v.appPickupTexts) ? ` · ${asked(v.appPickupTexts)}` : ''}</>}>
-            <Toggle label={g.name} on={g.member} disabled={busy} onChange={(on) => group.mutate({ id: g.id, member: on })} />
+            <Toggle label={g.name} on={g.member} disabled={busy || !office} onChange={(on) => group.mutate({ id: g.id, member: on })} />
           </Line>
         ))}
         <Line label="Urgent: pickup still has no driver"
               sub={<>Gets a text when a pickup is still without a driver.{asked(v.appUncovered) ? ` · ${asked(v.appUncovered)}` : ''}</>}>
-          <Toggle label="Uncovered-pickup alerts" on={v.uncoveredAlerts} disabled={busy} onChange={(on) => group.mutate({ id: 'uncovered', member: on })} />
+          <Toggle label="Uncovered-pickup alerts" on={v.uncoveredAlerts} disabled={busy || !office} onChange={(on) => group.mutate({ id: 'uncovered', member: on })} />
         </Line>
       </Card>
 
@@ -249,7 +243,7 @@ export function VolunteerAlertsTab({ volunteerId }: { volunteerId: number }) {
             <Line key={s.id}
                   label={<>{s.label}{!s.active && <span className="ml-1.5 text-[11px] font-bold text-muted">(paused)</span>}</>}
                   sub={<>{days}{s.time ? ` · ${t12(s.time)}` : ''}{!s.everyDay && ' · only these days'}{s.driverCount > 1 && ` · ${s.driverCount} drivers`}</>}>
-              <select className={box} disabled={steadyReminder.isPending || !v.steadyRemindersEnabled}
+              <select className={box} disabled={steadyReminder.isPending || !v.steadyRemindersEnabled || !office}
                       title={s.driverCount > 1 ? `Reminder time is the same for all ${s.driverCount} drivers on this pickup` : undefined}
                       value={s.reminderEnabled ? String(s.reminderMinutes ?? 60) : 'off'}
                       onChange={(e) => steadyReminder.mutate(e.target.value === 'off'
@@ -304,6 +298,7 @@ export function VolunteerAlertsTab({ volunteerId }: { volunteerId: number }) {
 
       <Card title="On call" help="">
         <OnCallHoursEditor endpoint={`/api/volunteers/${volunteerId}/on-call`} title="" who={`${name} is`} />
+        <LastChanged volunteerId={volunteerId} field="calls" />
         {/* Oct 11 client: calls the office made to this driver (logged from the Live Board or here). */}
         <div className="mt-3 border-t border-line pt-3">
           <RecentCalls volunteerId={volunteerId} name={name} />

@@ -11,6 +11,8 @@
  *    "GMT-5" — that maps to Eastern; using the named zone keeps it correct
  *    year-round instead of drifting an hour every spring/fall.
  */
+import { whenAt } from './display';
+
 const TZ = 'America/New_York';
 
 /** "14:00" or "14:00:00" → "2:00 PM". Empty input passes through unchanged. */
@@ -33,15 +35,10 @@ export function fmtTimeEastern(iso: string | Date | null | undefined): string {
 }
 
 /** ISO timestamp → "Jun 14, 2:30 PM" in Eastern time. */
+// Oct 23 client ("same style everywhere"): one date + time format — "4:00 PM" today,
+// "tomorrow 9:00 AM", "Thu Oct 23 · 4:00 PM" (src/display.ts whenAt).
 export function fmtDateTimeEastern(iso: string | Date | null | undefined): string {
-  if (!iso) return '';
-  const d = iso instanceof Date ? iso : new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleString('en-US', {
-    month: 'short', day: 'numeric',
-    hour: 'numeric', minute: '2-digit',
-    hour12: true, timeZone: TZ,
-  });
+  return iso ? whenAt(iso) : '';
 }
 
 /** ISO date string (YYYY-MM-DD) → "Sat, Jun 14" in Eastern time. */
@@ -54,7 +51,7 @@ export function fmtDateEastern(iso: string | Date | null | undefined): string {
   return d.toLocaleDateString('en-US', {
     weekday: 'short', month: 'short', day: 'numeric',
     timeZone: TZ,
-  });
+  }).replace(',', ''); // Oct 23 client: "Thu Oct 23" everywhere
 }
 
 /** Oct 9: date → "Thu, Oct 9" in Eastern time; adds ", 2025" only when it's
@@ -72,14 +69,7 @@ export function fmtDay(iso: string | Date | null | undefined): string {
 
 /** Combined "Sat, Jun 14 · 2:30 PM" — used on pickup cards and feeds. */
 export function fmtDateTimeFull(iso: string | Date | null | undefined): string {
-  if (!iso) return '';
-  const d = iso instanceof Date ? iso : new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleString('en-US', {
-    weekday: 'short', month: 'short', day: 'numeric',
-    hour: 'numeric', minute: '2-digit',
-    hour12: true, timeZone: TZ,
-  });
+  return iso ? whenAt(iso) : ''; // Oct 23 client: the one format (src/display.ts)
 }
 
 /** Today's date (YYYY-MM-DD) anchored to New York. Use this instead of

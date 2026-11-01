@@ -14,6 +14,7 @@
  */
 import { PushNotifications } from '@capacitor/push-notifications';
 import { api } from './api';
+import { openStoreListing } from './app-version-check'; // Oct 29 client: "update ready" push
 
 // Keep in step with android/app/build.gradle versionName.
 const APP_VERSION = '1.0.42';
@@ -45,6 +46,13 @@ export async function ensureNativePushRegistered(): Promise<{ ok: boolean; reaso
       void postToken(platform, token.value).catch(() => {/* best-effort */});
     });
     await PushNotifications.addListener('registrationError', () => {/* best-effort */});
+    // Oct 29 client: office "Zeh L'Zeh update ready" push -> open this phone's store page.
+    await PushNotifications.addListener('pushNotificationActionPerformed', (a) => {
+      const d = (a?.notification?.data ?? {}) as Record<string, string>;
+      if (d.type !== 'app_update') return;
+      const url = typeof d.url === 'string' && /^https:\/\//.test(d.url) ? d.url : null;
+      window.setTimeout(() => { openStoreListing(platform === 'ios', url); }, 300); // let the app finish opening
+    });
   }
 
   await PushNotifications.register();

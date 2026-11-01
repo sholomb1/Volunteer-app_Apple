@@ -10,6 +10,7 @@ import { AppBar, Avatar, Skeleton, cx } from '../design';
 import { nyToday, driverShowsNow } from '../time-format';
 import { DriverCard, useTakePickup } from './driver-card';
 import { LoadError } from './VolunteerHome';
+import { dayText } from '../display';
 
 const FINISHED = new Set(['completed', 'delivered', 'cancelled', 'missed']);
 
@@ -124,7 +125,7 @@ function groupByDate<T extends { scheduled_date: string; scheduled_time?: string
   for (const it of sorted) {
     // Oct 13 client: a reposted / late pickup still to do sits under Today (it's "now").
     const key = driverShowsNow(it as any) ? today : String(it.scheduled_date).slice(0, 10);
-    const pretty = new Date(key + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+    const pretty = dayText(key, today); // Oct 23 client: "Thu Oct 23" everywhere
     const label = key === today ? `Today · ${pretty}` : key === tomorrow ? `Tomorrow · ${pretty}` : key === yesterday ? `Yesterday · ${pretty}` : pretty;
     (groups.get(key) ?? groups.set(key, { key, label, items: [] }).get(key)!).items.push(it);
   }

@@ -4,8 +4,12 @@
  */
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNightSend, ScheduledTexts, personalSched, refreshScheduled } from './late-night'; // Oct 23 client: late-night prompt
 import { api, decodeEnc, loadFailText } from './api';
 import { Tip } from './design';
+import { displayPhone, shortAddress, stripUnit, telHref, msgWhen, whenText } from './display'; // Oct 23 client: same style everywhere
+import { Name, StatusPill } from './display-ui';
+import { tidyPlaceName } from './pickup-label';
 import { uiConfirm, uiNotify } from './ui-dialogs';
 import { fmtDay, fmtTimeEastern } from './time-format'; // Oct 11 client: activity list times
 import { ResponseTimeLine } from './response-times'; // Oct 11 client: how fast they take pickups
@@ -14,9 +18,7 @@ import { VolunteerAppInviteBar } from './volunteer-app-invite'; // Oct 14 client
 const DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const fmtDate = (d: string | null | undefined, t?: string | null) => {
   if (!d) return '—';
-  const dt = new Date(`${d}T${(t ?? '12:00').slice(0, 5)}:00`);
-  const day = dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: dt.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined });
-  return t ? `${day} · ${dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}` : day;
+  return whenText(String(d).slice(0, 10), t) || '—'; // Oct 23 client: one date + time format
 };
 
 function Stat({ n, label, tone, tip }: { n: number | string; label: string; tone?: 'good' | 'bad' | 'warn'; tip?: string }) {
@@ -53,11 +55,11 @@ function RecentList({ rows, who }: { rows: any[]; who: 'store' | 'drivers' }) {
         {shown.map((r) => (
           <li key={r.id} className="flex items-start justify-between gap-3 px-3 py-2">
             <div className="min-w-0">
-              <div className="text-[13px] font-semibold text-ink truncate">{(who === 'store' ? r.store : r.drivers) || <span className="italic font-normal text-muted">No driver</span>}</div>
-              <div className="text-[11.5px] text-muted">{fmtDate(r.date, r.time)} · #{r.ref_number ?? r.id}</div>
+              <div className="text-[13px] font-semibold text-ink truncate">{(who === 'store' ? r.store : r.drivers) ? <bdi dir="auto">{who === 'store' ? tidyPlaceName(r.store) || r.store : stripUnit(r.drivers)}</bdi> : <span className="italic font-normal text-muted">No driver</span>}</div>
+              <div className="text-[11.5px] text-muted">{fmtDate(r.date, r.time)}</div>
             </div>
             <div className="shrink-0 text-right text-[11.5px]">
-              <div className="font-bold text-ink">{r.outcome_label ?? 'Still open'}</div>
+              <div>{r.outcome_label || r.outcome ? <StatusPill of={{ outcome: r.outcome, outcome_label: r.outcome_label, kiosk_verified: r.kiosk_verified }} /> : <span className="font-bold text-ink">Still open</span>}</div>
               {String(r.outcome ?? '').startsWith('completed') && (
                 <div className={r.kiosk_verified ? 'text-forest font-bold' : 'text-muted'}>{r.kiosk_verified ? '✓ Kiosk' : 'No kiosk'}</div>
               )}
@@ -210,9 +212,12 @@ export function DriverOverview({ volunteerId, phone, firstName }: { volunteerId:
   const qcd = useQueryClient();
   const [msg, setMsg] = useState('');
   const [sent, setSent] = useState<string | null>(null);
-  const send = useMutation({
-    mutationFn: () => api('/api/sms/send-one', { method: 'POST', body: JSON.stringify({ phone, body: msg.trim() }) }),
-    onSuccess: () => { setSent('✅ Sent.'); setMsg(''); qcd.invalidateQueries({ queryKey: ['sms-convo'] }); },
+  // Oct 23 client: late at night "Send now, or schedule it?" (late-night.tsx).
+  const send = useNightSend({
+    send: (c: boolean) => api('/api/sms/send-one', { method: 'POST', body: JSON.stringify({ phone, body: msg.trim(), ...(c ? { confirmNight: true } : {}) }) }),
+    schedule: (iso: string) => personalSched.create({ kind: 'sms', phone: phone ?? null, text: msg.trim() }, iso),
+    onSent: () => { setSent('✅ Sent.'); setMsg(''); qcd.invalidateQueries({ queryKey: ['sms-convo'] }); },
+    onScheduled: () => { setSent(null); setMsg(''); refreshScheduled(qcd); }, // the ⏰ line shows below
     onError: (e: any) => setSent(`⚠️ ${e?.message || 'Not sent'}`),
   });
   if (q.isLoading) return <div className="text-[13px] text-muted">Loading…</div>;
@@ -262,12 +267,14 @@ export function DriverOverview({ volunteerId, phone, firstName }: { volunteerId:
           <SmsConversation volunteerId={volunteerId} firstName={firstName} />
           <div className="mt-2 flex gap-2">
             <input value={msg} onChange={(e) => { setMsg(e.target.value); setSent(null); }} placeholder="Type a message…"
-                   onKeyDown={(e) => { if (e.key === 'Enter' && msg.trim() && !send.isPending) send.mutate(); }}
+                   onKeyDown={(e) => { if (e.key === 'Enter' && msg.trim() && !send.busy) void send.start(); }}
                    className="flex-1 min-w-0 rounded-[10px] border border-line bg-paper px-3 py-2 text-[13px]" />
-            <button disabled={!msg.trim() || send.isPending} onClick={() => send.mutate()}
-                    className="haptic rounded-[10px] bg-forest px-4 py-2 text-[13px] font-bold text-paper disabled:opacity-50">{send.isPending ? 'Sending…' : 'Send'}</button>
+            <button disabled={!msg.trim() || send.busy} onClick={() => { void send.start(); }}
+                    className="haptic rounded-[10px] bg-forest px-4 py-2 text-[13px] font-bold text-paper disabled:opacity-50">{send.busy ? 'Sending…' : 'Send'}</button>
           </div>
           {sent && <div className="mt-1 text-[12px] font-semibold">{sent}</div>}
+          <ScheduledTexts filter={{ volunteerId, phone: phone ?? null }} className="mt-1.5" />
+          {send.prompt}
         </div>
       )}
       <div>
@@ -295,7 +302,7 @@ function SmsConversation({ volunteerId, firstName }: { volunteerId: number; firs
   const him = (firstName || '').trim() || 'Them';
   const shown = all ? msgs : msgs.slice(-5);
   const manyNumbers = new Set(msgs.map((m) => m.phone).filter(Boolean)).size > 1; // Oct 14 client: label which number
-  const when = (x: string) => new Date(x).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+  const when = (x: string) => msgWhen(x); // Oct 27 client: "Always write date"
   return (
     <div>
       {msgs.length > 5 && (
@@ -346,7 +353,7 @@ function ExpiredRow({ r, onDone }: { r: Expired; onDone: () => void }) {
   const [asking, setAsking] = useState(false);
   const keep = useMutation({
     mutationFn: (textNow: boolean) => api<{ data: { sent: number; skipped: string | null } }>(`/api/pickup-instances/${r.id}/requeue`, { method: 'POST', body: JSON.stringify({ textNow }) }),
-    onSuccess: (x) => { setMsg(x.data.skipped === 'not-texted' ? 'Back in the queue — no text sent.' : x.data.sent > 0 || x.data.skipped === 'dry-run' ? 'Reposted — texted to drivers.' : String(x.data.skipped ?? '').startsWith('quiet') ? 'Reposted — goes out at 9 AM.' : 'Reposted.'); setTimeout(onDone, 1500); },
+    onSuccess: (x) => { setMsg((x.data as any).sending ? `Reposted. ${(x.data as any).note ?? 'Texting drivers now.'}` : x.data.skipped === 'not-texted' ? 'Back in the queue — no text sent.' : x.data.sent > 0 || x.data.skipped === 'dry-run' ? 'Reposted — texted to drivers.' : String(x.data.skipped ?? '').startsWith('quiet') ? 'Reposted — goes out at 9 AM.' : 'Reposted.'); setTimeout(onDone, 1500); },
     onError: (e: any) => setMsg(`⚠️ ${e?.message || 'Could not reopen'}`),
   });
   const close = useMutation({
@@ -355,18 +362,17 @@ function ExpiredRow({ r, onDone }: { r: Expired; onDone: () => void }) {
     onError: (e: any) => setMsg(`⚠️ ${e?.message || 'Could not close'}`),
   });
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-  const when = (r.date !== today ? new Date(`${r.date}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short' }) + ' ' : '')
-    + (r.time ? new Date(`2000-01-01T${r.time}:00`).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : '');
+  const when = whenText(r.date, r.time, today); // Oct 23 client: one date + time format
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-clay/20 px-4 py-2.5 last:border-b-0">
       <div className="min-w-0">
         <div className="truncate font-display text-[14px] font-semibold text-ink">
-          {r.label} <span className="font-sans text-[11.5px] font-bold text-muted">#{r.ref_number ?? r.id}{r.steady ? ' · steady' : ''}</span>
+          {r.label}{r.steady && <span className="font-sans text-[11.5px] font-bold text-muted"> · steady</span>}
         </div>
         <div className="flex flex-wrap gap-x-3 text-[11.5px] text-muted">
           <span className="font-bold text-ink">{when}</span>
-          {r.address && <span className="truncate">{r.address}</span>}
-          {r.phone && <a href={`tel:${r.phone}`} className="font-bold text-forest hover:underline">{r.phone}</a>}
+          {r.address && <span className="truncate" title={r.address}>{shortAddress(r.address)}</span>}
+          {r.phone && <a href={telHref(r.phone)} className="font-bold text-forest hover:underline">{displayPhone(r.phone)}</a>}
         </div>
       </div>
       {msg ? <div className="text-[12px] font-semibold text-forest">{msg}</div> : asking ? (
@@ -398,10 +404,15 @@ function ExpiredRow({ r, onDone }: { r: Expired; onDone: () => void }) {
   );
 }
 
-/** Oct 6 client: taken but not checked in — settle with Mark done / Mark missed. */
-type Taken = { id: number; ref_number: string | null; date: string; time: string | null; label: string; drivers: string };
+/** Oct 6 client: taken but not checked in — settle with Mark done / Mark missed.
+ *  Oct 22 client: back at the TOP of the Live Board as a compact strip ("🏷️ 3 taken, no kiosk sign-in", tap =
+ *  the list), + taken pickups over 1 h past their time that nobody signed in for yet, + "💬 Ask driver: dropped
+ *  off?" on each row (texts the driver; his YES marks it dropped off, NO rings the bell). Named by store / donor
+ *  / street, never by an id. */
+type DropoffAsk = { name: string; at: string; sent: boolean; byName: string | null; answer: 'yes' | 'no' | null; answeredAt: string | null };
+type Taken = { id: number; ref_number: string | null; date: string; time: string | null; label: string; drivers: string; open?: boolean; asks?: DropoffAsk[] | null };
 // Oct 9 client: last 7 or 30 days, "Mark all done", and a one-driver view (from Rewards).
-export function NotCheckedInSection({ driver, startOpen }: { driver?: string; startOpen?: boolean } = {}) {
+export function NotCheckedInSection({ driver, startOpen, strip }: { driver?: string; startOpen?: boolean; strip?: boolean } = {}) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(!!startOpen);
   const [days, setDays] = useState<7 | 30>(driver ? 30 : 7);
@@ -413,6 +424,7 @@ export function NotCheckedInSection({ driver, startOpen }: { driver?: string; st
   const rows = all.filter((r) => r.date >= since && (!driver || String(r.drivers ?? '').split(', ').includes(driver)));
   const refresh = () => { for (const k of ['not-checked-in', 'admin-pickups', 'admin-pickups-range', 'gas-milestones']) qc.invalidateQueries({ queryKey: [k] }); };
   if (all.length === 0 && !driver) return null;
+  if (strip && rows.length === 0 && days === 7) return null;
   async function markAll() {
     const list = rows;
     if (!list.length) return;
@@ -432,6 +444,36 @@ export function NotCheckedInSection({ driver, startOpen }: { driver?: string; st
       Last {d} days
     </button>
   );
+  const body = (
+    <>
+      <div className="border-t border-amber/40 px-4 py-2 flex flex-wrap items-center gap-2 text-[11.5px] text-[#9a7415]">
+        <span className="flex-1 min-w-[200px]">A driver took these but never signed in at the kiosk. Ask him, or if you know, mark them done or missed.</span>
+        {rangeBtn(7)}{rangeBtn(30)}
+        {rows.length > 0 && (
+          <button onClick={() => void markAll()} disabled={bulk?.startsWith('Marking')}
+                  className="haptic rounded-[10px] bg-forest px-3 py-1 text-[11.5px] font-extrabold text-paper disabled:opacity-50">
+            Mark all {rows.length} done
+          </button>
+        )}
+      </div>
+      {bulk && <div className="border-t border-amber/30 px-4 py-2 text-[12px] font-semibold text-forest">{bulk}</div>}
+      {all.length >= 200 && <div className="border-t border-amber/30 px-4 py-1.5 text-[11.5px] text-muted">Showing the newest 200. Settle these and the rest will show.</div>}
+      {rows.length === 0 && <div className="border-t border-amber/30 px-4 py-2.5 text-[12.5px] text-muted">Nothing waiting{driver ? ` for ${driver}` : ''} in the last {days} days.</div>}
+      {rows.map((r) => <TakenRow key={r.id} r={r} onDone={refresh} />)}
+    </>
+  );
+  if (strip) {
+    return (
+      <div data-testid="nokiosk-strip" className="sticky top-0 z-20 mb-3 overflow-hidden rounded-[12px] border border-amber/60 bg-amber-soft shadow-sm">
+        <button onClick={() => setOpen(!open)} aria-expanded={open}
+                className="haptic flex w-full items-center justify-between gap-2 px-3 py-2 text-left">
+          <span className="text-[12.5px] font-extrabold text-[#9a7415]">🏷️ {rows.length} taken, no kiosk sign-in{days === 30 ? ' (30 days)' : ''}</span>
+          <span className="text-[12px] font-bold text-forest">{open ? 'Hide ▴' : 'Review ▾'}</span>
+        </button>
+        {open && <div className="max-h-[60vh] overflow-y-auto bg-paper/60">{body}</div>}
+      </div>
+    );
+  }
   return (
     <div className="mb-4 rounded-[14px] border border-amber/50 bg-amber-soft/40">
       <button onClick={() => setOpen(!open)} className="haptic flex w-full flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-left">
@@ -440,54 +482,105 @@ export function NotCheckedInSection({ driver, startOpen }: { driver?: string; st
         </span>
         <span className="text-[12px] font-bold text-forest">{open ? 'Hide' : 'Review'}</span>
       </button>
-      {open && (
-        <>
-          <div className="border-t border-amber/40 px-4 py-2 flex flex-wrap items-center gap-2 text-[11.5px] text-[#9a7415]">
-            <span className="flex-1 min-w-[200px]">A driver took these but never signed in at the kiosk. If you know, mark them done or missed.</span>
-            {rangeBtn(7)}{rangeBtn(30)}
-            {rows.length > 0 && (
-              <button onClick={() => void markAll()} disabled={bulk?.startsWith('Marking')}
-                      className="haptic rounded-[10px] bg-forest px-3 py-1 text-[11.5px] font-extrabold text-paper disabled:opacity-50">
-                Mark all {rows.length} done
-              </button>
-            )}
-          </div>
-          {bulk && <div className="border-t border-amber/30 px-4 py-2 text-[12px] font-semibold text-forest">{bulk}</div>}
-          {all.length >= 200 && <div className="border-t border-amber/30 px-4 py-1.5 text-[11.5px] text-muted">Showing the newest 200. Settle these and the rest will show.</div>}
-          {rows.length === 0 && <div className="border-t border-amber/30 px-4 py-2.5 text-[12.5px] text-muted">Nothing waiting{driver ? ` for ${driver}` : ''} in the last {days} days.</div>}
-          {rows.map((r) => <TakenRow key={r.id} r={r} onDone={refresh} />)}
-        </>
-      )}
+      {open && body}
     </div>
   );
 }
+type AskPreview = {
+  preview: boolean; shabbos: boolean; nightNow: boolean; asked: string[];
+  drivers: { id: number; name: string; quiet: boolean; skip: string | null; body: string; sent?: boolean; error?: string | null }[];
+};
+const nyClock = (iso: string) => new Date(iso).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
+/** Oct 22 client: "Asked Moshe 3:10 PM · waiting" / "Moshe said NO 3:20 PM". */
+export function dropoffAskLine(asks: DropoffAsk[] | null | undefined): string | null {
+  const sent = (asks ?? []).filter((a) => a.sent);
+  if (!sent.length) return null;
+  const waiting = sent.filter((a) => !a.answer);
+  const parts: string[] = [];
+  if (waiting.length) parts.push(`Asked ${waiting.map((a) => a.name).join(', ')} ${nyClock(waiting[waiting.length - 1]!.at)} · waiting`);
+  for (const a of sent.filter((x) => x.answer)) parts.push(`${a.name} said ${a.answer === 'yes' ? 'YES' : 'NO'}${a.answeredAt ? ` ${nyClock(a.answeredAt)}` : ''}`);
+  return parts.join(' · ');
+}
 function TakenRow({ r, onDone }: { r: Taken; onDone: () => void }) {
+  const qc = useQueryClient();
   const [msg, setMsg] = useState<string | null>(null);
+  const [ask, setAsk] = useState<AskPreview | null>(null);
+  const [askNote, setAskNote] = useState<string | null>(null);
   const m = useMutation({
     mutationFn: (done: boolean) => api(`/api/pickup-instances/${r.id}/${done ? 'mark-done' : 'mark-missed'}`, { method: 'POST' }),
     onSuccess: (_x, done) => { setMsg(done ? 'Marked done.' : 'Marked missed.'); setTimeout(onDone, 1200); },
     onError: (e: any) => setMsg(`⚠️ ${e?.message || 'Could not save'}`),
   });
-  const when = new Date(`${r.date}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
-    + (r.time ? ' · ' + new Date(`2000-01-01T${r.time}:00`).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : '');
+  // Oct 22 client: first the text + warnings (nothing sent), then Send.
+  const preview = useMutation({
+    mutationFn: () => api<{ data: AskPreview }>(`/api/pickup-instances/${r.id}/ask-dropped-off`, { method: 'POST', body: JSON.stringify({ preview: true }) }),
+    onSuccess: (x) => { setAskNote(null); setAsk(x.data); },
+    onError: (e: any) => setAskNote(`⚠️ ${e?.message || 'Could not prepare the text'}`),
+  });
+  // Oct 23 client: late at night / Shabbos → "Send now, or schedule it?"; a scheduled ask is recorded when it is SENT.
+  const send = useNightSend({
+    send: (c: boolean) => api<{ data: AskPreview }>(`/api/pickup-instances/${r.id}/ask-dropped-off`, { method: 'POST', body: JSON.stringify(c ? { confirmNight: true } : {}) }),
+    schedule: (iso: string) => personalSched.create({ kind: 'ask', pickupId: r.id }, iso),
+    onScheduled: () => { setAsk(null); setAskNote(null); refreshScheduled(qc); },
+    onSent: (x) => {
+      setAsk(null);
+      const notSent = x.data.drivers.filter((d) => d.sent === false);
+      setAskNote(notSent.length ? `Not texted: ${notSent.map((d) => `${d.name} (${d.skip ?? d.error ?? 'not sent'})`).join(', ')}` : null);
+      qc.invalidateQueries({ queryKey: ['not-checked-in'] });
+      qc.invalidateQueries({ queryKey: ['pickup-history', r.id] });
+    },
+    onError: (e: any) => setAskNote(`⚠️ ${e?.message || 'Not sent'}`),
+  });
+  const when = whenText(r.date, r.time); // Oct 23 client: one date + time format
+  const askLine = dropoffAskLine(r.asks);
+  const sendable = ask ? ask.drivers.filter((d) => !d.skip) : [];
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-amber/30 px-4 py-2.5">
-      <div className="min-w-0">
-        <div className="truncate font-display text-[14px] font-semibold text-ink">{r.label} <span className="font-sans text-[11.5px] font-bold text-muted">#{r.ref_number ?? r.id}</span></div>
-        <div className="text-[11.5px] text-muted"><b className="text-ink">{when}</b>{r.drivers ? ` · ${r.drivers}` : ''}</div>
+    <div className="border-t border-amber/30 px-4 py-2.5" data-taken-row={r.id}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate font-display text-[14px] font-semibold text-ink"><bdi dir="auto">{r.label}</bdi></div>
+          <div className="text-[11.5px] text-muted"><b className="text-ink">{when}</b>{r.drivers ? <> · <bdi dir="auto">{stripUnit(r.drivers)}</bdi></> : null}{r.open ? ' · not closed yet' : ''}</div>
+          {askLine && <div data-ask-line className={`text-[11.5px] font-bold ${/said NO/.test(askLine) ? 'text-clay' : 'text-sky-deep'}`}>💬 {askLine}</div>}
+        </div>
+        {msg ? <div className="text-[12px] font-semibold text-forest">{msg}</div> : (
+          <div className="flex shrink-0 flex-wrap gap-1.5">
+            <button disabled={preview.isPending || send.busy || !!ask} onClick={() => preview.mutate()} data-ask-btn={r.id}
+                    title="Text the driver: did you drop off the food at the center? His YES marks it dropped off."
+                    className="haptic rounded-[10px] border border-sky/50 bg-paper px-3 py-1.5 text-[11.5px] font-extrabold text-sky-deep hover:bg-sky/10 disabled:opacity-50">
+              {preview.isPending ? '…' : askLine ? '💬 Ask again' : '💬 Ask driver: dropped off?'}
+            </button>
+            <button disabled={m.isPending} onClick={() => m.mutate(true)} className="haptic rounded-[10px] bg-forest px-3 py-1.5 text-[11.5px] font-extrabold text-paper disabled:opacity-50">Mark done</button>
+            <button disabled={m.isPending} onClick={() => { void uiConfirm(`Mark ${r.label} (${when}) as missed?\n\nIt will count as not done.`, { okLabel: 'Yes, mark missed' }).then((ok) => { if (ok) m.mutate(false); }); }} className="haptic rounded-[10px] border border-clay px-3 py-1.5 text-[11.5px] font-extrabold text-clay disabled:opacity-50">Mark missed</button>
+          </div>
+        )}
       </div>
-      {msg ? <div className="text-[12px] font-semibold text-forest">{msg}</div> : (
-        <div className="flex shrink-0 gap-1.5">
-          <button disabled={m.isPending} onClick={() => m.mutate(true)} className="haptic rounded-[10px] bg-forest px-3 py-1.5 text-[11.5px] font-extrabold text-paper disabled:opacity-50">Mark done</button>
-          <button disabled={m.isPending} onClick={() => { void uiConfirm(`Mark ${r.label} #${r.ref_number ?? r.id} as missed?\n\nIt will count as not done.`, { okLabel: 'Yes, mark missed' }).then((ok) => { if (ok) m.mutate(false); }); }} className="haptic rounded-[10px] border border-clay px-3 py-1.5 text-[11.5px] font-extrabold text-clay disabled:opacity-50">Mark missed</button>
+      {ask && (
+        <div data-ask-preview className="mt-2 space-y-1.5 rounded-[10px] border border-sky/40 bg-sky-soft/40 px-3 py-2 text-[12px]">
+          {ask.drivers.map((d) => (
+            <div key={d.id}>
+              <span className="font-bold text-ink">To {d.name}:</span>{' '}
+              {d.skip ? <span className="font-bold text-clay">won't be texted ({d.skip})</span> : <span className="text-ink">“{d.body}”</span>}
+              {!d.skip && d.quiet && <span className="ml-1 font-bold text-[#9a7415]">· in his quiet hours</span>}
+            </div>
+          ))}
+          {ask.shabbos && <div className="font-bold text-clay">🕯 It's Shabbos / Yom Tov: texts can't go out now — you can schedule it.</div>}
+          {!ask.shabbos && ask.nightNow && <div className="font-bold text-[#9a7415]">🌙 It's late at night (10 PM – 8 AM): you'll be asked to send now or schedule it.</div>}
+          <div className="flex gap-1.5 pt-0.5">
+            <button disabled={send.busy || sendable.length === 0} onClick={() => { void send.start(); }}
+                    className="haptic rounded-[8px] bg-forest px-3 py-1 font-bold text-paper disabled:opacity-50">{send.busy ? 'Sending…' : 'Send text'}</button>
+            <button onClick={() => setAsk(null)} className="haptic rounded-[8px] border border-line bg-paper px-3 py-1 font-bold text-muted">Cancel</button>
+          </div>
         </div>
       )}
+      {askNote && <div className="mt-1 text-[12px] font-semibold text-clay">{askNote}</div>}
+      <ScheduledTexts filter={{ pickupId: r.id }} className="mt-1" />
+      {send.prompt}
     </div>
   );
 }
 
 /** Oct 5 client: every driver text about pickups and what happened. */
-type Reply = { id: number; at: string; phone: string; name: string | null; body: string; outcome: string; label: string; pickup: { id: number; ref: string | null; store: string; date: string } | null };
+type Reply = { id: number; at: string; phone: string; name: string | null; body: string; outcome: string; label: string; whatsapp?: boolean; pickup: { id: number; ref: string | null; store: string; date: string } | null };
 const OUTCOMES: [string, string][] = [['', 'All'], ['took', 'Took it'], ['late', 'Too late'], ['wrong', 'Wrong code'], ['list', 'Asked for the list'], ['info', 'Asked for details']];
 const TONE: Record<string, string> = { took: 'text-forest', late: 'text-clay', wrong: 'text-clay', list: 'text-muted', info: 'text-muted', code: 'text-muted' };
 export function DriverRepliesPanel() {
@@ -499,7 +592,7 @@ export function DriverRepliesPanel() {
   const count = (k: string) => (k ? rows.filter((x) => x.outcome === k).length : rows.length);
   const s = q.trim().toLowerCase();
   const shown = rows.filter((x) => (!f || x.outcome === f) && (!s || `${x.name ?? ''} ${x.phone} ${x.body} ${x.pickup?.store ?? ''} ${x.pickup?.ref ?? ''}`.toLowerCase().includes(s)));
-  const when = (x: string) => new Date(x).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+  const when = (x: string) => msgWhen(x); // Oct 27 client: "Always write date"
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-1.5">
@@ -514,7 +607,7 @@ export function DriverRepliesPanel() {
           <option value={1}>Today</option><option value={7}>Last 7 days</option><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option>
         </select>
       </div>
-      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, phone, store, pickup #…"
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, phone, store…"
              className="w-full rounded-[12px] border border-line bg-paper px-3 py-2 text-[13px]" />
       {r.isLoading ? <div className="text-[13px] text-muted">Loading…</div> :
        r.isError ? <div className="text-[13px] text-clay">Couldn't load. <button onClick={() => r.refetch()} className="underline font-bold">Try again</button></div> :
@@ -523,9 +616,12 @@ export function DriverRepliesPanel() {
           {shown.slice(0, 300).map((x) => (
             <li key={x.id} className="flex items-start justify-between gap-3 px-4 py-2.5">
               <div className="min-w-0">
-                <div className="text-[13.5px] font-bold text-ink">{x.name ?? x.phone}</div>
+                <div className="text-[13.5px] font-bold text-ink">{x.name ? <bdi dir="auto">{x.name}</bdi> : displayPhone(x.phone)}
+                  {/* Oct 28 client: "say here also if they said it via WhatsApp or SMS" — only WhatsApp is tagged */}
+                  {x.whatsapp && <span className="ml-1.5 align-middle rounded-full bg-[#dcf8c6] px-1.5 py-0.5 text-[10.5px] font-extrabold text-[#1f7a3a]">WhatsApp</span>}
+                </div>
                 <div className="text-[12px] text-muted truncate">
-                  “{x.body.trim()}”{x.pickup ? ` · ${x.pickup.store} #${x.pickup.ref ?? x.pickup.id}` : ''}
+                  “{x.body.trim()}”{x.pickup ? ` · ${tidyPlaceName(x.pickup.store) || x.pickup.store}` : ''}
                 </div>
               </div>
               <div className="shrink-0 text-right">
@@ -610,7 +706,7 @@ export function CodeWordsPanel({ onOpenPerson }: { onOpenPerson?: (id: number, k
                     <ul className="space-y-1">
                       {w.top.map((t, i) => {
                         const id = t.volunteerId ?? t.supplierId;
-                        const label = <>{t.name}{t.unit != null ? ` #${t.unit}` : ''}</>;
+                        const label = <bdi dir="auto">{t.name}</bdi>; // Oct 23 client: no unit # outside the Drivers list
                         return (
                           <li key={i} className="flex items-center justify-between gap-2 text-[12.5px]">
                             {id != null && onOpenPerson
@@ -709,8 +805,8 @@ export function SuggestedDriversCard({ pickupId }: { pickupId: number }) {
         {rows.map((v) => (
           <li key={v.id} className="flex flex-wrap items-center justify-between gap-2">
             <div className="min-w-0">
-              <div className="text-[13.5px] font-bold text-ink">{v.name}{v.unit_number != null && <span className="ml-1 text-muted font-semibold text-[11.5px]">#{v.unit_number}</span>}</div>
-              <div className="text-[11.5px] text-muted">Covered it {v.count}× · last {fmtDate(v.last)}{v.phone ? ` · ${v.phone}` : ''}</div>
+              <div className="text-[13.5px] font-bold text-ink"><Name>{stripUnit(v.name)}</Name></div>
+              <div className="text-[11.5px] text-muted">Covered it {v.count}× · last {fmtDate(v.last)}{v.phone ? ` · ${displayPhone(v.phone)}` : ''}</div>
               {done[v.id] && <div className="text-[11.5px] font-semibold text-forest">{done[v.id]}</div>}
             </div>
             <div className="flex gap-1.5 shrink-0">

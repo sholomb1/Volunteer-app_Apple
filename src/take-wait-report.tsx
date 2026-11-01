@@ -145,9 +145,11 @@ export function TakeWaitModal({ data, loading, onClose }: { data?: TakeWaitData;
 
   function exportCsv() {
     const head = ['Pickup #', 'Date', 'Store / donor', 'Texted or posted', 'How', 'Taken at', 'Taken by', 'Wait (min)', 'Wait'];
+    // CSV stays raw for spreadsheets (Oct 23: the on-screen format changed, not the export)
+    const csvAt = (x: string | null | undefined) => { const d = x ? new Date(x) : null; return d && !Number.isNaN(d.getTime()) ? d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' }) : ''; };
     const lines = rows.map((r) => [
-      r.ref ?? r.pickupId, r.date, r.store, fmtDateTimeEastern(r.offeredAt), r.offeredBy === 'text' ? 'texted' : 'posted',
-      fmtDateTimeEastern(r.tookAt), r.driver, Math.round(r.minutes), waitText(r.minutes),
+      r.ref ?? r.pickupId, r.date, r.store, csvAt(r.offeredAt), r.offeredBy === 'text' ? 'texted' : 'posted',
+      csvAt(r.tookAt), r.driver, Math.round(r.minutes), waitText(r.minutes),
     ].map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(','));
     const blob = new Blob([[head.join(','), ...lines].join('\n')], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
@@ -224,7 +226,7 @@ export function TakeWaitModal({ data, loading, onClose }: { data?: TakeWaitData;
                         {rows.map((r) => (
                           <tr key={r.pickupId} className="border-b border-line/70">
                             <td className="px-3 py-2 whitespace-nowrap">{fmtDay(r.date) || r.date}</td>
-                            <td className="px-3 py-2 font-semibold">{r.store}{r.ref ? <span className="text-muted font-normal"> · #{r.ref}</span> : null}</td>
+                            <td className="px-3 py-2 font-semibold">{r.store}</td>
                             <td className="px-3 py-2 whitespace-nowrap tabular-nums">{fmtDateTimeEastern(r.offeredAt)} <span className="text-muted text-[11.5px]">{r.offeredBy === 'text' ? 'texted' : 'posted'}</span></td>
                             <td className="px-3 py-2 whitespace-nowrap tabular-nums">{fmtDateTimeEastern(r.tookAt)}</td>
                             <td className="px-3 py-2 whitespace-nowrap">{r.driver}{r.gaveBack ? <span className="text-muted text-[11.5px]"> (gave it back)</span> : null}</td>

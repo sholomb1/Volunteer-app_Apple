@@ -44,8 +44,9 @@ const shiftTools = {
 export function cancelShift(id: number, scope: 'one' | 'future') {
   return api(`/api/shifts/${id}${scope === 'future' ? '?scope=future' : ''}`, { method: 'DELETE' });
 }
-export function askCancelShift(sh: { starts_at: string; recurring_shift_id?: number | null }): Promise<'one' | 'future' | null> {
-  if (sh.recurring_shift_id == null) return uiConfirm('Cancel this shift?').then((ok) => (ok ? 'one' : null));
+// Oct 16 client: `noun` lets Center Help ask the same thing ("Cancel this center help shift?").
+export function askCancelShift(sh: { starts_at: string; recurring_shift_id?: number | null }, noun: string = 'shift'): Promise<'one' | 'future' | null> {
+  if (sh.recurring_shift_id == null) return uiConfirm(`Cancel this ${noun}?`).then((ok) => (ok ? 'one' : null));
   return new Promise((resolve) => {
     const el = document.createElement('div');
     document.body.appendChild(el);
@@ -56,9 +57,9 @@ export function askCancelShift(sh: { starts_at: string; recurring_shift_id?: num
     root.render(
       <div className="fixed inset-0 z-[3000] bg-ink/50 flex items-end md:items-center justify-center md:px-4"
            onKeyDown={(e) => { if (e.key === 'Escape') done(null); }}>
-        <div role="dialog" aria-label="Cancel this shift?" className="bg-paper rounded-t-[18px] md:rounded-[16px] border border-line shadow-lift w-full md:max-w-sm p-4 space-y-2">
-          <div className="font-display font-semibold text-[17px]">Cancel this shift?</div>
-          <div className="text-[12.5px] text-muted">It repeats every week. Past shifts don't change.</div>
+        <div role="dialog" aria-label={`Cancel this ${noun}?`} className="bg-paper rounded-t-[18px] md:rounded-[16px] border border-line shadow-lift w-full md:max-w-sm p-4 space-y-2">
+          <div className="font-display font-semibold text-[17px]">Cancel this {noun}?</div>
+          <div className="text-[12.5px] text-muted">It repeats every week. Past days don't change.</div>
           <button autoFocus onClick={() => done('one')} className={cx(b, 'border border-clay/40 text-clay hover:bg-clay/10')}>Just this one ({day})</button>
           <button onClick={() => done('future')} className={cx(b, 'bg-clay text-paper')}>This and all future ones in the series</button>
           <button onClick={() => done(null)} className={cx(b, 'text-muted text-center hover:bg-cream')}>Go back</button>
@@ -73,18 +74,19 @@ export function isShiftsOffice(): boolean {
   return ['admin', 'coordinator', 'staff'].includes(String(getUser()?.role ?? ''));
 }
 
-const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-function fmt12(hhmm: string): string {
+// Oct 16: DAYS / fmt12 / toMin / btn / Sheet / ApplyFromDateDialog are shared with center-help-schedule.tsx.
+export const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+export function fmt12(hhmm: string): string {
   const [h, m] = hhmm.split(':').map(Number);
   const ap = (h ?? 0) >= 12 ? 'PM' : 'AM';
   const h12 = (h ?? 0) % 12 === 0 ? 12 : (h ?? 0) % 12;
   return m ? `${h12}:${String(m).padStart(2, '0')} ${ap}` : `${h12} ${ap}`;
 }
-const toMin = (hhmm: string) => { const [h, m] = hhmm.split(':').map(Number); return (h ?? 0) * 60 + (m ?? 0); };
-const btn = 'haptic inline-flex items-center gap-1.5 rounded-[10px] px-3 py-2 text-[12.5px] font-bold disabled:opacity-40';
+export const toMin = (hhmm: string) => { const [h, m] = hhmm.split(':').map(Number); return (h ?? 0) * 60 + (m ?? 0); };
+export const btn = 'haptic inline-flex items-center gap-1.5 rounded-[10px] px-3 py-2 text-[12.5px] font-bold disabled:opacity-40';
 
 /** Full-screen on a phone, a big centered panel on a computer. */
-function Sheet({ title, onClose, children, footer }: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode }) {
+export function Sheet({ title, onClose, children, footer }: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode }) {
   return (
     <div className="fixed inset-0 z-[2000] bg-ink/50 flex items-stretch md:items-start justify-center md:pt-10 md:px-4">
       <div role="dialog" aria-label={title}
@@ -380,27 +382,38 @@ export function WeeklyTemplateEditor({ onClose }: { onClose: () => void }) {
       )}
 
       {asking && (
-        <div className="fixed inset-0 z-[2100] bg-ink/50 flex items-center justify-center px-4">
-          <div role="dialog" aria-label="Apply template" className="bg-paper rounded-[16px] border border-line shadow-lift w-full max-w-sm p-4 space-y-3">
-            <div className="font-display font-semibold text-[17px]">Apply to upcoming weeks?</div>
-            <div className="text-[13px] text-ink">
-              Shifts from this date on will be changed to match ({changed.length} change{changed.length === 1 ? '' : 's'}).
-              Past shifts don't change.
-            </div>
-            <label className="block">
-              <span className="block text-[11px] font-extrabold uppercase tracking-[.05em] text-muted mb-1">Starting</span>
-              <DateInput value={fromDate} onChange={setFromDate} min={nyToday()} className="w-full border border-line rounded-[8px] px-2 py-2 bg-paper text-[14px]" />
-            </label>
-            <div className="flex justify-end gap-2 pt-1">
-              <button onClick={() => setAsking(false)} className={cx(btn, 'text-muted')}>Go back</button>
-              <button onClick={() => save.mutate()} disabled={save.isPending || !fromDate} className={cx(btn, 'bg-forest text-paper')}>
-                {save.isPending ? 'Saving…' : 'Save and apply'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <ApplyFromDateDialog count={changed.length} fromDate={fromDate} setFromDate={setFromDate}
+                             saving={save.isPending} onBack={() => setAsking(false)} onSave={() => save.mutate()} />
       )}
     </Sheet>
+  );
+}
+
+/** Oct 16: "Apply to upcoming weeks?" — shared by the dispatcher and Center Help weekly templates. */
+export function ApplyFromDateDialog({ count, fromDate, setFromDate, saving, onBack, onSave, what = 'Shifts', max }: {
+  count: number; fromDate: string; setFromDate: (v: string) => void; saving: boolean;
+  onBack: () => void; onSave: () => void; what?: string; max?: string;
+}) {
+  return (
+    <div className="fixed inset-0 z-[2100] bg-ink/50 flex items-center justify-center px-4">
+      <div role="dialog" aria-label="Apply template" className="bg-paper rounded-[16px] border border-line shadow-lift w-full max-w-sm p-4 space-y-3">
+        <div className="font-display font-semibold text-[17px]">Apply to upcoming weeks?</div>
+        <div className="text-[13px] text-ink">
+          {what} from this date on will be changed to match ({count} change{count === 1 ? '' : 's'}).
+          Past {what.toLowerCase()} don't change.
+        </div>
+        <label className="block">
+          <span className="block text-[11px] font-extrabold uppercase tracking-[.05em] text-muted mb-1">Starting</span>
+          <DateInput value={fromDate} onChange={setFromDate} min={nyToday()} max={max} className="w-full border border-line rounded-[8px] px-2 py-2 bg-paper text-[14px]" />
+        </label>
+        <div className="flex justify-end gap-2 pt-1">
+          <button onClick={onBack} className={cx(btn, 'text-muted')}>Go back</button>
+          <button onClick={onSave} disabled={saving || !fromDate} className={cx(btn, 'bg-forest text-paper')}>
+            {saving ? 'Saving…' : 'Save and apply'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -436,7 +449,7 @@ function SlotDialog({ row, people, dispatchers, onChange, onRemove, onClose }: {
               return (
                 <span key={v} className={cx('inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[12.5px] font-bold',
                                             p?.ok === false ? 'border-clay/50 bg-clay/10 text-clay' : 'border-forest/30 bg-sage/50 text-forest-deep')}>
-                  {p?.name ?? `#${v}`}{p?.unit != null ? ` #${p.unit}` : ''}{p?.ok === false ? ' (not a dispatcher)' : ''}
+                  <bdi dir="auto">{p?.name ?? `Driver ${v}`}</bdi>{p?.ok === false ? ' (not a dispatcher)' : ''}
                   <button onClick={() => onChange({ volunteerIds: row.volunteerIds.filter((x) => x !== v) })} aria-label={`Take ${p?.name ?? v} off`}
                           className="haptic grid h-5 w-5 place-items-center rounded-full hover:bg-paper"><X size={12} /></button>
                 </span>

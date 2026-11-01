@@ -56,7 +56,7 @@ export function ResponseTimeLine({ kind, id }: { kind: 'driver' | 'store'; id: n
                   {r.gaveBack && <span className="font-normal text-muted"> (gave it back later)</span>}
                 </div>
                 <div className="text-muted">
-                  {r.offeredBy === 'text' ? 'Texted' : 'Posted'} {fmtTimeEastern(r.offeredAt)} · took it {fmtDay(r.tookAt) !== fmtDay(r.offeredAt) ? `${fmtDay(r.tookAt)} ` : ''}{fmtTimeEastern(r.tookAt)} · #{r.ref ?? r.pickupId}
+                  {r.offeredBy === 'text' ? 'Texted' : 'Posted'} {fmtTimeEastern(r.offeredAt)} · took it {fmtDay(r.tookAt) !== fmtDay(r.offeredAt) ? `${fmtDay(r.tookAt)} ` : ''}{fmtTimeEastern(r.tookAt)}
                 </div>
               </div>
               <div className="shrink-0 font-bold text-ink">{afterText(r.minutes)}</div>

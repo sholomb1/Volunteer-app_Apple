@@ -5,14 +5,16 @@
 //      dispatch. Steadys flagged needs_confirmation materialize as
 //      status='pending_confirmation'; a dispatcher decides each morning.
 
-import { uiConfirm } from './ui-dialogs';
+import { uiConfirm, uiNotify } from './ui-dialogs';
 import { foodCheckLine, driverToldLine } from './food-check'; // Oct 13 client
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Check, X, Store, Phone, Trash2, PhoneCall } from 'lucide-react';
 import { api } from './api';
 import { Button, cx, SearchBar } from './design';
-import { fmtTime, fmtDateTimeEastern } from './time-format';
+import { displayPhone, shortAddress } from './display'; // Oct 23 client: same style everywhere
+import { Name } from './display-ui';
+import { fmtTime, fmtDateTimeEastern, nyToday } from './time-format';
 
 // ─────────────────────────────── API clients ──────────────────────────────────
 
@@ -152,9 +154,9 @@ export function ProspectsPanel() {
               </div>
               <div className="mt-1 font-display font-semibold text-[15px] text-ink truncate">{r.name}</div>
               <div className="mt-0.5 text-[12px] text-muted flex flex-wrap gap-x-3 gap-y-0.5">
-                {r.contactName && <span>{r.contactName}</span>}
-                {r.phone && <span className="flex items-center gap-1"><Phone size={10.5} />{r.phone}</span>}
-                {r.address && <span className="truncate">{r.address}</span>}
+                {r.contactName && <span><Name>{r.contactName}</Name></span>}
+                {r.phone && <span className="flex items-center gap-1"><Phone size={10.5} />{displayPhone(r.phone)}</span>}
+                {r.address && <span className="truncate" title={r.address}>{shortAddress(r.address)}</span>}
               </div>
             </button>
           ))}
@@ -354,7 +356,10 @@ export function NeedsConfirmationSection() {
     queryFn: pickupConfirmation.list,
     refetchInterval: 60_000,
   });
-  const rows = q.data?.data ?? [];
+  // Oct 21 client: "for the meantime, it should be only showing today's thing" — a future one
+  // can't be confirmed or declined until its day (the server answers today only too).
+  const today = nyToday();
+  const rows = (q.data?.data ?? []).filter((r) => String(r.scheduled_date ?? '').slice(0, 10) === today);
   if (rows.length === 0) return null;
 
   const invalidate = () => {
@@ -382,8 +387,10 @@ function NeedsConfirmationRow({ row, onDone }: { row: NeedsConfirmationItem; onD
   // (sent by the normal new-pickup timing; cancelled quietly).
   const fc = row.storeTexts?.food ? foodCheckLine(row.storeTexts.food, true) : null;
   const driverTold = driverToldLine(row.storeTexts?.driver); // Oct 14 client: "Driver Moshe told 8:05 AM"
-  const confirmM = useMutation({ mutationFn: () => fc ? api(`/api/pickup-instances/${row.id}/food-check/send`, { method: 'POST', body: '{}' }) : pickupConfirmation.confirm(row.id), onSuccess: onDone });
-  const declineM = useMutation({ mutationFn: () => fc ? api(`/api/pickup-instances/${row.id}/food-check/cancel`, { method: 'POST', body: '{}' }) : pickupConfirmation.decline(row.id), onSuccess: onDone });
+  // Oct 21 client: a press that "did nothing" now says why ("Already declined on Oct 2 by Site Admin.").
+  const onErr = (e: Error) => { uiNotify(e.message, 'err'); onDone(); };
+  const confirmM = useMutation({ mutationFn: () => fc ? api(`/api/pickup-instances/${row.id}/food-check/send`, { method: 'POST', body: '{}' }) : pickupConfirmation.confirm(row.id), onSuccess: onDone, onError: onErr });
+  const declineM = useMutation({ mutationFn: () => fc ? api(`/api/pickup-instances/${row.id}/food-check/cancel`, { method: 'POST', body: '{}' }) : pickupConfirmation.decline(row.id), onSuccess: onDone, onError: onErr });
   const label   = row.steadyName || row.supplierName || row.donorName || 'Pickup';
   const address = row.supplierAddress || row.pickupAddress || '';
 
@@ -393,8 +400,8 @@ function NeedsConfirmationRow({ row, onDone }: { row: NeedsConfirmationItem; onD
         <div className="font-display font-semibold text-[14px] text-ink truncate">{label}</div>
         <div className="text-[11.5px] text-muted flex flex-wrap gap-x-3">
           <span className="font-bold text-ink">{fmtTime(row.scheduled_time)}</span>
-          {address && <span className="truncate">{address}</span>}
-          {row.contactPhone && <span>{row.contactPhone}</span>}
+          {address && <span className="truncate" title={address}>{shortAddress(address)}</span>}
+          {row.contactPhone && <span>{displayPhone(row.contactPhone)}</span>}
         </div>
         {fc && <div className="mt-1 text-[11.5px] font-bold text-[#9a7415]" data-testid="nc-food-check">🥖 {fc.text}</div>}
         {driverTold && <div className="mt-0.5 text-[11.5px] font-semibold text-muted" data-testid="nc-driver-told">🚐 {driverTold}</div>}

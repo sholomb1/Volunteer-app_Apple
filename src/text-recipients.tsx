@@ -12,11 +12,13 @@
  * Oct 14 client: "too much information" — the popup now opens on a simple view (last text,
  * next text, folded "Who got it" / "Who didn't" / "Earlier texts"); "More details" = the view above.
  */
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from './api';
 import { cx } from './design'; // Oct 14 client
+import { whenAt } from './display'; // Oct 23 client
+import { agoText } from './pickup-color'; // Oct 21 client: "12 min ago" on the text chip
 
 type Person = { id: number; name: string; unit: string | null; textTo?: string }; // Oct 14 client: textTo = last 4 of the texting number (drivers with 2+ numbers)
 // Oct 12 client: one entry per send (oldest first). Ids only; names in `people`.
@@ -45,6 +47,7 @@ export type TextRecipients = {
   note: string;
   waStatus?: Record<string, { label: string; confirmed: boolean; state: string }>;  // Oct 14 client: real WhatsApp status
   contact?: Record<string, string>;  // Oct 14 client: id → 'whatsapp' | 'both'
+  calls?: Array<{ id: number; volunteerId: number | null; name: string; at: string; code: string; label: string }>;  // Oct 19 client: automatic phone calls
 };
 
 // Oct 14 client: colour of the "Text ✓ / WhatsApp ✓ / queued / failed" tag.
@@ -100,32 +103,48 @@ export function nextTextLine(n: NextText | null | undefined): string | null {
 
 /**
  * Oct 12 client: lines on a pickup card / the pickup page; tap → the who-got-it popup.
- * Oct 14 client: "The new texting info is very messy and hard to follow" — ONE short line:
- *   "📤 Texted 4× · last 8:29 PM to 55" / "📤 Not texted yet" / "📤 Opens to drivers at 3:00 PM".
+ * Oct 14 client: "The new texting info is very messy and hard to follow" — ONE short line.
+ * Oct 21 client (Cleaner Live Board): ONE small chip — "📤 Texted 2:06 PM · 12 min ago" /
+ *   "📤 Not texted yet" / "📤 Opens to drivers 3:00 PM". How many times / to how many: tooltip + popup.
  * The next text moved into the popup. `sig` changes when the card's data does (refetch).
  */
 export function PickupTextLines({ pickupId, sig = '', className = '' }: { pickupId: number; sig?: string; className?: string }) {
   const [open, setOpen] = useState(false);
+  const nowMs = useMinuteNow(); // Oct 21 client: "12 min ago" ticks every minute, no new requests
   const bucket = Math.floor(Date.now() / 300_000);   // all cards refresh together every 5 min
-  const q = useQuery({ queryKey: ['pickup-text-info', pickupId, sig, bucket], queryFn: () => loadPickupTextInfo(pickupId), staleTime: 300_000 });
+  // Oct 25 client: while a Send SMS from this screen is going out, re-check every 8 s (only this card).
+  const since = useSendingSince(pickupId);
+  const q = useQuery({ queryKey: ['pickup-text-info', pickupId, sig, bucket], queryFn: () => loadPickupTextInfo(pickupId), staleTime: 300_000,
+    refetchInterval: since ? 8_000 : false });
   const d = q.data;
-  if (!d) return null;
+  const lastAt = d?.sends[d.sends.length - 1]?.at;
+  const doneSending = !!since && !!lastAt && Date.parse(lastAt) >= since - 60_000; // 60 s: the computer's clock may be a bit off from the server's
+  useEffect(() => { if (doneSending) clearSending(pickupId); }, [doneSending, pickupId]);
+  const sending = !!since && !doneSending;
+  if (!d && !sending) return null;
   // Oct 14 client: "Opens to drivers at 3:00 PM" while drivers can't see it yet.
-  const opens = d.opensToDriversAt && Date.parse(d.opensToDriversAt) > Date.now() ? d.opensToDriversAt : null;
-  const last = d.sends[d.sends.length - 1];
-  if (!last && !d.next && !opens) return null;
-  const n = d.sends.length;
-  const hold = d.next?.kind === 'held' ? ' · on hold' : d.next?.kind === 'paused' ? ' · texts paused' : '';
-  const line = opens ? `Opens to drivers at ${fmtSendTime(opens)}`
-    : last ? `Texted ${n === 1 ? 'once' : `${n}×`} · ${n === 1 ? '' : 'last '}${fmtSendTime(last.at)} to ${last.count}`
+  const opens = d?.opensToDriversAt && Date.parse(d.opensToDriversAt) > Date.now() ? d.opensToDriversAt : null;
+  const last = d?.sends[d.sends.length - 1];
+  if (!sending && !last && !d?.next && !opens) return null;
+  const n = d?.sends.length ?? 0;
+  const hold = d?.next?.kind === 'held' ? ' · on hold' : d?.next?.kind === 'paused' ? ' · texts paused' : '';
+  const line = sending ? 'Sending now…'
+    : opens ? `Opens to drivers ${fmtSendTime(opens)}`
+    : last ? texedLine(d?.sends ?? [], nowMs)
     : `Not texted yet${hold}`;
+  const title = sending ? 'The text is going out to drivers, one person at a time. This changes to "Texted" when it went out.'
+    : last ? `Texted ${n === 1 ? 'once' : `${n} times`} · last one to ${last.count} driver${last.count === 1 ? '' : 's'}. Tap: who got the text` : 'Who got the text';
+  const tone = sending ? 'border-sky/50 bg-sky/15 text-sky-deep animate-pulse'
+    : opens ? 'border-amber/50 bg-amber-soft text-[#9a7415]'
+    : last ? 'border-sky/30 bg-sky-soft/70 text-sky-deep'
+    : 'border-line bg-line/40 text-muted';
   return (
     <>
-      <div role="button" tabIndex={0} onClick={(e) => { e.stopPropagation(); setOpen(true); }} title="Who got the text"
+      <div role="button" tabIndex={0} onClick={(e) => { e.stopPropagation(); setOpen(true); }} title={title}
            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setOpen(true); } }}
-           className={`haptic block max-w-full min-w-0 text-left text-[11.5px] leading-snug cursor-pointer ${className}`} data-testid="text-line">
-        <span className={cx('block truncate', opens ? 'font-semibold text-[#9a7415]' : 'text-muted')}>
-          📤 <span className="underline decoration-dotted underline-offset-2">{line}</span>
+           className={`haptic block max-w-full min-w-0 text-left leading-snug cursor-pointer ${className}`} data-testid="text-line">
+        <span className={cx('inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[11.5px] font-semibold', tone)}>
+          📤 <span className="truncate">{line}</span>
         </span>
       </div>
       {open && createPortal(<TextRecipientsPopup pickupId={pickupId} onClose={() => setOpen(false)} />, document.body)}
@@ -133,14 +152,67 @@ export function PickupTextLines({ pickupId, sig = '', className = '' }: { pickup
   );
 }
 
+/** Oct 29 client: "Need more clear that was only to a few" — when the last text went to only a few drivers
+ *  (quiet hours ended, etc.), say so: "Texted 4:53 PM to 52 · +3 more at 8:38 PM". */
+export function texedLine(sends: Array<{ at: string; count: number }>, nowMs: number): string {
+  const last = sends[sends.length - 1];
+  if (!last) return '';
+  const main = sends.reduce((m, x) => (x.count > m.count ? x : m), sends[0]!);
+  if (main === last || sends.length === 1) return `Texted ${fmtSendTime(last.at)} to ${last.count} · ${agoText(Date.parse(last.at), nowMs)}`;
+  const later = sends.slice(sends.indexOf(main) + 1).reduce((n, x) => n + (Number(x.count) || 0), 0);
+  return `Texted ${fmtSendTime(main.at)} to ${main.count} · +${later} more, last ${fmtSendTime(last.at)}`;
+}
+
+// Oct 25 client: "The second I press that button, it should say in process of sending, so I don't
+// hit it again." Pickups whose Send SMS was pressed on this screen: the chip says "Sending now…" and
+// the button stays "Sending…" until the new text shows up (or 3 minutes pass).
+const SENDING_MAX_MS = 180_000;
+const sendingSince = new Map<number, number>();
+const sendingSubs = new Set<() => void>();
+const emitSending = () => { for (const f of sendingSubs) f(); };
+export function markSending(id: number) {
+  const at = Date.now();
+  sendingSince.set(id, at); emitSending();
+  setTimeout(() => { if (sendingSince.get(id) === at) { sendingSince.delete(id); emitSending(); } }, SENDING_MAX_MS);
+}
+export function clearSending(id: number) { if (sendingSince.delete(id)) emitSending(); }
+const subscribeSending = (cb: () => void) => { sendingSubs.add(cb); return () => { sendingSubs.delete(cb); }; };
+/** When Send SMS was pressed for this pickup on this screen (ms), or 0 when it isn't sending. */
+export function useSendingSince(id: number): number {
+  return useSyncExternalStore(subscribeSending, () => sendingSince.get(id) ?? 0);
+}
+/** Oct 25 client: after a Send SMS answer — keep "Sending now…" only if a text is really going out. */
+export function afterSendAnswer(id: number, d: any) {
+  if (!d) { clearSending(id); return; } // the office chose not to re-send
+  const going = d.background || d.sending || (d.sent ?? 0) > 0 || /already being sent/i.test(String(d.reason ?? ''));
+  if (!going) clearSending(id);
+}
+
+// Oct 21 client (Cleaner Live Board): one shared minute clock for every chip / card on screen.
+const minuteSubs = new Set<() => void>();
+let minuteTimer: ReturnType<typeof setInterval> | null = null;
+function subscribeMinute(cb: () => void) {
+  minuteSubs.add(cb);
+  if (!minuteTimer) minuteTimer = setInterval(() => { for (const f of minuteSubs) f(); }, 15_000);
+  return () => {
+    minuteSubs.delete(cb);
+    if (minuteSubs.size === 0 && minuteTimer) { clearInterval(minuteTimer); minuteTimer = null; }
+  };
+}
+const minuteSnap = () => Math.floor(Date.now() / 60_000) * 60_000;
+/** The time now, rounded down to the minute; the component re-renders once a minute (no requests). */
+export function useMinuteNow(): number {
+  return useSyncExternalStore(subscribeMinute, minuteSnap);
+}
+
 export function fetchTextRecipients(pickupId: number, at?: string) {
   return api<{ data: TextRecipients }>(`/api/pickups/${pickupId}/text-recipients${at ? `?at=${encodeURIComponent(at)}` : ''}`).then((r) => r.data);
 }
 
 function fmtWhen(iso: string): string {
-  return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
+  return whenAt(iso); // Oct 23 client: one date + time format
 }
-const who = (p: Person) => `${p.name}${p.unit ? ` #${p.unit}` : ''}`;
+const who = (p: Person) => p.name; // Oct 23 client: no unit # outside the Drivers list
 
 /** The driver count as a link. eager = fetch now to show "Texted to 36 drivers". */
 export function TextedDriversLink({ pickupId, eager = false, className = '' }: { pickupId: number; eager?: boolean; className?: string }) {
@@ -228,7 +300,10 @@ export function TextRecipientsPopup({ pickupId, initialAt, onClose }: { pickupId
   const gotIds = cur ? cur.sent : isAll ? (d?.all?.sent ?? []) : [];
   const newSet = new Set(cur && idx > 0 ? cur.newIds : []);
   const gotSorted = [...gotIds].sort((a, b) => Number(newSet.has(b)) - Number(newSet.has(a)));
-  const skippedList: SkipRef[] = cur ? cur.skipped : (d?.all?.skipped ?? []);
+  const skippedAll: SkipRef[] = cur ? cur.skipped : (d?.all?.skipped ?? []);
+  // Oct 16 client: before the first text, "Would get it now" people were listed under "Who wouldn't get it now".
+  const wouldGet = neverTexted ? skippedAll.filter((s) => s.code === 'would_get') : [];
+  const skippedList: SkipRef[] = neverTexted ? skippedAll.filter((s) => s.code !== 'would_get') : skippedAll;
   const skipById = new Map(skippedList.map((s) => [s.id, s]));
   const reasonGroups = byReason(skippedList, labels);
   const earlier = cur && idx > 0 ? cur.earlierNotNow : [];
@@ -302,6 +377,13 @@ export function TextRecipientsPopup({ pickupId, initialAt, onClose }: { pickupId
                         {dl(id) && <span className={cx('text-[11px] font-bold', deliveryTone(dl(id)!.code))} data-delivery>{dl(id)!.label}</span>}
                       </span>
                     ))}
+                  </div>
+                </Fold>
+              )}
+              {neverTexted && (
+                <Fold title={`Would get it now (${wouldGet.length})`} tone="text-forest" testid="fold-would">
+                  <div className="text-[12.5px] leading-snug flex flex-wrap gap-x-2.5 gap-y-1">
+                    {wouldGet.length === 0 ? '—' : wouldGet.map((p) => <NameBtn key={p.id} id={p.id} />)}
                   </div>
                 </Fold>
               )}
@@ -477,6 +559,21 @@ export function TextRecipientsPopup({ pickupId, initialAt, onClose }: { pickupId
             )}
             <div className="text-[11.5px] text-muted">{d.note}</div>
             <button type="button" onClick={() => { setMore(false); if (sel === 'all') setSel(''); }} className="haptic text-[12px] text-muted underline">Simple view</button>
+          </div>
+        )}
+        {/* Oct 19 client: the automatic phone calls about this pickup, and how each went. */}
+        {d && (d.calls?.length ?? 0) > 0 && (
+          <div className="mt-3 border-t border-line pt-2" data-testid="pickup-calls">
+            <div className="font-bold text-[14px] text-ink">📞 Phone calls ({d.calls!.length})</div>
+            <ul className="mt-1 space-y-0.5">
+              {d.calls!.map((c) => (
+                <li key={c.id} className="text-[12.5px] leading-snug">
+                  {c.volunteerId && people[String(c.volunteerId)] ? <NameBtn id={c.volunteerId} /> : <b>{c.name}</b>}
+                  <span className={cx(c.code === 'pressed1' ? 'text-forest font-bold' : c.code === 'failed' ? 'text-clay' : 'text-muted')}> — {c.label}</span>
+                  <span className="text-muted"> · {fmtSendTime(c.at)}</span>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
       </div>

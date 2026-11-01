@@ -25,8 +25,15 @@ import { uiConfirm } from './ui-dialogs'; // Oct 14 client: Resend to failed ask
 import { cx, DateInput } from './design';
 import { fmtTime, fmtDateTimeEastern, fmtDay } from './time-format';
 import { patchCoordNav } from './nav-state';
+import { STATUS, dayText, displayPhone, stripUnit, whenAt } from './display'; // Oct 23 client: same style everywhere
+import { Name, StatusPill } from './display-ui';
+import { tidyPlaceName } from './pickup-label';
 import { GasRewardsReport } from './gas-rewards-panel';
+import { CloseOutNumbers } from './closeout'; // Oct 21 client: close-out numbers + no-shows per driver
 import { TakeWaitTile, TakeWaitModal, useTakeWait } from './take-wait-report'; // Oct 14 client: typical wait until taken
+import { DropoffTimeTile, DropoffTimeModal, useDropoffTime } from './dropoff-time-report'; // Oct 28 client: took it -> kiosk drop-off
+import { CantReachTile, CantReachModal, useCantReach } from './cant-reach-report'; // Oct 29 client: drivers nobody reached in 14 days
+import { StockByStoreReport } from './stock-link'; // Oct 30 client: added to the ordering portal, by store
 
 type ReportRow = {
   id: string;
@@ -90,6 +97,8 @@ export function ReportsPanel({ onNavigateTab }: { onNavigateTab?: (tab: string) 
   const [view, setView] = useState<ReportView>('pickups');
   const [breakdown, setBreakdown] = useState<'supplier' | 'volunteer' | null>(null);
   const [waitOpen, setWaitOpen] = useState(false); // Oct 14 client: typical wait until taken
+  const [dropOpen, setDropOpen] = useState(false); // Oct 28 client: took it -> kiosk drop-off
+  const [reachOpen, setReachOpen] = useState(false); // Oct 29 client
 
   // Reports-specific picklists — include inactive/soft-deleted parties so
   // historical rows tied to since-removed stores/drivers are filterable.
@@ -116,6 +125,10 @@ export function ReportsPanel({ onNavigateTab }: { onNavigateTab?: (tab: string) 
   const rows = report.data?.data ?? [];
   // Oct 14 client: "Typical wait until taken" tile — same filters as the other tiles.
   const takeWait = useTakeWait(qs);
+  // Oct 28 client: time from taking a pickup to the kiosk drop-off — same filters.
+  const dropTime = useDropoffTime(qs);
+  // Oct 29 client (Yakov): drivers who got no text, no WhatsApp and no app use in 14 days (not tied to the filters).
+  const cantReach = useCantReach();
   // Oct 2 client fix: text search over the loaded report rows.
   const [rq, setRq] = useState('');
   const shownRows = rq.trim() ? rows.filter((r) => JSON.stringify(r).toLowerCase().includes(rq.trim().toLowerCase())) : rows;
@@ -193,6 +206,14 @@ export function ReportsPanel({ onNavigateTab }: { onNavigateTab?: (tab: string) 
   const filterInput = 'rounded-[10px] border-[1.4px] border-line bg-paper px-3 py-2 text-[14px] outline-none focus:border-forest';
   const presetBtn   = 'haptic text-[12.5px] font-bold text-forest bg-sage/60 hover:bg-sage rounded-full px-3 py-1';
 
+  if (view === 'closeout') { // Oct 21 client: food rescued by size, missed reasons, no-shows per driver
+    return (
+      <div className="space-y-4">
+        <ReportTabs view={view} setView={setView} />
+        <CloseOutNumbers days={30} pickDays />
+      </div>
+    );
+  }
   if (view === 'gas') {
     return (
       <div className="space-y-4">
@@ -245,12 +266,38 @@ export function ReportsPanel({ onNavigateTab }: { onNavigateTab?: (tab: string) 
           Distinct stores/drivers clickable — sets a supplier/volunteer
           filter placeholder (actual value clears the specific filter,
           shows all rows so the count matches the distinct list). */}
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2">
-        {/* Oct 8 client: plain words on the tiles. */}
-        <StatTile label="Total pickups"       value={totals.totalPickups}
-                  tone="forest"
-                  active={status === '' && !supplierId && !volunteerId}
-                  onClick={() => { setStatus(''); setSupplierId(''); setVolunteerId(''); }} />
+      {/* Oct 30 client: 13 tiles was too much. Total / drivers / stores /
+          still-open counts are one plain line now (each number still opens
+          what its tile did, one click); the rest = 2 labeled tile rows. */}
+      <div data-qa="reports-summary-line" className="flex flex-wrap items-baseline gap-x-1.5 gap-y-1 text-[15px] font-bold text-ink">
+        <SummaryNum n={totals.totalPickups} label={totals.totalPickups === 1 ? 'pickup' : 'pickups'} tone="forest"
+                    title="Show all pickups"
+                    active={status === '' && !supplierId && !volunteerId}
+                    onClick={() => { setStatus(''); setSupplierId(''); setVolunteerId(''); }} />
+        <span className="text-muted">·</span>
+        <SummaryNum n={totals.distinctVolunteers} label={totals.distinctVolunteers === 1 ? 'driver' : 'drivers'} tone="sky"
+                    title="See the drivers" active={!!volunteerId}
+                    onClick={() => setBreakdown('volunteer')} />
+        <span className="text-muted">·</span>
+        <SummaryNum n={totals.distinctSuppliers} label={totals.distinctSuppliers === 1 ? 'store' : 'stores'} tone="sky"
+                    title="See the stores" active={!!supplierId}
+                    onClick={() => setBreakdown('supplier')} />
+        <span className="inline-flex flex-wrap items-baseline gap-x-1.5">
+        <span className="text-muted">· still open:</span>
+        <SummaryNum n={totals.scheduled} label="need a driver" tone="clay"
+                    title={status === 'awaiting_driver' ? 'Show all' : 'Show only these'}
+                    active={status === 'awaiting_driver'}
+                    onClick={() => setStatus(status === 'awaiting_driver' ? '' : 'awaiting_driver')} />
+        <span className="text-muted -ml-2">,</span>
+        <SummaryNum n={totals.assigned} label="have one" tone="amber"
+                    title={status === 'assigned_open' ? 'Show all' : 'Show only these'}
+                    active={status === 'assigned_open'}
+                    onClick={() => setStatus(status === 'assigned_open' ? '' : 'assigned_open')} />
+        </span>
+      </div>
+      <div>
+      <div className="text-[12.5px] font-bold text-muted mb-1.5">How pickups ended</div>
+      <div data-qa="reports-ended-tiles" className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-2">
         {/* Oct 7 client: each tile filters by the same rule the API counts
             with (outcome tokens), and the API keeps tile counts fixed while
             a tile is selected. */}
@@ -258,14 +305,6 @@ export function ReportsPanel({ onNavigateTab }: { onNavigateTab?: (tab: string) 
                   tone="forest"
                   active={status === 'completed_verified'}
                   onClick={() => setStatus(status === 'completed_verified' ? '' : 'completed_verified')} />
-        <StatTile label="Needs a driver"      value={totals.scheduled}
-                  tone="clay"
-                  active={status === 'awaiting_driver'}
-                  onClick={() => setStatus(status === 'awaiting_driver' ? '' : 'awaiting_driver')} />
-        <StatTile label="Has a driver"        value={totals.assigned}
-                  tone="amber"
-                  active={status === 'assigned_open'}
-                  onClick={() => setStatus(status === 'assigned_open' ? '' : 'assigned_open')} />
         {/* Oct 2 client fix (UI plan §7): missed and cancelled are separate;
             no kiosk sign-in means unverified, not missed. Each card filters
             the table to exactly the rows it counts. */}
@@ -273,10 +312,6 @@ export function ReportsPanel({ onNavigateTab }: { onNavigateTab?: (tab: string) 
                   tone="amber"
                   active={status === 'completed_nokiosk'}
                   onClick={() => setStatus(status === 'completed_nokiosk' ? '' : 'completed_nokiosk')} />
-        <StatTile label="Cancelled"           value={totals.cancelled ?? 0}
-                  tone="clay"
-                  active={status === 'cancelled'}
-                  onClick={() => setStatus(status === 'cancelled' ? '' : 'cancelled')} />
         <StatTile label="Missed"              value={totals.missedConfirmed ?? 0}
                   tone="clay"
                   active={status === 'missed_confirmed'}
@@ -289,23 +324,27 @@ export function ReportsPanel({ onNavigateTab }: { onNavigateTab?: (tab: string) 
                   tone="clay"
                   active={status === 'expired'}
                   onClick={() => setStatus(status === 'expired' ? '' : 'expired')} />
+        <StatTile label="Cancelled"           value={totals.cancelled ?? 0}
+                  tone="clay"
+                  active={status === 'cancelled'}
+                  onClick={() => setStatus(status === 'cancelled' ? '' : 'cancelled')} />
         {/* Oct 13 client: pickups an outside helper (not one of our volunteers) covered. */}
         {((totals.outsideHelper ?? 0) > 0 || status === 'outside_helper') && <StatTile label="Covered by outside helpers" value={totals.outsideHelper ?? 0}
                   tone="amber"
                   active={status === 'outside_helper'}
                   onClick={() => setStatus(status === 'outside_helper' ? '' : 'outside_helper')} />}
-        {/* Oct 7 client: Distinct Stores / Drivers open the list they count
-            (this date range + filters); picking one filters the report. */}
-        <StatTile label="Stores"              value={totals.distinctSuppliers}
-                  tone="sky"
-                  active={!!supplierId}
-                  onClick={() => setBreakdown('supplier')} />
-        <StatTile label="Drivers"             value={totals.distinctVolunteers}
-                  tone="sky"
-                  active={!!volunteerId}
-                  onClick={() => setBreakdown('volunteer')} />
+      </div>
+      </div>
+      <div>
+      <div className="text-[12.5px] font-bold text-muted mb-1.5">Watch</div>
+      <div data-qa="reports-watch-tiles" className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-2">
         {/* Oct 14 client: typical (median) wait until a driver took the pickup; tap = each pickup + weekly chart. */}
         <TakeWaitTile data={takeWait.data} loading={takeWait.isLoading} onClick={() => setWaitOpen(true)} />
+        {/* Oct 28 client: took it -> kiosk sign-in (avg, median, over 2 hours); tap = each pickup, longest first. */}
+        <DropoffTimeTile data={dropTime.data} loading={dropTime.isLoading} onClick={() => setDropOpen(true)} />
+        {/* Oct 29 client: can't reach (no text / WhatsApp / app in 14 days); tap = the list, worst first. */}
+        <CantReachTile data={cantReach.data} loading={cantReach.isLoading} onClick={() => setReachOpen(true)} />
+      </div>
       </div>
       {/* Oct 14 client: who filled out the forms; tap a name = the "Form by" filter (tap again = all). */}
       {formBy.length > 0 && (
@@ -325,7 +364,10 @@ export function ReportsPanel({ onNavigateTab }: { onNavigateTab?: (tab: string) 
           ))}
         </div>
       )}
+      <StockByStoreReport from={from} to={to} />{/* Oct 30 client */}
       {waitOpen && <TakeWaitModal data={takeWait.data} loading={takeWait.isLoading} onClose={() => setWaitOpen(false)} />}
+      {dropOpen && <DropoffTimeModal data={dropTime.data} loading={dropTime.isLoading} onClose={() => setDropOpen(false)} />}
+      {reachOpen && <CantReachModal data={cantReach.data} loading={cantReach.isLoading} onClose={() => setReachOpen(false)} />}
       {breakdown && (
         <BreakdownModal by={breakdown} qs={qs}
                         onClose={() => setBreakdown(null)}
@@ -461,20 +503,15 @@ export function ReportsPanel({ onNavigateTab }: { onNavigateTab?: (tab: string) 
               <tbody>
                 {shownRows.map((r) => (
                   <tr key={r.id} className="border-b border-line/70 hover:bg-cream/40">
-                    <td className="px-3 py-2 text-ink">{new Date(String(r.scheduled_date).slice(0, 10) + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</td>
+                    <td className="px-3 py-2 text-ink whitespace-nowrap">{dayText(String(r.scheduled_date).slice(0, 10))}</td>
                     <td className="px-3 py-2 text-ink tabular-nums">{fmtTime(String(r.scheduled_time ?? '').slice(0, 5)) || '—'}</td>
-                    <td className="px-3 py-2 font-bold text-ink">{r.supplier || '—'}</td>
-                    <td className="px-3 py-2 text-ink">{r.volunteer || <span className="text-clay">unassigned</span>}</td>
+                    <td className="px-3 py-2 font-bold text-ink">{r.supplier ? <Name>{tidyPlaceName(r.supplier) || r.supplier}</Name> : '—'}</td>
+                    <td className="px-3 py-2 text-ink">{r.volunteer ? <Name>{stripUnit(r.volunteer)}</Name> : <span className="text-clay">unassigned</span>}</td>
                     <td className="px-3 py-2 text-muted capitalize">{(r.pickup_type || '').replace(/_/g, ' ')}</td>
                     <td className="px-3 py-2 text-ink">{fmtQty(r.items_collected)}</td>
                     <td className="px-3 py-2">
-                      <span className={cx('inline-block text-[11.5px] font-bold py-1 px-2.5 rounded-full',
-                        r.status === 'completed' || r.status === 'delivered' ? 'bg-sage text-forest' :
-                        r.status === 'missed' || r.status === 'cancelled' ? 'bg-clay-soft text-clay' :
-                        r.status === 'in_progress' || r.status === 'picked_up' ? 'bg-amber-soft text-[#8a6011]' :
-                        'bg-line text-muted')}>
-                        {(r as any).outcome ?? r.status?.replace(/_/g, ' ')}
-                      </span>
+                      {/* Oct 23 client: the one status pill (same words + colors as the Live Board) */}
+                      <StatusPill of={{ status: r.status, outcome_label: (r as any).outcome ?? null, kiosk_verified: (r as any).kiosk_verified, signups: r.volunteer ? [r] : [] }} />
                       {String((r as any).outcome ?? '').startsWith('Completed') && (
                         <span className={cx('ml-1 inline-block text-[11px] font-bold py-0.5 px-2 rounded-full',
                           (r as any).kiosk_verified ? 'bg-sage text-forest' : 'bg-line/70 text-muted')}>
@@ -517,17 +554,17 @@ type ActivityEntry = {
 
 function typeBadge(type: string | null) {
   const t = type ?? '';
-  const cls = t === 'Completed'       ? 'bg-sage text-forest'
-            : t === 'Taken'           ? 'bg-amber-soft text-[#9a7415]'
+  const cls = t === 'Completed'       ? STATUS.done.pill
+            : t === 'Taken'           ? STATUS.nokiosk.pill
             : t === 'Accepted'        ? 'bg-amber-soft text-[#8a6011]'
             : t === 'Kiosk Signed In' ? 'bg-sky-soft text-[#1d4a6a]'
             :                           'bg-line text-muted';
   // Oct 9 client: same words as Rewards — Done vs Took it, not checked in.
   const label = t === 'Completed' ? 'Done' : t === 'Taken' ? 'Took it, not checked in' : t;
-  return <span className={cx('inline-block text-[11px] font-bold py-0.5 px-2 rounded-full', cls)}>{label || '—'}</span>;
+  return <span className={cx('inline-block text-[11px] font-bold py-0.5 px-2 rounded-full border', cls)}>{label || '—'}</span>;
 }
 
-type ReportView = 'pickups' | 'drivers' | 'activity' | 'sms-delivery' | 'steady' | 'reconciliation' | 'gas';
+type ReportView = 'pickups' | 'drivers' | 'activity' | 'sms-delivery' | 'steady' | 'reconciliation' | 'gas' | 'closeout'; // Oct 21 client: + closeout
 // Oct 2 client fix (UI plan §7): shared date range for the two reports below.
 function useRange(days: number) {
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
@@ -668,6 +705,7 @@ function ReportTabs({ view, setView }: { view: ReportView; setView: (v: ReportVi
       {tab('steady', 'Steady pickup performance')}
       {tab('reconciliation', 'Reconciliation')}
       {tab('gas', 'Rewards')}
+      {tab('closeout', 'Close-out & no-shows')}
     </div>
   );
 }
@@ -742,7 +780,7 @@ function FailedSends({ range }: { range: string }) {
             <ul className="mt-1 space-y-0.5">
               {s.people.map((p) => (
                 <li key={p.id} className="text-[12px] leading-snug">
-                  <span className="font-semibold">{p.name ?? `…${p.phone.slice(-4)}`}{p.unit != null ? ` #${p.unit}` : ''}</span>
+                  <span className="font-semibold">{p.name ? <Name>{p.name}</Name> : displayPhone(p.phone)}</span>
                   <span className="text-muted" title={p.reason ?? undefined}> — {p.reasonLabel ?? 'failed'}</span>
                   {p.resentAt && (
                     <span className={cx('ml-1 font-bold', p.resentOk === false ? 'text-clay' : 'text-forest')}>
@@ -847,7 +885,7 @@ function SmsDeliveryReport() {
               <tr key={r.id} className="border-t border-line/50 align-top">
                 <td className="px-3 py-1.5 whitespace-nowrap text-muted">{fmtDateTimeEastern(r.requested_at)}</td>
                 <td className="px-3 py-1.5">
-                  <div className="font-bold text-ink">{r.volunteer_name ?? 'Unknown'} {r.unit_number != null && <span className="text-muted font-semibold text-[11px]">#{r.unit_number}</span>}</div>
+                  <div className="font-bold text-ink"><Name>{stripUnit(r.volunteer_name) || 'Unknown'}</Name></div>
                   <div className="text-[11px] text-muted">{r.phoneFormatted}</div>
                 </td>
                 <td className="px-3 py-1.5 text-muted">{r.source}</td>
@@ -881,9 +919,7 @@ function SmsDeliveryReport() {
 
 function fmtDateTime(ts: string | null): string {
   if (!ts) return '—';
-  const d = new Date(ts);
-  if (isNaN(d.getTime())) return '—';
-  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+  return whenAt(ts) || '—'; // Oct 23 client: one date + time format
 }
 
 // Sep 2 client ask: date-range filter on Recently Active Drivers.
@@ -1120,7 +1156,7 @@ function BreakdownModal({ by, qs, onClose, onPick, onOpenRoster }: {
             <button key={it.id} onClick={() => onPick(it.id)}
                     className="haptic w-full flex items-center justify-between gap-3 px-3 py-2 rounded-[10px] hover:bg-cream text-left">
               <span className="text-[14px] font-semibold text-ink truncate">
-                {it.name}{it.unitNumber != null ? ` #${it.unitNumber}` : ''}
+                <Name>{it.name}</Name>
                 {!it.isActive && <span className="ml-1.5 text-[11px] text-muted">(inactive)</span>}
               </span>
               <span className="shrink-0 text-[12.5px] text-muted tabular-nums">
@@ -1158,7 +1194,7 @@ function VolunteerActivityModal({ vol, dateFrom, dateTo, rangeLabel, onClose }: 
            onClick={(e) => e.stopPropagation()}>
         <div className="px-4 py-3 border-b border-line flex items-start justify-between gap-3">
           <div>
-            <div className="font-display font-bold text-[18px] text-ink">{vol.firstName} {vol.lastName}</div>
+            <div className="font-display font-bold text-[18px] text-ink"><Name first={vol.firstName} last={vol.lastName} /></div>
             <div className="text-[12px] text-muted">
               {vol.unitNumber != null ? `Unit #${vol.unitNumber} · ` : ''}
               {vol.totalCompleted} done · {vol.totalTaken ?? 0} took it, not checked in · {vol.totalAccepted} accepted · {vol.totalKiosk} kiosk
@@ -1184,6 +1220,26 @@ function VolunteerActivityModal({ vol, dateFrom, dateTo, rangeLabel, onClose }: 
         </div>
       </div>
     </div>
+  );
+}
+
+/** Oct 30 client: one tappable number in the plain-text summary line above the Reports tiles. */
+function SummaryNum({ n, label, tone, active, title, onClick }: {
+  n: number; label: string; tone: 'forest' | 'clay' | 'amber' | 'sky';
+  active?: boolean; title: string; onClick: () => void;
+}) {
+  const color =
+    tone === 'forest' ? 'text-forest' :
+    tone === 'clay'   ? 'text-clay' :
+    tone === 'amber'  ? 'text-[#8a6011]' :
+                        'text-[#1d4a6a]';
+  return (
+    <button type="button" onClick={onClick} title={title} aria-pressed={active}
+            className={cx('inline-flex items-baseline gap-1 rounded-full px-1.5 py-0.5 haptic underline decoration-dotted decoration-1 underline-offset-4 hover:decoration-solid',
+              color, active ? 'bg-sage ring-2 ring-forest-deep/30' : 'hover:bg-paper')}>
+      <span className="font-display text-[19px] leading-none tabular-nums">{n}</span>
+      <span>{label}</span>
+    </button>
   );
 }
 

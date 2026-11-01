@@ -1,7 +1,8 @@
 /**
  * Oct 14 client: "The volunteer should have a Settings option." One screen,
  * plain words, for everything about how we reach the driver:
- *   - How should we reach you about pickups? Text / WhatsApp / Both / App only / Nothing
+ *   - How should we reach you about pickups? Oct 28 client: three ticks — 📱 App notifications,
+ *     🟢 WhatsApp, 💬 Text message — any mix, or none (warned first; was Text / WhatsApp / Both / App only / Nothing)
  *   - Pause (for today / a week / until I turn it back on / Oct 14: until a date)
  *   - Quiet times (texting hours shown first), quiet days, away dates
  *   - Phone calls (Oct 14: Anytime / Only at these times / Please don't call — the same
@@ -15,16 +16,18 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, ChevronRight, X } from 'lucide-react';
-import { api, driverSettings, type DriverSettings as Settings, type ReachChoice } from '../api';
+import { api, driverSettings, type DriverSettings as Settings } from '../api';
 import { DateInput, FadeUp, cx, setUnsavedGuard, confirmLeaveIfUnsaved } from '../design';
 import { ANYTIME_SLOTS, CALL_QUESTION, CallWhenPicker, OnCallHoursEditor, callAnswerOf, type CallWhen } from '../on-call';
 import { TextCommandsCard } from '../text-commands-card';
 import { uiConfirm, uiNotify } from '../ui-dialogs';
 import { driverError } from './driver-card';
 import { LoadError } from './VolunteerHome';
-import { NewTag, PauseSheet, PausedBox, REACH_OPTIONS, REACH_SHORT, useDriverSettings, usePause } from '../driver-settings';
+import { AlertTicks, PauseSheet, PausedBox, alertsOf, useDriverSettings, usePause } from '../driver-settings';
 import { QuietDaysPicker, liveTexting } from '../quiet-days-picker'; // Oct 14 client: days for each quiet time
 import { normDays } from '../quiet-days';
+import { PasswordOfferCard } from '../phone-sign-in'; // Oct 28 client: after a text-code sign-in
+import { HelpsWithLine } from '../person-roles'; // Oct 29 client: roles
 
 const ME_ON_CALL = '/api/me/on-call';
 
@@ -66,11 +69,6 @@ export function DriverSettings() {
   useEffect(() => { setUnsavedGuard(quietDirty || onCallDirty); }, [quietDirty, onCallDirty]);
   useEffect(() => () => setUnsavedGuard(false), []);
 
-  async function pickChannel(v: ReachChoice) {
-    if (!s || v === s.channel || save.isPending) return;
-    if (v === 'none' && !(await uiConfirm('Get no pickup messages at all?\n\nYou can still open the app and take pickups.', { okLabel: 'Yes, nothing', cancelLabel: 'No' }))) return;
-    save.mutate({ channel: v }, { onSuccess: () => uiNotify(v === 'none' ? 'Saved. No pickup messages.' : `Saved. Pickups by: ${REACH_SHORT[v]}.`, 'ok') });
-  }
   function saveQuiet() {
     save.mutate({ quietWindows: wins ?? [], quietDays: days, vacationFrom: awayFrom || null, vacationUntil: awayUntil || null },
       { onSuccess: (r) => { loadFrom(r.data); uiNotify('Saved.', 'ok'); } });
@@ -120,37 +118,45 @@ export function DriverSettings() {
           : !s ? <LoadError onRetry={() => q.refetch()} busy={q.isFetching} error={q.error} what="your settings" />
           : (
           <FadeUp>
+            {/* Oct 28 client: after a text-code sign-in — optional "Want a password too? Set one". */}
+            <PasswordOfferCard />
+            {/* Oct 29 client: read-only "You help with: On the fly, Steady" (the office sets it). */}
+            <HelpsWithLine />
             {/* 1. How we reach you */}
             <Card title="How should we reach you about pickups?">
-              <div className="space-y-2" role="radiogroup">
-                {REACH_OPTIONS.map((o) => {
-                  const on = s.channel === o.value;
-                  return (
-                    <button key={o.value} type="button" role="radio" aria-checked={on} onClick={() => void pickChannel(o.value)} disabled={save.isPending}
-                            className={cx('haptic w-full text-left flex items-center gap-3 rounded-[14px] border-[1.5px] px-3.5 py-3 min-h-[56px] transition',
-                                          on ? 'border-forest bg-sage/50' : 'border-line bg-paper')}>
-                      <span className="text-[22px] w-7 text-center shrink-0" aria-hidden>{o.icon}</span>
-                      <span className="flex-1 min-w-0">
-                        <span className={cx('block text-[17px] font-bold', on ? 'text-forest' : 'text-ink')}>{o.label}{o.isNew && <NewTag />}</span>
-                        <span className="block text-[14px] text-muted leading-snug">{o.help}</span>
-                      </span>
-                      <span className={cx('grid h-6 w-6 place-items-center rounded-full border-2 shrink-0', on ? 'border-forest' : 'border-line')}>
-                        {on && <span className="h-3 w-3 rounded-full bg-forest" />}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-              {(s.channel === 'whatsapp' || s.channel === 'both') && (
+              {/* Oct 28 client: tick one, two, all three — or none (warned first). */}
+              <div className="text-[14px] text-muted leading-snug">Tick one, two or all three.</div>
+              <AlertTicks s={s} />
+              {alertsOf(s).whatsapp && (
                 <Note>
-                  WhatsApp is new — we are still testing it.{!s.whatsappReady && ' To start getting WhatsApp messages, send us one WhatsApp message first.'}
-                  {s.channel === 'whatsapp' && ' You will not get pickup texts.'}
+                  WhatsApp is new — we are still testing it.{!s.waConfirm && !s.whatsappReady && ' To start getting WhatsApp messages, send us one WhatsApp message first.'}
+                  {!alertsOf(s).text && " If WhatsApp doesn't reach you, you get the message as a text instead."}
                 </Note>
               )}
-              {!s.smsOptIn && (s.channel === 'text' || s.channel === 'both') && (
-                <Note warn>Text messages are turned off for you (STOP). Turn on "Allow text messages" below to get pickup texts.</Note>
+              {/* Oct 30 client: confirm WhatsApp — not confirmed yet: one tap opens WhatsApp with "Hi Zeh L'Zeh" ready to send. */}
+              {alertsOf(s).whatsapp && s.waConfirm?.chose && !s.waConfirm.confirmed && (
+                <div data-wa-confirm-note className="mt-2 rounded-[12px] border border-forest/40 bg-sage/40 px-3.5 py-3">
+                  <div className="text-[16px] font-bold text-ink leading-snug">Tap to turn on WhatsApp: open WhatsApp and say hi to us</div>
+                  <div className="mt-0.5 text-[14px] text-muted leading-snug">Then press Send. Until then we'll keep texting you.</div>
+                  <a href={s.waConfirm.link} target="_blank" rel="noopener noreferrer"
+                     className="haptic mt-2 flex min-h-[48px] items-center justify-center gap-2 rounded-[12px] bg-forest px-4 text-[16px] font-bold text-paper">
+                    🟢 Open WhatsApp and say hi
+                  </a>
+                </div>
+              )}
+              {!s.smsOptIn && (
+                <Note warn>All texts are off for you (STOP). Tap "Turn texts back on" below to get texts again.</Note>
               )}
               <div className="mt-2 text-[14px] text-muted leading-snug">Messages about pickups you already took (changes, cancellations) still come by text.</div>
+              {/* Oct 29 client: "things later on are being repeated" — the old "Allow text messages" switch moved here as one small line. */}
+              {s.smsOptIn ? (
+                <button type="button" disabled={save.isPending}
+                        onClick={async () => { if (await uiConfirm('Turn off ALL text messages?\n\nYou will not get texts even about pickups you took.', { okLabel: 'Turn off', cancelLabel: 'Keep on' })) save.mutate({ smsOptIn: false }); }}
+                        className="haptic mt-1 min-h-[40px] text-left text-[14px] font-bold text-clay underline underline-offset-2 disabled:opacity-60">Stop all texts, even about pickups I took</button>
+              ) : (
+                <button type="button" disabled={save.isPending} onClick={() => save.mutate({ smsOptIn: true })}
+                        className="haptic mt-1 min-h-[44px] rounded-[10px] border border-forest bg-sage px-3.5 text-[15px] font-bold text-forest disabled:opacity-60">Turn texts back on</button>
+              )}
             </Card>
 
             {/* 2. Pause */}
@@ -258,19 +264,12 @@ export function DriverSettings() {
               )}
             </Card>
 
-            {/* 5. Steady reminders + allow texts */}
+            {/* 5. Steady reminders (Oct 29 client: "Allow text messages" moved up into "How should we reach you") */}
             <Card title="Other messages">
               <Toggle on={s.steadyReminders} disabled={save.isPending}
                       label="Steady pickup reminders"
                       sub={s.steadyReminders ? 'On — a text before each steady pickup you do.' : 'Off — no reminder before steady pickups.'}
                       onChange={(on) => save.mutate({ steadyReminders: on })} />
-              <Toggle on={s.smsOptIn} disabled={save.isPending}
-                      label="Allow text messages"
-                      sub={s.smsOptIn ? 'On. Turn off only if you never want texts, even about pickups you took.' : 'Off — we send you no texts at all.'}
-                      onChange={async (on) => {
-                        if (!on && !(await uiConfirm('Turn off ALL text messages?\n\nYou will not get texts even about pickups you took.', { okLabel: 'Turn off', cancelLabel: 'Keep on' }))) return;
-                        save.mutate({ smsOptIn: on });
-                      }} />
             </Card>
 
             <TextCommandsCard />

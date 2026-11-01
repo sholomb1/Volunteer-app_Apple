@@ -10,15 +10,18 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, decodeEnc, loadFailText } from './api';
 import { Tip } from './design';
 import { fmtDay, fmtTimeEastern } from './time-format';
+import { dayText, dayWord, todayYmd, whenAt, whenText } from './display'; // Oct 23 client: same style everywhere
+import { Name, StatusPill } from './display-ui';
 import { ResponseTimeLine } from './response-times'; // Oct 11 client: how fast a driver takes their pickups
+import { steadyTimeText } from './candle-time'; // Oct 23 client
 
 const DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-/** "Thu, Oct 9" (+ " · 2:00 PM" when a time is given). */
+/** Oct 23 client: the one date format — "Thu Oct 9" (+ " · 2:00 PM"), "4:00 PM" today, "yesterday 9:00 AM". */
 const fmtDate = (d: string | null | undefined, t?: string | null) => {
   if (!d) return '—';
-  const dt = new Date(`${d}T${(t ?? '12:00').slice(0, 5)}:00`);
-  const day = dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: dt.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined });
-  return t ? `${day} · ${dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}` : day;
+  const ymd = String(d).slice(0, 10);
+  if (t) return whenText(ymd, t);
+  return ymd === todayYmd() ? 'today' : dayWord(ymd) || dayText(ymd);
 };
 const minText = (m: number) => (m < 1 ? 'under a minute' : m < 60 ? `${m} min` : m < 48 * 60 ? `${Math.round(m / 6) / 10} hr` : `${Math.round(m / 1440)} days`);
 
@@ -86,7 +89,7 @@ function StoreTexts({ texts, total }: { texts: { id: number; direction: string; 
   const [all, setAll] = useState(false);
   if (texts.length === 0) return <div className="text-[12.5px] text-muted">No texts with this store in the last 3 months.</div>;
   const shown = all ? texts : texts.slice(-5);
-  const when = (x: string) => `${fmtDay(x)} · ${fmtTimeEastern(x)}`;
+  const when = (x: string) => whenAt(x);
   return (
     <div>
       {texts.length > 5 && (
@@ -206,7 +209,7 @@ export function StoreProfileOverview({ supplierId }: { supplierId: number }) {
             <div className="flex flex-wrap gap-1.5">
               {d.usualDrivers.map((v: any) => (
                 <span key={v.id} className="rounded-full border border-line bg-paper px-2.5 py-1 text-[12px]" title={`Last ${fmtDate(v.last)}${v.count30 ? ` · ${v.count30} in 30 days` : ''}`}>
-                  <b>{v.name}</b> <span className="text-muted">× {v.count}</span>
+                  <b><Name>{v.name}</Name></b> <span className="text-muted">× {v.count}</span>
                 </span>
               ))}
             </div>
@@ -225,11 +228,11 @@ export function StoreProfileOverview({ supplierId }: { supplierId: number }) {
             {d.steady.map((x: any) => (
               <li key={x.id} className="px-3 py-2 text-[12.5px]">
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <span className="font-semibold text-ink">{x.days}{x.time ? ` at ${x.time}` : ''}{x.paused && <span className="ml-1.5 rounded-full bg-cream px-2 py-0.5 text-[10.5px] font-bold text-muted">Paused</span>}</span>
+                  <span className="font-semibold text-ink">{x.days}{x.candle ? ` · ${steadyTimeText(x.time ?? '', x.candle, (x.dayList ?? []).some((d: number) => d !== 5))}` : x.time ? ` at ${x.time}` : ''}{x.paused && <span className="ml-1.5 rounded-full bg-cream px-2 py-0.5 text-[10.5px] font-bold text-muted">Paused</span>}</span>
                   <span className="text-muted">{x.name}</span>
                 </div>
                 <div className="text-ink">
-                  {x.drivers.length ? x.drivers.map((r: any) => `${r.name}${r.days === 'every day' ? '' : ` (${r.days})`}`).join(', ') : <span className="text-muted">No set driver</span>}
+                  {x.drivers.length ? x.drivers.map((r: any, i: number) => <span key={i}>{i > 0 ? ', ' : ''}<Name>{r.name}</Name>{r.days === 'every day' ? '' : ` (${r.days})`}</span>) : <span className="text-muted">No set driver</span>}
                   {x.noDriverDays && x.drivers.length > 0 && <span className="text-clay font-semibold"> · no driver {x.noDriverDays}</span>}
                 </div>
                 {!x.paused && x.openNext7 > 0 && <div className="text-[11.5px] font-bold text-clay">{x.openNext7} in the next 7 days still need a driver</div>}
@@ -267,7 +270,7 @@ export function StoreProfileOverview({ supplierId }: { supplierId: number }) {
                 const sameDay = i > 0 && fmtDay(rows[i - 1]!.at) === day;
                 return (
                   <li key={`${e.at}-${i}`} className="flex gap-2 px-3 py-1.5 text-[12.5px]">
-                    <span className="w-[130px] shrink-0 text-muted">{sameDay ? '' : `${day} · `}{fmtTimeEastern(e.at)}</span>
+                    <span className="w-[150px] shrink-0 text-muted">{sameDay ? fmtTimeEastern(e.at) : whenAt(e.at)}</span>
                     <span className="min-w-0 text-ink">— {e.text}</span>
                   </li>
                 );
@@ -299,11 +302,11 @@ export function StorePickupHistory({ supplierId }: { supplierId: number }) {
         {shown.map((r) => (
           <li key={r.id} className="flex items-start justify-between gap-3 px-3 py-2">
             <div className="min-w-0">
-              <div className="text-[13px] font-semibold text-ink truncate">{r.drivers || <span className="italic font-normal text-muted">No driver</span>}</div>
-              <div className="text-[11.5px] text-muted">{fmtDate(r.date, r.time)} · #{r.ref_number ?? r.id}</div>
+              <div className="text-[13px] font-semibold text-ink truncate">{r.drivers ? <Name>{r.drivers}</Name> : <span className="italic font-normal text-muted">No driver</span>}</div>
+              <div className="text-[11.5px] text-muted">{fmtDate(r.date, r.time)}</div>
             </div>
             <div className="shrink-0 text-right text-[11.5px]">
-              <div className="font-bold text-ink">{r.outcome_label ?? 'Still open'}</div>
+              <div>{r.outcome_label || r.outcome ? <StatusPill of={{ outcome: r.outcome, outcome_label: r.outcome_label, status: r.status, kiosk_verified: r.kiosk_verified }} /> : <span className="font-bold text-ink">Still open</span>}</div>
               {String(r.outcome ?? '').startsWith('completed') && (
                 <div className={r.kiosk_verified ? 'text-forest font-bold' : 'text-muted'}>{r.kiosk_verified ? '✓ Kiosk' : 'No kiosk'}</div>
               )}

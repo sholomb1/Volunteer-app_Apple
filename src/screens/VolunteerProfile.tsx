@@ -9,14 +9,15 @@
  */
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, ChevronRight, FileText, Save, Settings as SettingsIcon } from 'lucide-react';
-import { volunteerSelf, account, setAuth } from '../api';
+import { volunteerSelf, account } from '../api';
 import { FadeUp, setUnsavedGuard, confirmLeaveIfUnsaved } from '../design';
 import { LocationShareCard, LoadError, NOT_LINKED_TEXT, isNotLinked } from './VolunteerHome';
 import { driverError } from './driver-card';
-import { REACH_SHORT, useDriverSettings } from '../driver-settings';
+import { alertsOf, alertsShort, noAlerts, useDriverSettings } from '../driver-settings'; // Oct 28 client: ticks
 import { PhoneListEditor, phonesStateFrom, phonesPayload, phonesError, callNumberOf, type PhonesState } from '../phone-list'; // Oct 14 client: more than one number
+import { MyPhotoSection } from '../driver-photo'; // Oct 30 client: "Add photo" (camera or gallery)
 
 // Oct 9 client: 16px so iPhones don't zoom in when a field is tapped.
 const inputCls = 'w-full rounded-[12px] border-[1.4px] border-line bg-paper px-3.5 py-3 text-[16px] outline-none focus:border-forest';
@@ -96,8 +97,8 @@ export function VolunteerProfile() {
 
   const go = async (to: string) => { if (await confirmLeaveIfUnsaved()) nav(to); };
   const reachLine = !st ? 'How we reach you, pause, quiet hours, call hours'
-    : st.channel === 'none' ? 'Pickups by: nothing · pause, quiet hours, call hours'
-    : `Pickups by: ${REACH_SHORT[st.channel]} · pause, quiet hours, call hours`;
+    : noAlerts(alertsOf(st)) ? 'Pickups by: nothing · pause, quiet hours, call hours'
+    : `Pickups by: ${alertsShort(alertsOf(st))} · pause, quiet hours, call hours`;
 
   return (
     <div className="min-h-screen pb-[80px]">
@@ -121,6 +122,7 @@ export function VolunteerProfile() {
          q.isError && !profile ? <LoadError onRetry={() => q.refetch()} busy={q.isFetching} error={q.error} what="your profile" /> :
          !profile ? <p className="text-clay text-center py-10">{NOT_LINKED_TEXT}</p> :
         <FadeUp>
+          <MyPhotoSection firstName={profile.firstName} lastName={profile.lastName} />
           <Section title="Contact">
             <div className="grid grid-cols-2 gap-3">
               <Field label="First name" htmlFor="vp-first"><input id="vp-first" value={firstName} onChange={(e) => setFirst(e.target.value)} className={inputCls} /></Field>
@@ -156,7 +158,7 @@ export function VolunteerProfile() {
             </Field>
           </Section>
 
-          <DangerZone />
+          <DeleteRequestLink requestedAt={profile.deleteRequestedAt} />
 
           {/* Oct 9 client: sticky Save bar — shows when something changed, so
               edits aren't lost by scrolling away from a button at the bottom. */}
@@ -196,54 +198,51 @@ function LinkRow({ icon, label, sub, onClick }: { icon: React.ReactNode; label: 
   );
 }
 
-// Apple 2.1 (Aug 14) — Danger Zone card at the bottom of profile. Two-step
-// confirm: user must type "delete my account" (case-insensitive) to enable
-// the destructive button. Server scrubs PII + anonymizes users row.
-function DangerZone() {
-  const nav = useNavigate();
+// Oct 25 client: no "Delete account" button for drivers (the office deletes, in the portal).
+// Apple still wants a way to ask, so a small quiet link at the very bottom sends a request to
+// the office. Nothing is deleted here. The "sent" date comes with the profile
+// (deleteRequestedAt), so this adds no request when the screen opens.
+const fmtSentDay = (iso: string) => new Date(iso).toLocaleDateString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' });
+function DeleteRequestLink({ requestedAt }: { requestedAt?: string | null }) {
+  const qc = useQueryClient();
   const [open, setOpen] = useState(false);
-  const [phrase, setPhrase] = useState('');
+  const [sentAt, setSentAt] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const mut = useMutation({
-    mutationFn: () => account.delete(),
-    onSuccess: () => { setAuth(null, null); nav('/', { replace: true }); window.location.reload(); },
-    onError: (e: any) => setErr(e?.message ?? 'Could not delete account. Try again.'),
+    mutationFn: () => account.requestDelete(),
+    onSuccess: (r) => {
+      const at = r.data.requestedAt;
+      setSentAt(at); setOpen(false);
+      qc.setQueryData(['volunteer-self'], (old: any) => old?.data ? { ...old, data: { ...old.data, deleteRequestedAt: at } } : old);
+    },
+    onError: (e: any) => setErr(driverError(e, "Couldn't send the request. Please try again.")),
   });
-  const enabled = phrase.trim().toLowerCase() === 'delete';
+  const at = sentAt ?? requestedAt ?? null;
   return (
     <>
-      <div className="mt-10 rounded-[14px] border-2 border-clay/40 bg-clay/5 p-4">
-        <div className="text-[13px] font-extrabold uppercase tracking-[.06em] text-clay mb-1">Danger zone</div>
-        <div className="text-[13.5px] text-ink/80 leading-snug">
-          Delete your account and personal info from Zeh L'Zeh. Past pickups stay in our records (anonymized). This can't be undone.
-        </div>
-        <button onClick={() => { setOpen(true); setPhrase(''); setErr(null); }}
-                className="haptic mt-3 bg-clay text-paper font-bold text-[15px] px-4 min-h-[44px] rounded-[10px] shadow-ctag">
-          Delete my account
-        </button>
+      <div className="mt-14 mb-2 text-center">
+        {at
+          ? <p className="text-[13px] text-muted leading-snug px-2 py-3">Request sent {fmtSentDay(at)}. The office will contact you.</p>
+          : <button onClick={() => { setErr(null); setOpen(true); }}
+                    className="text-[13px] text-muted underline underline-offset-2 px-3 min-h-[44px]">
+              Request to delete my account
+            </button>}
       </div>
       {open && (
         <div onClick={() => !mut.isPending && setOpen(false)}
              className="fixed inset-0 z-[3000] bg-ink/60 grid place-items-center p-4">
-          <div onClick={(e) => e.stopPropagation()}
+          <div onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true"
                className="bg-paper rounded-[18px] shadow-lift w-full max-w-sm p-5">
-            <div className="font-display font-semibold text-[19px] text-clay">Delete your account?</div>
-            <p className="text-[13.5px] text-ink/80 mt-2 leading-snug">
-              This permanently removes your profile and personal info. Past pickups you completed stay in our records (anonymized). You can't undo this.
+            <p className="text-[16px] text-ink leading-snug">
+              Send a request to the office to delete your account? Nothing is deleted now; the office will contact you.
             </p>
-            <div className="mt-4">
-              <div className="text-[13px] text-muted mb-1">Type <b>delete</b> to confirm:</div>
-              <input value={phrase} onChange={(e) => setPhrase(e.target.value)} autoFocus
-                     className="w-full rounded-[10px] border-[1.4px] border-line px-3 py-2 min-h-[44px] text-[16px] outline-none focus:border-clay" />
-            </div>
-            {err && <p className="text-clay font-bold text-[13px] mt-2">{err}</p>}
-            <div className="flex justify-end gap-2 mt-4">
+            {err && <p className="text-clay font-bold text-[14px] mt-2">{err}</p>}
+            <div className="flex justify-end gap-2 mt-5">
               <button onClick={() => setOpen(false)} disabled={mut.isPending}
                       className="haptic text-[15px] font-bold text-muted px-4 min-h-[44px]">Cancel</button>
-              {/* Oct 9 client: 44px / 15px buttons. */}
-              <button onClick={() => mut.mutate()} disabled={!enabled || mut.isPending}
-                      className="haptic text-[15px] font-bold bg-clay text-paper px-4 min-h-[44px] rounded-[10px] shadow-ctag disabled:opacity-50">
-                {mut.isPending ? 'Deleting…' : 'Delete forever'}
+              <button onClick={() => mut.mutate()} disabled={mut.isPending}
+                      className="haptic text-[15px] font-bold bg-forest text-paper px-4 min-h-[44px] rounded-[10px] shadow-ctag disabled:opacity-50">
+                {mut.isPending ? 'Sending…' : 'Send request'}
               </button>
             </div>
           </div>

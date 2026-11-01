@@ -6,7 +6,7 @@
  */
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, canWrite, getUser } from './api';
+import { api, canWrite, getUser, isDispatcherLogin } from './api';
 import { uiConfirm, uiNotify } from './ui-dialogs';
 import { fmtDay, fmtTimeEastern } from './time-format';
 import { callSummary } from './on-call'; // Oct 14 client (was to12h for the call hours)
@@ -38,8 +38,10 @@ function fmtPhone(p: string | null) {
 
 /** Sidebar / tab badge: how many sign-ups are waiting. */
 export function SignupsBadge() {
+  const disp = isDispatcherLogin(); // Oct 22 client: no New sign-ups for dispatcher logins
   const q = useQuery({
     queryKey: COUNT_KEY,
+    enabled: !disp,
     queryFn: () => api<{ data: { count: number } }>('/api/volunteer-signups/count'),
     refetchInterval: 60_000,
     refetchOnWindowFocus: true,
@@ -132,7 +134,7 @@ function SignupCard({ r, writeOk, onDone }: { r: Signup; writeOk: boolean; onDon
   };
 
   const decline = async () => {
-    if (!(await uiConfirm(`Mark ${name} as "Not now"? They get no text. Their status becomes Inactive.`, { okLabel: 'Not now', cancelLabel: 'Go back' }))) return;
+    if (!(await uiConfirm(`Mark ${name} as "Not now"? They get no text. They move to Archive.`, { okLabel: 'Not now', cancelLabel: 'Go back' }))) return;
     setBusy(true);
     try {
       await api(`/api/volunteer-signups/${id}/decline`, { method: 'POST', body: JSON.stringify({ reason: reason.trim() || undefined }) });

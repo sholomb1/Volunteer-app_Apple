@@ -4,7 +4,8 @@
  * whatever the office sets shows in the app and the other way round:
  *   - OfficePauseReach  (driver profile → Alerts & schedule): Pause (For today / A week /
  *     Until a date… / Until turned back on) + Resume now, and "How should we reach them?"
- *     (Text / WhatsApp / Both / App only / Nothing), with who set it and when.
+ *     (Oct 28 client: the driver's three ticks — App notifications / WhatsApp / Text message,
+ *     any mix or none; was Text / WhatsApp / Both / App only / Nothing), with who set it and when.
  *     API: GET/PUT /api/volunteers/:id/settings (= /api/me/settings for the driver).
  *   - Oct 14 client: under the reach choice, "WhatsApp status" from REAL events only (messaged us on
  *     WhatsApp / our WhatsApp went through / failed / not confirmed) and "Send test WhatsApp" (one line
@@ -16,34 +17,19 @@
  */
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type ReachChoice } from './api';
+import { api, type AlertChoices, type WaConfirmInfo } from './api';
 import { cx } from './design';
-import { uiConfirm, uiNotify } from './ui-dialogs';
 import {
-  PauseSheet, PausedBox, REACH_OPTIONS, setByLine, settingsKey, settingsUrl, useDriverSettings, usePause, type DriverSettingsFull,
+  AlertTicks, PauseSheet, PausedBox, alertsOf, setByLine, settingsKey, useDriverSettings, usePause,
 } from './driver-settings';
 import { ApplicationPanel } from './screens/MyApplication';
+import { LastChanged } from './change-history'; // Oct 16 client: "Last changed by … · when"
 
 export function OfficePauseReach({ volunteerId, name }: { volunteerId: number; name: string }) {
-  const qc = useQueryClient();
   const q = useDriverSettings(volunteerId);
   const s = q.data?.data;
   const pause = usePause(s, volunteerId);
   const [pauseOpen, setPauseOpen] = useState(false);
-  const save = useMutation({
-    mutationFn: (channel: ReachChoice) => api<{ data: DriverSettingsFull }>(settingsUrl(volunteerId), { method: 'PUT', body: JSON.stringify({ channel }) }),
-    onSuccess: (r) => {
-      qc.setQueryData(settingsKey(volunteerId), r);
-      qc.invalidateQueries({ queryKey: ['volunteer-alerts', volunteerId] });
-      qc.invalidateQueries({ queryKey: ['admin-volunteers'] });
-    },
-    onError: (e: any) => uiNotify(e?.message ?? "Couldn't save", 'err'),
-  });
-  async function pick(v: ReachChoice) {
-    if (!s || v === s.channel || save.isPending) return;
-    if (v === 'none' && !(await uiConfirm(`${name} gets no pickup messages at all?`, { okLabel: 'Yes, nothing', cancelLabel: 'No' }))) return;
-    save.mutate(v, { onSuccess: () => uiNotify(`Saved. ${name}: ${REACH_OPTIONS.find((o) => o.value === v)?.label}.`, 'ok') });
-  }
   if (q.isLoading) return <div className="text-[13px] text-muted">Loading…</div>;
   if (!s) return <div className="text-[13px] text-clay">Couldn't load. <button onClick={() => q.refetch()} className="underline font-bold">Try again</button></div>;
   const chBy = setByLine(s.channelSetBy);
@@ -58,25 +44,16 @@ export function OfficePauseReach({ volunteerId, name }: { volunteerId: number; n
                     className="haptic rounded-[10px] border border-forest/40 bg-sage px-3 py-2 text-[13px] font-bold text-forest disabled:opacity-60">Pause…</button>
           </div>
         )}
+        <LastChanged volunteerId={volunteerId} field="pause" />
       </div>
       <div>
         <div className="text-[13px] font-extrabold text-ink">How should we reach {name} about pickups?</div>
-        <div className="text-[12px] text-muted mb-1.5">Same choice as in the driver's app (Settings).{chBy ? ` Last ${chBy}.` : ''}</div>
-        <div className="flex flex-wrap gap-2" role="radiogroup">
-          {REACH_OPTIONS.map((o) => {
-            const on = s.channel === o.value;
-            return (
-              <button key={o.value} type="button" role="radio" aria-checked={on} onClick={() => void pick(o.value)} disabled={save.isPending} title={o.help}
-                      className={cx('haptic rounded-[10px] border px-3 py-2 text-[13px] font-bold disabled:opacity-60',
-                                    on ? 'border-forest bg-forest text-paper' : 'border-line bg-paper text-ink hover:border-forest')}>
-                {o.icon} {o.label}
-              </button>
-            );
-          })}
-        </div>
+        <div className="text-[12px] text-muted mb-1.5">Same ticks as in the driver's app (Settings). Any mix, or none.{chBy ? ` Last ${chBy}.` : ''}</div>
+        {/* Oct 28 client: the driver's three ticks (same API call and columns as the app). */}
+        <AlertTicks s={s} volunteerId={volunteerId} name={name} compact />
       </div>
-      <WhatsAppCheck volunteerId={volunteerId} name={name} channel={s.channel}
-                     wa={(s as any).waStatus ?? null} bridge={(s as any).waBridge ?? null} />
+      <WhatsAppCheck volunteerId={volunteerId} name={name} alerts={alertsOf(s)}
+                     wa={(s as any).waStatus ?? null} bridge={(s as any).waBridge ?? null} confirm={s.waConfirm ?? null} />
       {pauseOpen && <PauseSheet onPick={pause.pauseFor} onClose={() => setPauseOpen(false)} busy={pause.busy} />}
     </div>
   );
@@ -90,7 +67,7 @@ type TestStatus = { status: string; error: string | null; sentAt: string | null;
 export const waTone = (w: { state: string } | null | undefined) =>
   !w ? 'text-muted' : w.state === 'failed' ? 'text-clay' : w.state === 'unknown' ? 'text-muted' : 'text-forest';
 
-function WhatsAppCheck({ volunteerId, name, channel, wa, bridge }: { volunteerId: number; name: string; channel: ReachChoice; wa: WaStatus | null; bridge: BridgeState | null }) {
+function WhatsAppCheck({ volunteerId, name, alerts, wa, bridge, confirm }: { volunteerId: number; name: string; alerts: AlertChoices; wa: WaStatus | null; bridge: BridgeState | null; confirm?: WaConfirmInfo | null }) {
   const qc = useQueryClient();
   const [testId, setTestId] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -109,7 +86,7 @@ function WhatsAppCheck({ volunteerId, name, channel, wa, bridge }: { volunteerId
   // A final answer changes the driver's WhatsApp status — reload it.
   useEffect(() => { if (st === 'sent' || st === 'failed') qc.invalidateQueries({ queryKey: settingsKey(volunteerId) }); }, [st]); // eslint-disable-line react-hooks/exhaustive-deps
   const shown = poll.data?.waStatus ?? wa;
-  const onWa = channel === 'whatsapp' || channel === 'both';
+  const onWa = alerts.whatsapp;
   const when = (iso: string | null) => (iso ? new Date(iso).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' }) : '');
   const result = testId == null ? null
     : !poll.data || st === 'queued' ? { tone: 'text-[#9a7415]', text: 'Test queued — waiting for the WhatsApp phone to send it…' }
@@ -119,13 +96,16 @@ function WhatsAppCheck({ volunteerId, name, channel, wa, bridge }: { volunteerId
   return (
     <div data-wa-check className="rounded-[12px] border border-line px-3 py-2 space-y-1.5">
       <div className="text-[13px] font-extrabold text-ink">WhatsApp status</div>
+      {onWa && confirm?.chose && <WaConfirmLine volunteerId={volunteerId} name={name} c={confirm} />}
       <div className={cx('text-[13px] font-bold', waTone(shown))} data-wa-status>{shown?.label ?? '? Not confirmed yet'}</div>
       <div className="text-[12px] text-muted">
         From real events only (they messaged us on WhatsApp, or our WhatsApp went through) — not from what was chosen above.
-        {onWa && !shown?.confirmed && ` Until it's confirmed, if WhatsApp can't be used ${name} gets a text instead.`}
+        {onWa && !shown?.confirmed && (alerts.text
+          ? ` Until it's confirmed, ${name} still gets the texts.`
+          : ` Until it's confirmed, if WhatsApp can't be used ${name} gets a text instead.`)}
       </div>
       {bridge && !bridge.ok && (
-        <div className="text-[12px] font-bold text-[#9a7415]">⚠ {bridge.reason}. WhatsApp messages wait until it does; WhatsApp-only drivers get texts instead.</div>
+        <div className="text-[12px] font-bold text-[#9a7415]">⚠ {bridge.reason}. WhatsApp-only drivers get their pickup messages as texts until it does.</div>
       )}
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" onClick={() => { setTestId(null); send.mutate(); }} disabled={send.isPending || st === 'queued' || st === 'claimed'}
@@ -136,6 +116,47 @@ function WhatsAppCheck({ volunteerId, name, channel, wa, bridge }: { volunteerId
       </div>
       {result && <div className={cx('text-[12.5px] font-bold', result.tone)} data-wa-test-result>{result.text}</div>}
       {err && <div className="text-[12.5px] font-bold text-clay">{err}</div>}
+    </div>
+  );
+}
+
+// Oct 30 client: confirm WhatsApp — "WhatsApp: ✅ working / ⏳ waiting for him to say hi (asked Oct 30) /
+// ❌ last WhatsApp failed", and "Send the WhatsApp link again" (office only; the confirm text now).
+const shortDay = (iso: string) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/New_York' });
+export function WaConfirmLine({ volunteerId, name, c }: { volunteerId: number; name: string; c: WaConfirmInfo }) {
+  const qc = useQueryClient();
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const first = (name || 'the driver').trim().split(/\s+/)[0];
+  const again = useMutation({
+    mutationFn: () => api<{ data: { ok: boolean } }>(`/api/volunteers/${volunteerId}/wa-confirm-ask`, { method: 'POST', body: '{}' }),
+    onSuccess: () => { setMsg({ ok: true, text: `✓ Texted ${first} the WhatsApp link.` }); qc.invalidateQueries({ queryKey: settingsKey(volunteerId) }); },
+    onError: (e: any) => setMsg({ ok: false, text: e?.message ?? "Couldn't send it" }),
+  });
+  const asked = c.askedAt ? ` (asked ${shortDay(c.askedAt)})` : '';
+  const line = c.state === 'working' ? '✅ working'
+    : c.state === 'failed' ? `❌ last WhatsApp failed${c.askedAt ? ` · waiting for ${first} to say hi${asked}` : ''}`
+    : `⏳ waiting for ${first} to say hi${asked}`;
+  const tone = c.state === 'working' ? 'text-forest' : c.state === 'failed' ? 'text-clay' : 'text-[#9a7415]';
+  return (
+    <div data-wa-confirm={c.state ?? 'none'} className="rounded-[10px] bg-paper/60 border border-line px-2.5 py-2 space-y-1">
+      <div className={cx('text-[14px] font-extrabold', tone)}>WhatsApp: {line}</div>
+      {!c.confirmed && (
+        <>
+          <div className="text-[12px] text-muted leading-snug">
+            No WhatsApp copies until {first} says hi to us on WhatsApp — {first} gets texts meanwhile.{' '}
+            {c.asks > 0 ? `We texted ${first} the link${c.asks > 1 ? ` ${c.asks} times` : ''}; it turns on by itself when the hi comes in.`
+              : 'The link text goes out by itself (not at night or on Shabbos).'}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" onClick={() => { setMsg(null); again.mutate(); }} disabled={again.isPending} data-wa-confirm-again
+                    className="haptic rounded-[9px] border border-forest/40 bg-sage px-2.5 py-1.5 text-[12.5px] font-bold text-forest disabled:opacity-60">
+              {again.isPending ? 'Sending…' : c.askedAt ? 'Send the WhatsApp link again' : 'Send the WhatsApp link'}
+            </button>
+            <span className="text-[11.5px] text-muted">A text: "tap here and press Send".</span>
+          </div>
+          {msg && <div className={cx('text-[12.5px] font-bold', msg.ok ? 'text-forest' : 'text-clay')}>{msg.text}</div>}
+        </>
+      )}
     </div>
   );
 }

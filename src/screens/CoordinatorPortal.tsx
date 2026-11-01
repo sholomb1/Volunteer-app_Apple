@@ -13,30 +13,35 @@
 import { DriverRepliesPanel, ExpiredReviewSection, NotCheckedInSection, CodeWordsPanel } from '../profiles'; // Oct 11 client: + Code words
 import { uiConfirm, uiNotify } from '../ui-dialogs';
 import { cancelledLine } from '../cancelled-by'; // Oct 14 client: who cancelled
-import { useMemo, useState, Suspense } from 'react';
+import { useMemo, useState, Suspense, Fragment } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import L from 'leaflet';
+import type * as LT from 'leaflet'; // Oct 16 client: speed — leaflet itself loads only when the Coverage map opens (see CoordMap)
 import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { LayoutGrid, Calendar, Users, Store, BarChart3, LogOut, MessageSquare, ClipboardList, Settings, ShieldCheck, X, MapPin } from 'lucide-react';
-import { adminCRUD, adminSmsPause, api, apiAssetUrl, getToken, setAuth, setSmsOverrideFor, smsOverrideUntil, broadcast, canSeeTab, canWrite, dispatcherShifts, dm, getUser, location as locationApi, smsThreads, onDuty, sse, uncoveredAlerts, upcomingSms, type DispShiftSlot, type DispWeeklyRow, type SignupRow } from '../api';
+import { LayoutGrid, Calendar, Users, Store, BarChart3, LogOut, MessageSquare, ClipboardList, Settings, ShieldCheck, X, MapPin, Loader2 } from 'lucide-react';
+import { adminCRUD, adminSmsPause, api, apiAssetUrl, getToken, setAuth, setSmsOverrideFor, smsOverrideUntil, broadcast, canSeeTab, dispatcherHiddenTab, isDispatcherLogin, canWrite, canOfficeOnly, dispatcherShifts, dm, getUser, location as locationApi, smsThreads, sse, uncoveredAlerts, upcomingSms, type DispShiftSlot, type DispWeeklyRow, type SignupRow } from '../api';
 import { sendPickupNowConfirmed } from '../pickup-send-now';
 import { smsReasonText, textedText } from '../sms-reason';
-import { OnCallNowCard } from '../on-call';
+import { OnCallNowButton } from '../on-call'; // Oct 21 client (Cleaner Live Board): 📞 button in the header (was the On call now card)
+import { pickupColor, COLOR_CARD, finishedPill, type PickupColor } from '../pickup-color'; // Oct 21 client (Cleaner Live Board): one color per card
+import { pickupPlace, tidyAddress, driverShort } from '../pickup-label'; // Oct 22 client: "need all this stuff to be neater"
+import { DriverCallButtons } from '../call-driver'; // Oct 16 client (idea 8): one-tap call the driver, logged
+import { OnlyNeedsButton, showOnlyNeeds, driversOnOf, CancelDriverWarning } from '../drivers-needed'; // Oct 23 client: "✓ Only needs N driver(s)"
 import { cx, SearchBar, DateInput, DisplayToggles, Tip } from '../design';
 import { ChatThread } from '../chat-thread';
 import { SuppliersPanel, VolunteersPanel, SteadyPickupsPanel, AppUsagePanel, KioskActivityPanel, SettingsPanel, NeighborhoodsPanel, CoveragePanel, QuickPickupModal, ChangePasswordPanel, BroadcastPanel, SmsComposerPanel, SmsGroupsPanel, SmsThreadsPanel, SmsDispatchersPanel, DispatchersPanel, DispatchersRosterPanel, SupplierForm, SteadyForm, ShiftsPanel, CenterHelpStandalonePanel, UpcomingSmsPanel, WhatsappAdminPanel, WaThreadsPanel, JewishCalendarPanel } from '../portal-sections';
 import { openVolunteerOnTab } from '../portal-sections'; // Oct 11 client
 import { WhoGetsTextsPanel } from '../who-gets-texts'; // Oct 11 client: Messaging → Who gets texts
 import { HowTextingWorksPanel } from '../texting-rules'; // Oct 14 client: Messaging → How texting works
-import { PickupTextLines } from '../text-recipients'; // Oct 11 client: who got the pickup text; Oct 12: next text + times sent on the card
+import { PickupTextLines, useMinuteNow, fmtSendTime, markSending, clearSending, afterSendAnswer, useSendingSince } from '../text-recipients'; // Oct 21 client: + minute clock, send time. Oct 11 client: who got the pickup text; Oct 12: next text + times sent on the card
 import { EmailsPanel } from '../emails-panel';
 import { DonationsPanel } from '../donations-panel';
 // Tabbed wrapper components consolidating the "Chat" and "Admin" sub-items
 // (batch abc820 Aug 11 · nav consolidation). Defined below in this file.
-import { ProspectsPanel, NeedsConfirmationSection } from '../prospects-and-confirmation';
+import { ProspectsPanel } from '../prospects-and-confirmation'; // Oct 21 client: Needs confirmation box left the Live Board (orange cards)
 import { RecruitingPanel } from '../crm-sections';
 import { TasksPanel } from '../tasks-panel';
+import { ProblemReportsList, BugReportsBadge } from '../report-problem'; // Oct 16 client: Bug reports tab
 import { MyShiftPanel } from '../my-shift-panel';
 import { DispatcherAttendancePanel } from '../dispatcher-attendance';
 import { lazyNamed } from '../lazy-load';
@@ -46,24 +51,36 @@ import { readCoordNav, writeCoordNav, patchCoordNav } from '../nav-state';
 import { CalendarPanel } from './CalendarPanel';
 import { AdminPickupDetail, RepostButton } from './AdminPickupDetail';
 import { StorePhotoThumb } from '../store-photo'; // Oct 14 client
-import { Plus, KeyRound, UserPlus2 } from 'lucide-react'; // Inbox: Food Donations nav (hidden Oct 8)
+import { Plus, KeyRound, UserPlus2, Inbox } from 'lucide-react'; // Inbox: Food Donations nav (Oct 18: admins see it again)
 import { nyToday, fmtDateTimeEastern, fmtDay, repostedLabel, isPastDueNy } from '../time-format';
+import { RunTag, runPlaceOf } from '../runs'; // Oct 30 client: 🚚 Run to Lakewood / Fallsburg
 import { WhatsNewPanel } from '../whats-new';
 import { StoreTextLines } from '../food-check'; // Oct 13 client: food check / donor told / CANCEL on the card
 import { SignupsPanel, SignupsBadge } from '../signups-panel'; // Oct 11 client: New sign-ups inbox
 import { OfficeAlertsBell, PhoneAlertsButton } from '../office-alerts'; // Oct 11 client: dispatcher alerts
+import { OfficePhone } from '../office-phone'; // Oct 20 client: office phone (Reliable PBX) — caller pop-up, click-to-call
 import { HelpMenu } from '../help-guide'; // Oct 14 client: Help (?) — welcome tour + guide
 import { ReportProblemLink } from '../report-problem'; // Oct 14 client: Report a problem
 import { submittedByLabel } from '../submitted-by'; // Oct 14 client: who filled out the form
+import { NumbersPage } from '../numbers-page'; // Oct 21 client: Reports → Numbers (daily / weekly numbers)
+import { FoodHandlePanel } from '../food-handle'; // Oct 30 client: Food to handle
+import { CheckupPage } from '../checkup-page'; // Oct 16 client: Reports → Check-up (weekly check-up + speed)
+import { CloseOutPanel, NoDriverLateBadge } from '../closeout'; // Oct 21 client: Pickups → Close out; Live Board "No driver 1h late"
+import { startScreenTimer } from '../speed-report'; // Oct 16 client: slow screens (> 3 s) reported to the server
+import { STATUS, dayText, displayPhone, msgWhen, personFull, shortAddress, shortAddressOf, statusKeyOf, stripUnit, todayYmd, whenAt, whenText, type StatusKey } from '../display'; // Oct 23 client: same style everywhere
+import { Name, StatusPill } from '../display-ui';
+import { DriverViewSwitch } from '../view-switch'; // Oct 29 client: one login per person
+import { useCoverage, COVER_HEX, COVER_WORD, COVERAGE_FOCUS_EVENT, COVERAGE_OPEN_EVENT, emitCoverage, nextPickupText } from '../coverage-panel'; // Oct 30 client: Coverage map
+import type { CoverageStore } from '../api';
 
-type TabKey = 'my-shift' | 'holiday-sms' | 'tasks' | 'calendar' | 'live' | 'pickups' | 'volunteers' | 'suppliers' | 'reports' | 'chat-stores' | 'chat-volunteers' | 'sms-combo' | 'dispatchers-combo' | 'steady' | 'shifts' | 'center-help' | 'settings' | 'neighborhoods' | 'coverage' | 'change-password' | 'recruiting' | 'prospects' | 'app-usage' | 'kiosk-activity' | 'driver-replies' | 'emails' | 'donations' | 'driver-messages' | 'whats-new' | 'signups' | 'who-gets-texts' | 'texting-rules'; // Oct 11 client: + New sign-ups, + Who gets texts; Oct 14 client: + How texting works
+type TabKey = 'my-shift' | 'holiday-sms' | 'tasks' | 'calendar' | 'live' | 'pickups' | 'volunteers' | 'suppliers' | 'reports' | 'chat-stores' | 'chat-volunteers' | 'sms-combo' | 'dispatchers-combo' | 'steady' | 'shifts' | 'center-help' | 'settings' | 'neighborhoods' | 'coverage' | 'change-password' | 'recruiting' | 'prospects' | 'app-usage' | 'kiosk-activity' | 'driver-replies' | 'emails' | 'donations' | 'driver-messages' | 'whats-new' | 'signups' | 'who-gets-texts' | 'texting-rules' | 'bug-reports' | 'checkup' | 'numbers' | 'food-handle'; // Oct 30 client: + Food to handle; Oct 21 client: + Numbers; Oct 16 client: + Check-up; Oct 16 client: + Bug reports; Oct 11 client: + New sign-ups, + Who gets texts; Oct 14 client: + How texting works
 // Oct 9 client: one "Driver messages" inbox — Texts / App chat / Replies to pickup texts.
 // Oct 11 client: + Code words (every word drivers can text, and who used it).
-type DmSub = 'texts' | 'chat' | 'replies' | 'words';
-const DM_SUBS: DmSub[] = ['texts', 'chat', 'replies', 'words'];
+type DmSub = 'texts' | 'chat' | 'replies' | 'words' | 'whatsapp';
+const DM_SUBS: DmSub[] = ['texts', 'chat', 'replies', 'words', 'whatsapp']; // Oct 22 client: + WhatsApp (dispatcher view)
 // The Driver messages page uses the same access as the pages it replaced.
 // Oct 11 client: New sign-ups uses the same access as Drivers.
-const tabPerm = (k: string) => ((k === 'driver-messages' || k === 'who-gets-texts' || k === 'texting-rules') ? 'driver-replies' : k === 'signups' ? 'volunteers' : k);
+const tabPerm = (k: string) => (k === 'checkup' || k === 'numbers' ? 'reports' : k === 'bug-reports' ? 'tasks' : (k === 'driver-messages' || k === 'who-gets-texts' || k === 'texting-rules') ? 'driver-replies' : k === 'signups' ? 'volunteers' : k); // Oct 16 client: Bug reports = Tasks access
 
 // Oct 11 client: hidden = never shown in any menu (old links still work and redirect).
 const NAV_ITEMS: { key: TabKey; label: string; icon: any; section?: 'top' | 'chat' | 'admin'; hidden?: boolean }[] = [
@@ -72,8 +89,10 @@ const NAV_ITEMS: { key: TabKey; label: string; icon: any; section?: 'top' | 'cha
   // that promoted Calendar to first — client asked for the original order.
   { key: 'live',           label: 'Live Board',     icon: LayoutGrid,    section: 'top' },
   { key: 'pickups',        label: 'Pickups',        icon: Calendar,      section: 'top' },
-  // Oct 8: hidden until the donate@ inbox goes live (client). Uncomment to bring back.
-  // { key: 'donations',      label: 'Food Donations', icon: Inbox,         section: 'top' }, // Oct 7 client
+  { key: 'food-handle',    label: 'Food to handle', icon: ClipboardList, section: 'top' }, // Oct 30 client: package + add each kiosk item
+  // Oct 8: hidden until the donate@ inbox goes live (client).
+  // Oct 18 client: back for admins only, so they can connect the mailbox (⚙️ Email connection). See visibleNav.
+  { key: 'donations',      label: 'Food Donations', icon: Inbox,         section: 'top' }, // Oct 7 client
   // Oct 2 client fix (UI plan §3): Calendar + Steady Pickups now live inside
   // Pickups as views (Calendar / Recurring). Old #coord/calendar and
   // #coord/steady links are redirected below.
@@ -86,8 +105,11 @@ const NAV_ITEMS: { key: TabKey; label: string; icon: any; section?: 'top' | 'cha
   { key: 'coverage',       label: 'Coverage map',   icon: ShieldCheck,   section: 'top' }, // Oct 9 client: one name
   { key: 'my-shift',       label: 'My Shift',       icon: Calendar,      section: 'top' }, // Oct 2: dispatchers only
   { key: 'tasks',          label: 'Tasks & follow-ups', icon: ClipboardList, section: 'top' }, // Oct 2: Task Management (UI plan §6)
+  { key: 'bug-reports',    label: 'Bug reports',    icon: ClipboardList, section: 'top' }, // Oct 16 client: problem reports + comments
   { key: 'recruiting',     label: 'Recruiting',     icon: UserPlus2,     section: 'top' },
   { key: 'reports',        label: 'Reports',        icon: BarChart3,     section: 'top' },
+  { key: 'numbers',        label: 'Numbers',        icon: BarChart3,     section: 'top' }, // Oct 21 client: daily / weekly numbers (admins)
+  { key: 'checkup',        label: 'Check-up',       icon: ShieldCheck,   section: 'top' }, // Oct 16 client: weekly check-up + speed (admins)
   // Chat section — consolidated from 6+ items to 3.
   { key: 'chat-stores',    label: 'Chat: Stores',      icon: MessageSquare, section: 'chat' },
   { key: 'driver-messages',label: 'Driver messages',   icon: MessageSquare, section: 'chat' }, // Oct 9 client
@@ -119,14 +141,15 @@ const NAV_ITEMS: { key: TabKey; label: string; icon: any; section?: 'top' | 'cha
 const NAV_GROUPS: { key: string; label: string; icon: any; tabs: TabKey[] }[] = [
   { key: 'live',       label: 'Live Board',      icon: LayoutGrid,    tabs: ['live'] },
   { key: 'pickups',    label: 'Pickups',         icon: Calendar,      tabs: ['pickups'] },
-  // Oct 8: hidden until the donate@ inbox goes live (client). Uncomment to bring back.
-  // { key: 'donations',  label: 'Food Donations',  icon: Inbox,         tabs: ['donations'] }, // Oct 7 client
+  { key: 'food',       label: 'Food to handle',  icon: ClipboardList, tabs: ['food-handle'] }, // Oct 30 client
+  // Oct 8: hidden until the donate@ inbox goes live (client). Oct 18 client: admins only (see visibleNav).
+  { key: 'donations',  label: 'Food Donations',  icon: Inbox,         tabs: ['donations'] }, // Oct 7 client
   { key: 'volunteers', label: 'Drivers',         icon: Users,         tabs: ['volunteers', 'signups'] }, // Oct 11 client: + New sign-ups tab
   { key: 'suppliers',  label: 'Suppliers',       icon: Store,         tabs: ['suppliers'] },
   { key: 'map',        label: 'Coverage map',    icon: MapPin,        tabs: ['coverage'] },
   { key: 'myshift',    label: 'My Shift',        icon: Calendar,      tabs: ['my-shift'] },
-  { key: 'tasks',      label: 'Tasks & follow-ups', icon: ClipboardList, tabs: ['tasks', 'recruiting', 'prospects'] },
-  { key: 'reports',    label: 'Reports',         icon: BarChart3,     tabs: ['reports'] },
+  { key: 'tasks',      label: 'Tasks & follow-ups', icon: ClipboardList, tabs: ['tasks', 'bug-reports', 'recruiting', 'prospects'] }, // Oct 16 client: + Bug reports
+  { key: 'reports',    label: 'Reports',         icon: BarChart3,     tabs: ['reports', 'numbers', 'checkup'] }, // Oct 21 client: + Numbers; // Oct 16 client: + Check-up
   // Oct 9 client: Driver replies + Chat: Drivers + SMS threads are one item with tabs inside.
   // Oct 11 client: back to ONE "Messaging" item (as before Oct 9); Driver messages is its first tab.
   { key: 'messaging',  label: 'Messaging',       icon: MessageSquare, tabs: ['driver-messages', 'who-gets-texts', 'texting-rules', 'chat-stores', 'sms-combo', 'emails'] }, // Oct 11 client: + Who gets texts; Oct 14 client: + How texting works
@@ -186,7 +209,12 @@ export function CoordinatorPortal() {
   const writeOk = canWrite(user?.role);
   // Sep 4: dispatcher role-scoping. Hide donations/reports/admin-settings
   // panels for role='dispatcher' — server enforces the same, this is UX.
-  const visibleNav = NAV_ITEMS.filter((it) => canSeeTab(user?.role, tabPerm(it.key)));
+  const visibleNav = NAV_ITEMS.filter((it) => canSeeTab(user?.role, tabPerm(it.key))
+    && !dispatcherHiddenTab(user?.role, it.key) // Oct 22 client: dispatcher view (no Suppliers, New sign-ups, Who gets texts…)
+    && (it.key !== 'bug-reports' || ['admin', 'staff', 'coordinator'].includes(String(user?.role ?? '')))
+    && (it.key !== 'numbers' || ['admin', 'staff', 'coordinator'].includes(String(user?.role ?? ''))) // Oct 21 client: Numbers: admins only
+    && (it.key !== 'checkup' || ['admin', 'staff', 'coordinator'].includes(String(user?.role ?? ''))) // Oct 16 client: same as Problem reports; Check-up: admins only
+    && it.key !== 'donations'); // Oct 26 client: "Remove till we ready" — Food Donations hidden from the menu for everyone (Oct 18: admins only) // Oct 18 client: Food Donations for admins (connect the email) until it's opened to dispatchers
   const visibleTabs = new Set<TabKey>(visibleNav.map((it) => it.key));
   const isDispatcherRole = String(user?.role ?? '').toLowerCase() === 'dispatcher'
     || (Array.isArray(user?.accessSections) && user!.accessSections!.length > 0 && !user!.accessSections!.includes('admin'));
@@ -207,13 +235,13 @@ export function CoordinatorPortal() {
     // Sep 4: if the deep-link points at a tab this role can't see, fall
     // back to a tab this role CAN see. Sep 10: dispatchers can't see
     // 'live' either, so pick the first allowed tab (Members) for them.
-    if (canSeeTab(user?.role, tabPerm(wanted))) return wanted;
+    if (canSeeTab(user?.role, tabPerm(wanted)) && !dispatcherHiddenTab(user?.role, wanted)) return wanted; // Oct 22 client
     if (canSeeTab(user?.role, 'live')) return 'live';
     return 'volunteers';
   });
   // Issue #17 Aug 10: hide fully-covered pickups from the default Live Board;
   // dispatcher can toggle "Show covered" to reveal them.
-  const [showCoveredOnLive, setShowCoveredOnLive] = useState(false);
+  // Oct 22 client (neater Live Board): finished pickups fold into one summary line at the top (no "Hide finished").
   const [pickerFor, setPickerFor] = useState<PiRow | null>(null);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
   const [editingPickup, setEditingPickup] = useState<PiRow | null>(null);
@@ -223,7 +251,8 @@ export function CoordinatorPortal() {
   const [recurringEditFor, setRecurringEditFor] = useState<PiRow | null>(null);
   const [steadyEdit, setSteadyEdit] = useState<{ row: any; applyFrom: string | null } | null>(null);
   const steadyTemplates = useQuery({ queryKey: ['admin-steady'], queryFn: adminCRUD.steady, enabled: recurringEditFor != null });
-  const editPickup = (p: PiRow) => (p.steady_pickup_id != null ? setRecurringEditFor(p) : setEditingPickup(p));
+  // Oct 21 client: dispatchers edit just this one pickup (changing the steady schedule is office-only).
+  const editPickup = (p: PiRow) => (p.steady_pickup_id != null && canOfficeOnly(user?.role) ? setRecurringEditFor(p) : setEditingPickup(p));
   // C1 Aug 13 — click a pickup row/card → open detail as a modal in place
   // rather than navigating to /admin/pickup/:id. Preserves scroll + context.
   const [modalPickupId, setModalPickupId] = useState<number | null>(null);
@@ -246,11 +275,50 @@ export function CoordinatorPortal() {
       const id = Number((e as CustomEvent).detail?.id);
       if (!Number.isInteger(id) || id <= 0) return;
       e.preventDefault();
-      openVolunteerOnTab('alerts'); setModalPickupId(null); setTab('volunteers' as TabKey); setOpenPersonId(id);
+      openVolunteerOnTab((e as CustomEvent).detail?.tab === 'overview' ? 'overview' : 'alerts'); setModalPickupId(null); setTab('volunteers' as TabKey); setOpenPersonId(id); // Oct 20 client: + overview (caller pop-up)
     };
     window.addEventListener('zlz:open-volunteer', h);
     return () => window.removeEventListener('zlz:open-volunteer', h);
   }, []);
+  // Oct 16 client: the weekly check-up / speed bell alerts open Reports → Check-up.
+  useEffect(() => {
+    const h = () => { setModalPickupId(null); setTab('checkup' as TabKey); };
+    window.addEventListener('zlz:open-checkup', h);
+    return () => window.removeEventListener('zlz:open-checkup', h);
+  }, []);
+  // Oct 21 client: the daily / weekly numbers bell alert opens Reports → Numbers.
+  useEffect(() => {
+    const h = () => { setModalPickupId(null); setTab('numbers' as TabKey); };
+    window.addEventListener('zlz:open-numbers', h);
+    return () => window.removeEventListener('zlz:open-numbers', h);
+  }, []);
+  // Oct 30 client: the 5 PM "food not handled" bell alert opens Food to handle.
+  useEffect(() => {
+    const h = () => { setModalPickupId(null); setTab('food-handle' as TabKey); };
+    window.addEventListener('zlz:open-food-handle', h);
+    return () => window.removeEventListener('zlz:open-food-handle', h);
+  }, []);
+  // Oct 20 client: office phone pop-up / missed-call alert buttons — open a store, a pickup, or add the caller.
+  useEffect(() => {
+    const idOf = (e: Event) => { const id = Number((e as CustomEvent).detail?.id); return Number.isInteger(id) && id > 0 ? id : null; };
+    const store = (e: Event) => { const id = idOf(e); if (id && !isDispatcherLogin()) { setModalPickupId(null); setTab('suppliers' as TabKey); setOpenPersonId(id); } }; // Oct 22 client: not for dispatchers
+    const pickup = (e: Event) => { const id = idOf(e); if (id) setModalPickupId(id); };
+    const addDriver = () => { setModalPickupId(null); setTab('volunteers' as TabKey); };
+    const addStore = () => { if (isDispatcherLogin()) return; setModalPickupId(null); setShowNewSupplierStandalone(true); }; // Oct 22 client: not for dispatchers
+    window.addEventListener('zlz:open-store', store);
+    window.addEventListener('zlz:open-pickup', pickup);
+    window.addEventListener('zlz:add-driver', addDriver);
+    window.addEventListener('zlz:add-store', addStore);
+    return () => {
+      window.removeEventListener('zlz:open-store', store);
+      window.removeEventListener('zlz:open-pickup', pickup);
+      window.removeEventListener('zlz:add-driver', addDriver);
+      window.removeEventListener('zlz:add-store', addStore);
+    };
+  }, []);
+  // Oct 16 client: speed watch — time each screen; one that takes over 3 s to show is reported (speed-report.ts).
+  useEffect(() => { startScreenTimer(TAB_TITLE[tab] ?? tab); }, [tab]);
+  useEffect(() => { if (modalPickupId != null) startScreenTimer('Pickup page'); }, [modalPickupId]);
   // batch abc820 · Pickups tab tabstrip (Needs attention / Upcoming /
   // Completed / History) replaces the old office-status chip filter + date
   // focus. Sub-tab lives here so it survives while the user scrolls entities
@@ -284,7 +352,8 @@ export function CoordinatorPortal() {
     const n = readCoordNav();
     if (n.tab === 'calendar') return 'calendar';
     if (n.tab === 'steady') return 'recurring';
-    const valid: PickupsSubTab[] = ['today', 'list', 'calendar', 'history', 'recurring', 'attention'];
+    const valid: PickupsSubTab[] = ['today', 'calendar', 'history', 'recurring', 'attention', 'closeout'];
+    if (n.tab === 'pickups' && n.sub === 'list') return 'history'; // Oct 21 client: the List tab is gone — old links open History
     return (n.tab === 'pickups' && valid.includes(n.sub as PickupsSubTab))
       ? (n.sub as PickupsSubTab) : 'today';
   });
@@ -299,6 +368,12 @@ export function CoordinatorPortal() {
   }, [tab]);
   // Oct 2 client: each page's search is its own — clear it on leaving.
   useEffect(() => { setPickupSearch(''); setLiveFocus(null); }, [tab, pickupsSubTab]);
+  // Oct 21 client: the 9 PM close-out reminder (bell) opens Pickups → Close out.
+  useEffect(() => {
+    const h = () => { setTab('pickups'); setPickupsSubTab('closeout'); };
+    window.addEventListener('zlz:open-closeout', h);
+    return () => window.removeEventListener('zlz:open-closeout', h);
+  }, []);
 
   // Keep the URL hash in step with the active section + Pickups sub-tab. The
   // full-write only happens when the SECTION changes (clears deeper levels a
@@ -340,7 +415,17 @@ export function CoordinatorPortal() {
   // Was the whole 90 days (~1.2 MB). History / List have their own range fetch.
   const pickups = useQuery({
     queryKey: ['admin-pickups', today],
-    queryFn:  () => api<{ data: PiRow[] }>(`/api/pickup-instances?from=${fromDate}&to=${inAMonth}&openSince=${shiftDay(today, -1)}`),
+    // Oct 22 client: speed — never wait forever. A request that gets no answer in 30 s is
+    // stopped and tried once more; then the board says "Couldn't load" with Try again
+    // (it used to sit on "Loading…" with no end).
+    queryFn:  ({ signal }) => {
+      const ctl = new AbortController();
+      const stop = () => ctl.abort();
+      signal?.addEventListener('abort', stop);
+      const t = setTimeout(stop, 30_000);
+      return api<{ data: PiRow[] }>(`/api/pickup-instances?from=${fromDate}&to=${inAMonth}&openSince=${shiftDay(today, -1)}`, { signal: ctl.signal })
+        .finally(() => { clearTimeout(t); signal?.removeEventListener('abort', stop); });
+    },
     // abc881 (Aug 19): admin was seeing claimed pickups still bucketed under
     // "Looking for a driver" because the query only refreshed on manual
     // reload. Poll every 30s so an SMS-claim / app-claim from another surface
@@ -378,12 +463,59 @@ export function CoordinatorPortal() {
     let cancelled = false;
     let backoff = 1000;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    // Oct 16 client: speed — a burst of changes (e.g. one text to many drivers)
+    // sent one event each, and every event restarted the whole Live Board fetch.
+    // The first event still refreshes at once; more events within 1.5 s are
+    // folded into one refresh at the end of that window.
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastRefreshAt = 0;
+    const refreshPickups = () => {
+      if (refreshTimer) return;
+      const wait = Math.max(0, lastRefreshAt + 1500 - Date.now());
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null;
+        lastRefreshAt = Date.now();
+        qc.invalidateQueries({ queryKey: ['admin-pickups'] });
+      }, wait);
+    };
     // Tier-2 fix #9: the dot used to flip grey on the first error event and
     // strobe every time EventSource wobbled — even though its own reconnect
     // was still winning. Only flip grey after N consecutive failures so
     // normal transient noise (a single reconnect blip) stays green.
     const ERROR_STREAK_TO_GREY = 3;
     let errorStreak = 0;
+
+    // Oct 22 client: speed — ONE live stream per browser, not one per tab. The live site
+    // talks HTTP/1.1, where a browser opens at most 6 connections to it, and every open
+    // office tab kept one of them busy forever with its stream. With 6 tabs/windows open,
+    // every other request (in any tab) waited for a free connection, so the Live Board
+    // sat on "Loading…". Now one tab holds the stream (Web Locks) and passes each event
+    // to the other tabs (BroadcastChannel); when that tab closes, another takes over.
+    // Old browsers without these keep the old way (a stream per tab).
+    const bc: BroadcastChannel | null = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('zlz-live-stream') : null;
+    const locks: any = typeof navigator !== 'undefined' ? (navigator as any).locks : null;
+    const shared = !!bc && !!locks?.request;
+    const lockAbort = new AbortController();
+    let releaseLock: (() => void) | null = null;
+    const onLive = (type: string, data?: string) => {
+      if (type === 'open') { errorStreak = 0; setLiveOpen(true); }
+      else if (type === 'down') setLiveOpen(false);
+      else if (type === 'pickup-changed') {
+        // Any real event = the wire is warm. Reset the failure streak so a
+        // burst of activity doesn't leave stale error credit lying around.
+        errorStreak = 0;
+        setLiveOpen(true);
+        refreshPickups(); // Oct 16 client: was an immediate refetch per event
+      } else if (type === 'office-call' && data) {
+        // Oct 20 client: office phone — someone is calling → the caller pop-up (office-phone.tsx).
+        try { window.dispatchEvent(new CustomEvent('zlz:office-call', { detail: JSON.parse(data) })); } catch { /* bad event */ }
+      }
+    };
+    // This tab's stream: act on the event here and pass it to the other tabs.
+    const relay = (type: string, data?: string) => {
+      onLive(type, data);
+      if (shared) { try { bc!.postMessage({ type, data }); } catch { /* channel closed */ } }
+    };
 
     const connect = async () => {
       if (cancelled) return;
@@ -393,19 +525,13 @@ export function CoordinatorPortal() {
         if (cancelled) { es.close(); es = null; return; }
         es.addEventListener('open', () => {
           backoff = 1000;
-          errorStreak = 0;
-          setLiveOpen(true);
+          relay('open');
         });
-        es.addEventListener('pickup-changed', () => {
-          // Any real event = the wire is warm. Reset the failure streak so a
-          // burst of activity doesn't leave stale error credit lying around.
-          errorStreak = 0;
-          setLiveOpen(true);
-          qc.invalidateQueries({ queryKey: ['admin-pickups'] });
-        });
+        es.addEventListener('pickup-changed', () => relay('pickup-changed'));
+        es.addEventListener('office-call', (ev) => relay('office-call', String((ev as MessageEvent).data ?? '')));
         es.addEventListener('error', () => {
           errorStreak++;
-          if (errorStreak >= ERROR_STREAK_TO_GREY) setLiveOpen(false);
+          if (errorStreak >= ERROR_STREAK_TO_GREY) relay('down');
           // EventSource will try its own reconnect first — only escalate to a
           // manual re-open if the socket has closed permanently.
           if (es && es.readyState === EventSource.CLOSED) {
@@ -418,18 +544,39 @@ export function CoordinatorPortal() {
         });
       } catch {
         errorStreak++;
-        if (errorStreak >= ERROR_STREAK_TO_GREY) setLiveOpen(false);
+        if (errorStreak >= ERROR_STREAK_TO_GREY) relay('down');
         const delay = backoff;
         backoff = Math.min(backoff * 2, 30_000);
         retryTimer = setTimeout(connect, delay);
       }
     };
-    void connect();
+    if (shared) {
+      // Events from the tab that holds the stream; a new tab asks for the dot's state.
+      bc!.onmessage = (ev: MessageEvent) => {
+        const m = ev.data as { type?: string; data?: string } | null;
+        if (!m?.type) return;
+        if (m.type === 'hello') { if (es && es.readyState === EventSource.OPEN) { try { bc!.postMessage({ type: 'open' }); } catch { /* closed */ } } return; }
+        onLive(m.type, m.data);
+      };
+      try { bc!.postMessage({ type: 'hello' }); } catch { /* closed */ }
+      // The lock is held while this tab is open; a closed tab frees it for the next one.
+      Promise.resolve(locks.request('zlz-live-stream', { signal: lockAbort.signal }, () => {
+        if (cancelled) return undefined;
+        void connect();
+        return new Promise<void>((res) => { releaseLock = res; });
+      })).catch(() => { /* aborted on unmount */ });
+    } else {
+      void connect();
+    }
 
     return () => {
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
+      if (refreshTimer) clearTimeout(refreshTimer); // Oct 16 client
       if (es) { try { es.close(); } catch { /* ignore */ } }
+      lockAbort.abort();
+      if (releaseLock) (releaseLock as () => void)();
+      if (bc) { try { bc.close(); } catch { /* ignore */ } }
       setLiveOpen(false);
     };
     // qc + user role are stable for the tab's lifetime.
@@ -506,6 +653,7 @@ export function CoordinatorPortal() {
       // land here so the office can confirm them one by one.
       // Oct 9 client: never test pickups (same as the Live Board).
       if (p.is_test) return false;
+      if ((p as any).dropOffOnly) return false; // Oct 22 client: a drop-off steady day never needs attention / a driver
       if (officeStatusOf(p) === 'review') return true;
       const status = String(p.status || '').toLowerCase();
       if (DONE_STATUSES.includes(status)) return false;
@@ -559,26 +707,34 @@ export function CoordinatorPortal() {
     return allPickups
       // Oct 13 client: a reposted pickup still open shows under Today too (first).
       .filter((p) => (String(p.scheduled_date).slice(0, 10) === t || showsUnderToday(p)) && !p.is_test)
+      .filter((p) => !scheduleOnlyCancel(p)) // Oct 27 client: not real cancellations (still in History)
       .sort((a, b) => (showsUnderToday(a) ? '' : String(a.scheduled_time)).localeCompare(showsUnderToday(b) ? '' : String(b.scheduled_time)));
   }, [allPickups]);
 
+  // Oct 21 client (Cleaner Live Board): the WHOLE day (earlier finished / cancelled ones too, shown grey),
+  // + still-open pickups from an earlier day that have no driver (they stay until someone resolves them).
+  const liveDayPickups = useMemo(() => {
+    const t = nyToday();
+    return allPickups.filter((p) => {
+      if (p.is_test) return false;
+      const day = String(p.scheduled_date).slice(0, 10);
+      if (day === t || showsUnderToday(p)) return true;
+      if (day > t) return false;
+      const status = String(p.status || '').toLowerCase();
+      if (DONE_STATUSES.includes(status) || status === 'picked_up' || (p as any).cancelled_at) return false;
+      if ((p as any).confirmation_state === 'pending') return false;
+      return liveNeedOf(p) > 0;
+    });
+  }, [allPickups]);
   const feedPickups = useMemo(() => {
-    if (tab === 'live') {
-      if (showCoveredOnLive) return livePickups;
-      return livePickups.filter((p) => {
-        const need = Number((p as any).slots_capacity ?? 1) || 1;
-        // Oct 2 client fix: released (driver-cancelled) signups no longer
-        // count as filled, so a reopened slot shows back up on the board.
-        const filled = ((p as any).signups ?? []).filter((s: any) => !s.released_at).length;
-        return filled < need;
-      });
-    }
+    // Oct 21 client (Cleaner Live Board): the whole day; colors + the 3-hour confirmation rule in LiveBoardList.
+    if (tab === 'live') return liveDayPickups;
     if (tab !== 'pickups') return allPickups;
     if (pickupsSubTab === 'attention') return attentionList;
     if (pickupsSubTab === 'today') return todayList;
     // list / history / calendar / recurring render their own panels.
     return [];
-  }, [tab, livePickups, allPickups, showCoveredOnLive, pickupsSubTab, attentionList, todayList]);
+  }, [tab, liveDayPickups, allPickups, pickupsSubTab, attentionList, todayList]);
 
   // Counts derive from the SAME arrays the feed uses — count and list can no
   // longer disagree.
@@ -627,6 +783,7 @@ export function CoordinatorPortal() {
     // "Waiting" chip — office was seeing a red count for rows that are hidden
     // from every driver-facing surface.
     if (p.is_test) return false;
+    if ((p as any).dropOffOnly) return false; // Oct 22 client: drop-off steady days never wait for a driver
     const activeSignups = ((p as any).signups ?? [])
       .filter((s: any) => !s.released_at).length;
     if (activeSignups > 0) return false;
@@ -783,26 +940,10 @@ export function CoordinatorPortal() {
             </div>
             {tab === 'live' && (
               <div className="flex flex-wrap items-center gap-2">
-                {/* Oct 9 client: small "Waiting N" chip — jumps to Pickups → Needs attention
-                    (same list, so the number always matches). */}
-                {pickupsSubCounts.attention > 0 && (
-                  <button onClick={() => { setTab('pickups'); setPickupsSubTab('attention'); }}
-                          title="Past their time and still no driver — open Needs attention"
-                          className="haptic inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-clay/40 bg-clay-soft px-3 py-1 text-[12.5px] font-bold text-clay hover:brightness-95">
-                    Waiting {pickupsSubCounts.attention}
-                  </button>
-                )}
-                {/* Oct 5 client: one line each, plain words; covered = a real switch. */}
-                {/* Oct 5 client: overdue / need-a-driver count buttons removed ("Remove"). */}
-                <label className="inline-flex items-center gap-2 whitespace-nowrap cursor-pointer select-none text-[12.5px] font-semibold text-muted px-1">
-                  <span role="switch" aria-checked={showCoveredOnLive} tabIndex={0}
-                        onClick={() => setShowCoveredOnLive((v) => !v)}
-                        onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); setShowCoveredOnLive((v) => !v); } }}
-                        className={cx('relative inline-block h-5 w-9 rounded-full transition', showCoveredOnLive ? 'bg-forest' : 'bg-line')}>
-                    <span className={cx('absolute top-0.5 h-4 w-4 rounded-full bg-paper shadow transition-all', showCoveredOnLive ? 'left-[18px]' : 'left-0.5')} />
-                  </span>
-                  <span onClick={() => setShowCoveredOnLive((v) => !v)}>Show covered pickups</span>
-                </label>
+                {/* Oct 21 client (Cleaner Live Board): no count chips ("Waiting 2" …) — the card colors say it.
+                    Oct 22 client: finished pickups fold into one line at the top of the list (no "Hide finished"). */}
+                {/* Oct 21 client: was the "On call now" card on the page. */}
+                <OnCallNowButton onOpenPerson={(id) => { setTab('volunteers' as TabKey); setOpenPersonId(id); }} />
               </div>
             )}
           </div>
@@ -817,12 +958,14 @@ export function CoordinatorPortal() {
             )}
             {/* Oct 5 client: "Remove" — Go on duty button taken out of the header. */}
             {false && <DutyToggle />}
+            <DriverViewSwitch />{/* Oct 29 client: one login per person - only shows for a login that also drives */}
             {/* Oct 11 client: dispatcher alerts — bell, pop-ups with sound, phone alerts. */}
             <OfficeAlertsBell onOpenPickup={(id) => setModalPickupId(id)} onOpenMessages={() => openDriverMessages('texts')} />
+            <OfficePhone />{/* Oct 20 client: office phone — caller pop-ups (bottom-right) + desk-phone calling */}
             {/* Oct 14 client: Help (?) — welcome tour, guide, Report a problem */}
             <HelpMenu tabs={visibleGroups.flatMap((g) => g.tabs)} writeOk={writeOk}
                       pageLabel={`${TAB_TITLE[tab] ?? tab}${tab === 'pickups' ? ` (${pickupsSubTab})` : tab === 'driver-messages' ? ` (${dmSub})` : ''}`}
-                      onOpenTab={(t, s) => { setTab(t as TabKey); if (t === 'pickups' && s) setPickupsSubTab(s as PickupsSubTab); if (t === 'driver-messages' && s) setDmSub(s as DmSub); }} />
+                      onOpenTab={(t, s) => { setTab(t as TabKey); if (t === 'pickups' && s) setPickupsSubTab((s === 'list' ? 'history' : s) as PickupsSubTab); if (t === 'driver-messages' && s) setDmSub(s as DmSub); }} />
             <DisplayToggles />
             <span className="text-[12.5px] text-muted whitespace-nowrap">{user?.firstName} {user?.lastName}</span>
             {!writeOk && <span className="text-[10.5px] font-extrabold uppercase tracking-[.06em] text-muted bg-line/70 px-2 py-0.5 rounded-full" title="Your role is view-only">Read-only</span>}
@@ -879,18 +1022,31 @@ export function CoordinatorPortal() {
                     {t === 'chat-stores' && <UnreadBadge kind="stores" />}
                     {t === 'chat-volunteers' && <UnreadBadge kind="volunteers" />}
                     {t === 'signups' && <SignupsBadge />}
+                    {t === 'bug-reports' && <BugReportsBadge />}{/* Oct 16 client */}
                   </button>
                 ))}
               </div>
             )}
+            {/* Oct 22 client: "taken, no kiosk sign-in" back at the TOP of the Live Board, as before the redesign —
+                a compact strip that stays on top while the list scrolls ("🏷️ 3 taken, no kiosk sign-in"; tap = the list
+                with Mark done / Mark missed / 💬 Ask driver: dropped off?). */}
+            {tab === 'live' && <NotCheckedInSection strip />}
             {tab === 'live' && <PickupSearchBar value={pickupSearch} onChange={setPickupSearch} />}
-            {/* Oct 5 client (declutter #3): on duty + what needs you, one short line. */}
+            {/* Oct 5 client (declutter #3): on duty, one short line. Oct 21 client (Cleaner Live Board): the count
+                words ("2 overdue, need a driver", "1 to confirm" …) are gone — the card colors say it; + when the
+                pickup texts go out, and a tiny color legend. */}
             {tab === 'live' && (
-              <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[13px]">
+              <div className="mb-1 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[13px]">
                 <OnDutyNow />
-                {!liveFocus && <OnDutyBanner setTab={setTab} onFocus={setLiveFocus} />}
+                <LiveTextsLine />
+                <span className="text-[12px] text-muted" data-testid="live-legend">🟢 covered · 🔴 needs attention · 🟠 confirm today</span>
               </div>
             )}
+            {/* Oct 22 client (neater): "Usually ~1 driver out now · busiest 10 PM" — one short muted line, no box. */}
+            {tab === 'live' && !liveFocus && (
+              <UsuallyActiveNow onOpenPerson={(id) => { setTab('volunteers' as TabKey); setOpenPersonId(id); }} />
+            )}
+            {tab === 'live' && liveFocus && <div className="mb-3" />}
             {tab === 'live' && liveFocus && (
               <div className="mb-4 rounded-[14px] border border-forest/30 bg-sage/50 px-4 py-3 flex flex-wrap items-center gap-3">
                 <span className="flex-1 text-[14px] text-ink">
@@ -900,15 +1056,11 @@ export function CoordinatorPortal() {
                         className="haptic rounded-[10px] bg-forest px-3 py-1.5 text-[12.5px] font-bold text-paper">Show everything</button>
               </div>
             )}
-            {tab === 'live' && <div id="needs-confirmation-anchor"><NeedsConfirmationSection /></div>}
+            {/* Oct 21 client (Cleaner Live Board): no Needs confirmation box — those pickups are orange cards in the list (Confirm / Decline on the card). */}
             {/* Oct 5 client: expired with no driver — a person decides (food still there?). */}
             {tab === 'live' && <ExpiredReviewSection />}
-            {tab === 'live' && <NotCheckedInSection />}
-            {/* Oct 8 client: drivers happy to be called right now. */}
-            {tab === 'live' && !liveFocus && <OnCallNowCard onOpenPerson={(id) => { setTab('volunteers' as TabKey); setOpenPersonId(id); }} />}
-            {tab === 'live' && !liveFocus && (
-              <UsuallyActiveNow onOpenPerson={(id) => { setTab('volunteers' as TabKey); setOpenPersonId(id); }} />
-            )}
+            {/* Oct 8 client: drivers happy to be called right now. Oct 21 client: now the 📞 button in the header.
+                Oct 22 client: the "usually … at this hour" line moved up under the header. */}
             {tab === 'calendar' ? (
               <CalendarPanel onOpenScheduleDownload={() => setShowScheduleDownload(true)}
                              onNavigateTab={(t, id) => { setTab(t as TabKey); if (id != null) setOpenPersonId(id); }}
@@ -949,10 +1101,20 @@ export function CoordinatorPortal() {
               <div className="space-y-3"><SmsPauseBanner /><JewishCalendarPanel /></div>
             ) : tab === 'tasks' ? (
               <TasksPanel />
+            ) : tab === 'bug-reports' ? (
+              <ProblemReportsList embedded />
             ) : tab === 'recruiting' ? (
               <RecruitingPanel />
             ) : tab === 'coverage' ? (
               <CoveragePanel />
+            ) : tab === 'numbers' ? (
+              <NumbersPage /> // Oct 21 client: Reports → Numbers
+            ) : tab === 'food-handle' ? (
+              <FoodHandlePanel /> // Oct 30 client: Food to handle
+            ) : tab === 'checkup' ? (
+              <CheckupPage onOpenDriver={(id) => { setTab('volunteers'); setOpenPersonId(id); }}
+                           onOpenStore={(id) => { setTab('suppliers'); setOpenPersonId(id); }}
+                           onOpenReports={() => setTab('bug-reports')} /> // Oct 16 client: weekly check-up + speed
             ) : tab === 'reports' ? (
               <Suspense fallback={<div className="text-[13px] text-muted">Loading…</div>}>
                 <ReportsPanel onNavigateTab={(t) => setTab(t as TabKey)} />
@@ -978,6 +1140,11 @@ export function CoordinatorPortal() {
               <ProspectsPanel />
             ) : pickups.isLoading ? (
               <div className="text-[13px] text-muted">Loading…</div>
+            ) : pickups.isError && !pickups.data ? (
+              // Oct 22 client: speed — a failed / stuck load says so (was an empty board or endless "Loading…").
+              <div className="rounded-[14px] border border-line bg-paper px-4 py-3 text-[13px] text-muted">
+                Couldn't load the pickups. <button onClick={() => pickups.refetch()} className="haptic underline font-bold">Try again</button>
+              </div>
             ) : tab === 'pickups' ? (
               // ── Pickups tab: always-visible sub-tabstrip. Empty state per
               //    sub-tab renders as a small quiet card so the tabs stay
@@ -991,7 +1158,9 @@ export function CoordinatorPortal() {
                                  onOpenPickup={(id) => setModalPickupId(id)} />
                 ) : pickupsSubTab === 'recurring' ? (
                   <SteadyPickupsPanel />
-                ) : pickupsSubTab === 'list' || pickupsSubTab === 'history' ? (
+                ) : pickupsSubTab === 'closeout' ? (
+                  <CloseOutPanel onOpenPickup={(id) => setModalPickupId(id)} /> // Oct 21 client
+                ) : pickupsSubTab === 'history' ? ( // Oct 21 client: List tab removed
                   <PickupsRangeView key={pickupsSubTab} mode={pickupsSubTab} search={pickupSearch}
                                     onOpen={(id) => setModalPickupId(id)}
                                     onAssign={writeOk ? (p) => setPickerFor(p) : undefined}
@@ -1023,6 +1192,13 @@ export function CoordinatorPortal() {
                   ))
                 )}
               </>
+            ) : tab === 'live' ? (
+              // Oct 21 client (Cleaner Live Board): the whole day on one page, colored, scrolled to now.
+              <LiveBoardList rows={searchedFeed} searching={!!pickupSearch.trim()}
+                             onAssign={writeOk ? (p) => setPickerFor(p) : undefined}
+                             onOpen={(id) => setModalPickupId(id)}
+                             onEdit={writeOk ? (p) => editPickup(p) : undefined}
+                             onAdd={writeOk ? () => setShowQuickAdd(true) : undefined} />
             ) : groups.length === 0 ? (
               <div className="text-center py-16">
                 <div className="mx-auto h-16 w-16 rounded-2xl bg-sage grid place-items-center mb-4">
@@ -1045,27 +1221,6 @@ export function CoordinatorPortal() {
               </div>
             ) : (
               <>
-                {tab === 'live' && (
-                  <div id="live-pickups-feed" className="text-[13.5px] font-bold text-ink mb-3 scroll-mt-4">
-                    {/* Tier-2 fix #7: N was livePickups (pre-coverage filter),
-                        M was allPickups (whole 60-day+30-day range, unrelated
-                        to "rest of today"). Now: N = actually-shown feed rows,
-                        M = all rest-of-today active pickups. So "3 of 6" reads
-                        as "3 shown, 6 exist in scope" (the other 3 are covered
-                        and hidden by default). */}
-                    {showCoveredOnLive
-                      ? `All ${livePickups.length} ${livePickups.length === 1 ? 'pickup' : 'pickups'} left today`
-                      : (() => {
-                          // Oct 5 client: friendly greeting with today's count.
-                          const h = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hourCycle: 'h23' }).format(new Date()));
-                          const hi = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
-                          const who = String((user as any)?.firstName ?? '').trim();
-                          const n = feedPickups.length;
-                          return `${hi}${who ? `, ${who}` : ''} — ${n} ${n === 1 ? 'pickup still needs' : 'pickups still need'} a driver today`
-                            + (livePickups.length > n ? ` · ${livePickups.length - n} covered` : '');
-                        })()}
-                  </div>
-                )}
                 {groups.map((g) => (
                   <section key={g.key} className={cx('mb-5', (g as any).overdue && 'p-3 rounded-[14px] bg-amber/5 border border-amber/40')}>
                     <div className={cx('text-[11px] font-extrabold uppercase tracking-[.05em] mb-2.5',
@@ -1236,7 +1391,7 @@ export function PickupSmsModal({ pickup, volunteers, onClose }: {
         <div className="px-5 py-3 border-b border-line">
           <div className="font-display font-semibold text-[18px]">Text pickup to drivers</div>
           <div className="text-[12px] text-muted mt-0.5">
-            {pickup.suppliers || pickup.contact_name || 'Pickup'} · {fmtDay(String(pickup.scheduled_date).slice(0, 10))} · {fmtTime(pickup.scheduled_time?.slice(0, 5) ?? '')}
+            <Name>{pickupPlace(pickup as any) ?? 'Pickup'}</Name> · {whenText(String(pickup.scheduled_date).slice(0, 10), pickup.scheduled_time)}
           </div>
         </div>
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter drivers by name, area, phone…"
@@ -1251,10 +1406,9 @@ export function PickupSmsModal({ pickup, volunteers, onClose }: {
                 <input type="checkbox" checked={on} readOnly className="h-4 w-4 accent-forest" />
                 <div className="flex-1 min-w-0">
                   <div className="font-bold text-[13.5px] truncate">
-                    {v.firstName} {v.lastName}
-                    {(v as any).unitNumber != null && <span className="ml-1.5 text-muted font-semibold text-[11.5px]">#{(v as any).unitNumber}</span>}
+                    <Name first={v.firstName} last={v.lastName} />
                   </div>
-                  <div className="text-[11.5px] text-muted truncate">{v.phonePrimary ?? '—'} · {v.locationArea ?? 'no area'}</div>
+                  <div className="text-[11.5px] text-muted truncate">{v.phonePrimary ? displayPhone(v.phonePrimary) : '—'} · {v.locationArea ?? 'no area'}</div>
                 </div>
               </button>
             );
@@ -1285,10 +1439,29 @@ export function PickupSmsModal({ pickup, volunteers, onClose }: {
   );
 }
 
-export function DriverPickerModal({ pickup, volunteers, onClose, onChanged }: {
+export function DriverPickerModal({ pickup, volunteers, onClose, onChanged, closed }: {
   pickup: PiRow; volunteers: any[]; onClose: () => void; onChanged: () => void;
+  /** Oct 28 client: a closed pickup (completed / done no kiosk / missed / expired) — pick who did it. */
+  closed?: boolean;
 }) {
   const qc = useQueryClient();
+  // Oct 28 client (Yakov): on a closed pickup the pick records who did it — he gets the credit, the one
+  // before loses it, a missed / expired one becomes done, and NO texts go out (server closed-driver.ts).
+  const closedMode = closed ?? ['completed', 'delivered', 'missed'].includes(String((pickup as any).status ?? '').toLowerCase());
+  const [keepOthers, setKeepOthers] = useState(false);
+  const closedMut = useMutation({
+    mutationFn: (a: { vid: number }) => api<any>(`/api/pickup-instances/${pickup.id}/closed-driver`,
+      { method: 'POST', body: JSON.stringify({ volunteerId: a.vid, keepOthers }) }),
+    onMutate: () => setErr(null),
+    onSuccess: (r: any) => {
+      qc.invalidateQueries({ queryKey: ['admin-pickups'] });
+      onChanged();
+      const d = r?.data ?? {};
+      uiNotify(`${d.shortName || 'The driver'} is set as the driver${d.madeDone ? ' and the pickup is now done' : ''}. No texts were sent.`, 'ok');
+      onClose();
+    },
+    onError: (e: any) => setErr(`Couldn't set the driver — ${e?.body?.message || e?.message || 'please try again'}`),
+  });
   const [q, setQ] = useState('');
   const [pending, setPending] = useState<{ v: any; taken?: string[] } | null>(null); // confirmation target
   // Oct 9 client: say so when a change didn't save (was silent).
@@ -1384,6 +1557,19 @@ export function DriverPickerModal({ pickup, volunteers, onClose, onChanged }: {
 
   const slotsNeeded = pickup.slots_capacity ?? 1;
   function handlePick(v: any) {
+    if (closedMode) { // Oct 28 client
+      const nm = `${v.firstName ?? ''} ${v.lastName ?? ''}`.trim() || 'this driver';
+      const others = current.filter((s: any) => Number(s.volunteer_id) !== Number(v.id))
+        .map((s: any) => `${s.first_name ?? ''} ${s.last_name ?? ''}`.trim());
+      const isMissed = String((pickup as any).status ?? '').toLowerCase() === 'missed';
+      void uiConfirm([
+        `Set ${nm} as the driver who did this pickup?`,
+        others.length && !keepOthers ? `${others.join(', ')} comes off it and loses the credit.` : '',
+        isMissed ? 'The pickup becomes Done (added by the office).' : '',
+        'No texts are sent.',
+      ].filter(Boolean).join('\n\n')).then((ok) => { if (ok) closedMut.mutate({ vid: Number(v.id) }); });
+      return;
+    }
     if (currentIds.has(v.id)) return;             // already on it
     // No confirm while we're still under the planned driver count — that's
     // exactly what was scheduled. Confirm only when going BEYOND the plan
@@ -1430,10 +1616,23 @@ export function DriverPickerModal({ pickup, volunteers, onClose, onChanged }: {
       <div onClick={(e) => e.stopPropagation()}
            className="relative z-[2001] bg-paper rounded-[18px] shadow-lift border border-line w-full max-w-md max-h-[85vh] overflow-hidden flex flex-col">
         <div className="px-5 py-3 border-b border-line">
-          <div className="font-display font-semibold text-[18px]">Drivers on this pickup</div>
+          <div className="font-display font-semibold text-[18px]">{closedMode ? 'Who did this pickup?' : 'Drivers on this pickup'}</div>
           <div className="text-[12px] text-muted mt-0.5">
-            {pickup.suppliers || 'Pickup'} · {fmtDay(String(pickup.scheduled_date).slice(0, 10))} · {fmtTime(pickup.scheduled_time?.slice(0, 5) ?? '')}
+            <Name>{pickupPlace(pickup as any) ?? 'Pickup'}</Name> · {whenText(String(pickup.scheduled_date).slice(0, 10), pickup.scheduled_time)}
           </div>
+          {closedMode && (
+            <div data-testid="closed-driver-note" className="mt-2 rounded-[10px] bg-sage/50 border border-sage-line px-2.5 py-1.5 text-[12px] text-forest font-semibold">
+              This pickup is closed. Pick who did it: he gets the credit{current.length > 0 && !keepOthers ? ', the driver on it now loses it' : ''}.
+              {String((pickup as any).status ?? '').toLowerCase() === 'missed' && ' It becomes Done.'} No texts are sent.
+              {current.length > 0 && (
+                <label className="mt-1.5 flex items-center gap-2 font-semibold text-ink cursor-pointer select-none">
+                  <input type="checkbox" checked={keepOthers} onChange={(e) => setKeepOthers(e.target.checked)} className="h-4 w-4 accent-forest" />
+                  Keep the driver already on it too (both did it)
+                </label>
+              )}
+            </div>
+          )}
+          {!closedMode && (
           <div className="mt-2.5 flex items-center gap-2">
             <span className="text-[11.5px] font-bold text-muted">Drivers needed:</span>
             <div className="flex items-center gap-1.5 bg-cream/60 rounded-full border border-line px-1.5 py-0.5">
@@ -1450,13 +1649,14 @@ export function DriverPickerModal({ pickup, volunteers, onClose, onChanged }: {
             </div>
             {slotsMut.isPending && <span className="text-[11px] text-muted">saving…</span>}
           </div>
+          )}
         </div>
         {err && <div role="alert" className="px-4 py-2 border-b border-clay/30 bg-clay-soft text-[12.5px] font-bold text-clay">{err}</div>}
 
         {/* Currently assigned, with remove buttons */}
         {current.length > 0 && (
           <div className="px-4 py-3 border-b border-line bg-sage/30">
-            <div className="text-[10.5px] font-extrabold uppercase tracking-[.05em] text-forest mb-2">Currently assigned</div>
+            <div className="text-[10.5px] font-extrabold uppercase tracking-[.05em] text-forest mb-2">{closedMode ? 'On it now' : 'Currently assigned'}</div>
             <div className="space-y-1.5">
               {current.map((s: any) => {
                 const color = driverHue(`${s.first_name} ${s.last_name}`);
@@ -1467,15 +1667,14 @@ export function DriverPickerModal({ pickup, volunteers, onClose, onChanged }: {
                     </span>
                     <div className="flex-1 min-w-0">
                       <div className="font-bold text-[13px] truncate">
-                        {s.first_name} {s.last_name}
-                        {s.unit_number != null && <span className="ml-1.5 text-muted font-semibold text-[11px]">#{s.unit_number}</span>}
+                        <Name first={s.first_name} last={s.last_name} />
                       </div>
                       <div className="text-[10.5px] text-muted">{s.role === 'backup' ? 'Backup' : 'Primary'} · {s.assignment_status}</div>
                     </div>
-                    <button onClick={() => { void uiConfirm(`Remove ${s.first_name} ${s.last_name} from this pickup?\n\nThey get a text that they're off it, and if the pickup now needs a driver it is texted to drivers again as new.`).then((ok) => { if (ok) { removeMut.mutate(Number(s.volunteer_id)); } }); }}
+                    {!closedMode && <button onClick={() => { void uiConfirm(`Remove ${s.first_name} ${s.last_name} from this pickup?\n\nThey get a text that they're off it, and if the pickup now needs a driver it is texted to drivers again as new.`).then((ok) => { if (ok) { removeMut.mutate(Number(s.volunteer_id)); } }); }}
                             className="text-clay grid h-7 w-7 place-items-center rounded-full hover:bg-clay-soft haptic">
                       <X size={13} />
-                    </button>
+                    </button>}
                   </div>
                 );
               })}
@@ -1532,7 +1731,7 @@ export function DriverPickerModal({ pickup, volunteers, onClose, onChanged }: {
             const color = driverHue(`${v.firstName} ${v.lastName}`);
             const already = currentIds.has(v.id);
             return (
-              <button key={v.id} onClick={() => handlePick(v)} disabled={already || addMut.isPending}
+              <button key={v.id} onClick={() => handlePick(v)} disabled={(already && !(closedMode && !keepOthers && current.length > 1)) ||addMut.isPending || closedMut.isPending}
                       className={cx('w-full text-left px-4 py-3 border-b border-line last:border-b-0 haptic flex items-center gap-3',
                                     already ? 'bg-cream/60 cursor-not-allowed' : 'hover:bg-cream/40')}>
                 <span className="grid h-9 w-9 place-items-center rounded-full text-paper text-[11px] font-bold shrink-0" style={{ background: color }}>
@@ -1540,11 +1739,12 @@ export function DriverPickerModal({ pickup, volunteers, onClose, onChanged }: {
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="font-bold text-[13.5px] truncate">
-                    {v.firstName} {v.lastName}
+                    <Name first={v.firstName} last={v.lastName} />
+                    {/* the search box finds drivers by unit # (#93), so the number stays in this search list */}
                     {(v as any).unitNumber != null && <span className="ml-1.5 text-muted font-semibold text-[11.5px]">#{(v as any).unitNumber}</span>}
                   </div>
                   <div className="text-[11px] text-muted truncate">
-                    {[v.phonePrimary, v.locationArea].filter(Boolean).join(' · ')}
+                    {[v.phonePrimary ? displayPhone(v.phonePrimary) : null, v.locationArea].filter(Boolean).join(' · ')}
                   </div>
                   {/* Oct 9 client: why they're near the top. */}
                   <div className="mt-0.5 flex flex-wrap gap-1">
@@ -1567,7 +1767,8 @@ export function DriverPickerModal({ pickup, volunteers, onClose, onChanged }: {
         </div>
 
         <div className="px-4 py-2 border-t border-line bg-cream/40 text-[11.5px] text-muted">
-          Tip — adding more drivers than planned ({slotsNeeded}) requires confirmation.
+          {closedMode ? 'Closed pickup: picking a driver records who did it. No texts are sent.' /* Oct 28 client */
+            : <>Tip — adding more drivers than planned ({slotsNeeded}) requires confirmation.</>}
         </div>
       </div>
 
@@ -1579,13 +1780,13 @@ export function DriverPickerModal({ pickup, volunteers, onClose, onChanged }: {
                className="bg-paper rounded-[18px] shadow-lift border border-line w-full max-w-sm p-5">
             <div className="font-display font-semibold text-[18px]">Add an extra driver?</div>
             <p className="text-[13px] text-ink mt-2">
-              <span className="font-bold">{pickup.suppliers || 'This pickup'}</span> is set for{' '}
+              <span className="font-bold"><Name>{pickupPlace(pickup as any) ?? 'This pickup'}</Name></span> is set for{' '}
               <span className="font-bold">{slotsNeeded} driver{slotsNeeded === 1 ? '' : 's'}</span> and already has{' '}
               <span className="font-bold">
-                {pending.taken ? pending.taken.join(', ')
-                  : current.map((s: any) => `${s.first_name} ${s.last_name}${s.unit_number != null ? ` #${s.unit_number}` : ''}`).join(', ')}
+                <Name>{pending.taken ? pending.taken.map(stripUnit).join(', ')
+                  : current.map((s: any) => personFull(s.first_name, s.last_name)).join(', ')}</Name>
               </span>{' '}
-              assigned. Adding <span className="font-bold">{pending.v.firstName} {pending.v.lastName}</span> will mean{' '}
+              assigned. Adding <span className="font-bold"><Name first={pending.v.firstName} last={pending.v.lastName} /></span> will mean{' '}
               <span className="font-bold">{(pending.taken?.length ?? current.length) + 1} drivers</span> on this pickup — one more than planned.
             </p>
             <p className="text-[12px] text-muted mt-2">If you really need more drivers, bump "Drivers needed" first to plan it explicitly, or click below to add this one as an extra.</p>
@@ -1626,6 +1827,9 @@ const TAB_TITLE: Record<string, string> = {
   'change-password': 'Change password',
   recruiting: 'Recruiting',
   tasks: 'Tasks & follow-ups',
+  'bug-reports': 'Bug reports', // Oct 16 client
+  checkup: 'Check-up', // Oct 16 client
+  numbers: 'Numbers', // Oct 21 client
   'holiday-sms': 'Holiday & SMS Controls',
   'my-shift': 'My Shift',
   'sms-combo': 'SMS Composer & Broadcast',
@@ -1638,7 +1842,7 @@ const TAB_TITLE: Record<string, string> = {
 const TAB_SUB: Record<string, string> & { live: string } = {
   calendar: 'Unified schedule — pickups, dispatcher shifts, center help',
   get live() {
-    return new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }) + ' · rest of today';
+    return dayText(todayYmd()) + ' · the whole day'; // Oct 23 client: one date format // Oct 21 client: Cleaner Live Board (was "rest of today")
   },
   pickups: 'Today, upcoming and past pickups', volunteers: 'Roster & availability',
   suppliers: 'Donors & status', reports: 'Pickup counts & driver activity',
@@ -1665,10 +1869,41 @@ const TAB_SUB: Record<string, string> & { live: string } = {
   prospects: 'Potential stores · pipeline · convert to supplier',
 };
 
-function CoordMap({ rows, suppliers, showVolunteers, onOpen }: { rows: PiRow[]; suppliers: any[]; showVolunteers: boolean; onOpen: (id: number) => void }) {
+// Oct 30 client (Coverage map): text for map tooltips / cards (HTML strings → escape).
+function esc(s: unknown): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+}
+const plural = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
+/** The small card when a store square is tapped: name, address, area, next pickup, usual drivers. */
+function storeCardHtml(s: CoverageStore, c: 'red' | 'orange' | 'green' | undefined): string {
+  const next = nextPickupText(s.nextPickup);
+  const area = s.areaName
+    ? `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${COVER_HEX[c ?? 'none']};margin-right:4px"></span>${esc(s.areaName)}${c ? ` · ${esc(COVER_WORD[c])}` : ''}`
+    : 'Not in any area yet';
+  return `<div style="font-family:inherit;font-size:12.5px;line-height:1.4;min-width:180px">
+    <div style="font-weight:800;font-size:13.5px;margin-bottom:2px"><bdi dir="auto">${esc(s.name)}</bdi></div>
+    ${s.address ? `<div style="color:#6b6b6b">${esc(s.address)}</div>` : ''}
+    <div style="margin-top:4px">${area}</div>
+    <div style="margin-top:4px"><b>Next pickup:</b> ${next ? esc(next) : 'none coming up'}</div>
+    <div><b>Usual drivers:</b> ${s.usualDrivers.length ? esc(s.usualDrivers.join(', ')) : 'none yet'}</div>
+  </div>`;
+}
+
+function CoordMap({ rows, showVolunteers, onOpen }: { rows: PiRow[]; suppliers?: any[]; showVolunteers: boolean; onOpen: (id: number) => void }) {
+  // Oct 30 client: the one coverage call (shared with the right-hand panel) + "Needs drivers" filter.
+  const coverage = useCoverage();
+  const [needsOnly, setNeedsOnly] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<L.Map | null>(null);
-  const layer = useRef<L.LayerGroup | null>(null);
+  const mapRef = useRef<LT.Map | null>(null);
+  const layer = useRef<LT.LayerGroup | null>(null);
+  // Oct 16 client: speed — the map library (~150 KB) was loaded with the whole office
+  // portal; it's only needed here (Coverage map tab), so it loads when this opens.
+  const [L, setL] = useState<typeof LT | null>(null);
+  useEffect(() => {
+    let on = true;
+    void import('leaflet').then((m) => { if (on) setL((((m as any).default ?? m) as typeof LT)); });
+    return () => { on = false; };
+  }, []);
 
   // Real driver positions reported from the APK via POST /api/me/location.
   // Polled every 30s while the map is visible.
@@ -1680,7 +1915,7 @@ function CoordMap({ rows, suppliers, showVolunteers, onOpen }: { rows: PiRow[]; 
   });
 
   useEffect(() => {
-    if (!ref.current || mapRef.current) return;
+    if (!L || !ref.current || mapRef.current) return;
     const m = L.map(ref.current, { zoomControl: false, zoomDelta: 0.5, attributionControl: false }).setView([41.115, -74.069], 12);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' }).addTo(m);
     // Explicit topright placement so zoom controls don't collide with the
@@ -1689,11 +1924,11 @@ function CoordMap({ rows, suppliers, showVolunteers, onOpen }: { rows: PiRow[]; 
     layer.current = L.layerGroup().addTo(m);
     mapRef.current = m;
     return () => { m.remove(); mapRef.current = null; layer.current = null; };
-  }, []);
+  }, [L]);
 
   useEffect(() => {
     const m = mapRef.current; const lyr = layer.current;
-    if (!m || !lyr) return;
+    if (!L || !m || !lyr) return;
     lyr.clearLayers();
 
     // abc871 (Aug 17): the map used to plot every one of ~300 pickups in the
@@ -1740,30 +1975,63 @@ function CoordMap({ rows, suppliers, showVolunteers, onOpen }: { rows: PiRow[]; 
       if (['completed', 'delivered', 'cancelled', 'missed'].includes(s)) return false;
       return true;
     });
-    const _supplierNamesOnMap = new Set(_actionable.map((p) => p.suppliers).filter(Boolean));
-    const _suppliersInScope = suppliers.filter((s: any) => _supplierNamesOnMap.has(s.name));
+    // Oct 30 client (Coverage map): areas, stores and pickups come from the one
+    // coverage call (same query as the right-hand panel). Stores sit at their saved
+    // map spot; only stores with a saved spot are drawn.
+    const areas = coverage.data?.data ?? [];
+    const allStores: CoverageStore[] = [...areas.flatMap((a) => a.stores), ...(coverage.data?.storesWithoutArea ?? [])];
+    const areaColor = new Map<number, 'red' | 'orange' | 'green'>(areas.map((a) => [a.id, a.color]));
+    const storeByName = new Map<string, CoverageStore>();
+    for (const s of allStores) storeByName.set(s.name.trim().toLowerCase(), s);
+    const firstStoreOf = (p: PiRow) => storeByName.get(String(p.suppliers ?? '').split(',')[0]!.trim().toLowerCase());
+    const needIds = new Set(_actionable.filter((p) => liveNeedOf(p) > 0).map((p) => p.id));
+    const storesNeeding = new Set(_actionable.filter((p) => needIds.has(p.id)).map((p) => firstStoreOf(p)?.id).filter((x): x is number => x != null));
 
-    // Suppliers (donor sites) — small square markers, colored per supplier so
-    // a single donor has one color identity across Places list, map, and feed.
-    _suppliersInScope.forEach((s: any) => {
-      const color = supplierHue(s.name ?? String(s.id));
-      const initial = String(s.name ?? 'S').trim().slice(0, 1).toUpperCase();
-      const [lat, lng] = _uniquePinFor('supplier:' + (s.name ?? String(s.id)));
-      const html = `<div style="width:22px;height:22px;background:${color};border:2px solid #fff;border-radius:5px;display:grid;place-items:center;color:#fff;font-weight:800;font-size:11px;box-shadow:0 3px 6px rgba(0,0,0,.25)">${initial}</div>`;
-      L.marker([lat, lng], { icon: L.divIcon({ html, className: '', iconSize: [22, 22], iconAnchor: [11, 11] }) }).addTo(lyr);
+    // Area circles (center = the middle of the area's stores), colored by coverage.
+    areas.forEach((a) => {
+      if (!a.center) return;
+      if (needsOnly && a.color === 'green') return;
+      const hex = COVER_HEX[a.color];
+      L.circle(a.center, { radius: 1400, color: hex, weight: 2, opacity: 0.8, fillColor: hex, fillOpacity: 0.14 })
+        .bindTooltip(`<b>${esc(a.name)}</b><br>${plural(a.volunteerCount, 'driver')} · ${plural(a.supplierCount, 'store')}`, { direction: 'top', sticky: true })
+        .on('click', () => emitCoverage(COVERAGE_OPEN_EVENT, a.id))
+        .addTo(lyr);
     });
 
-    // Pickups — teardrop pins with a "P" label, color = supplier color so
-    // each pickup carries its donor's color identity. Status shows on a
-    // small indicator ring inside the pin.
+    // Stores — small squares in their area's color (gray = no area). Hover / tap shows
+    // the name; tap opens a small card (address, next pickup, usual drivers).
+    allStores.forEach((s) => {
+      if (s.lat == null || s.lng == null) return;
+      const c = s.areaId != null ? areaColor.get(s.areaId) : undefined;
+      if (needsOnly && c === 'green' && !storesNeeding.has(s.id)) return;
+      if (needsOnly && c === undefined && !storesNeeding.has(s.id)) return;
+      const hex = COVER_HEX[c ?? 'none'];
+      const initial = esc(String(s.name || 'S').trim().slice(0, 1).toUpperCase());
+      const html = `<div style="width:20px;height:20px;background:${hex};border:2px solid #fff;border-radius:5px;display:grid;place-items:center;color:#fff;font-weight:800;font-size:10px;box-shadow:0 2px 5px rgba(0,0,0,.25)">${initial}</div>`;
+      L.marker([s.lat, s.lng], { icon: L.divIcon({ html, className: '', iconSize: [20, 20], iconAnchor: [10, 10] }) })
+        .bindTooltip(esc(s.name), { direction: 'top', offset: [0, -8] })
+        .bindPopup(storeCardHtml(s, c), { maxWidth: 260 })
+        .addTo(lyr);
+    });
+
+    // Pickups (today + tomorrow, still open) — red pin = still needs a driver,
+    // green = has its driver. At the store's spot when we have it.
     _actionable.forEach((p) => {
-      const color = p.suppliers ? supplierHue(p.suppliers) : '#2C5A3B';
+      const need = liveNeedOf(p);
+      if (needsOnly && need <= 0) return;
+      const color = need > 0 ? COVER_HEX.red : COVER_HEX.green;
       const html = `<div style="position:relative;width:30px;height:36px;filter:drop-shadow(0 4px 4px rgba(0,0,0,.28))">
         <svg width="30" height="36" viewBox="0 0 24 28" fill="${color}"><path d="M12 2C7.5 2 4 5.5 4 10c0 6 8 16 8 16s8-10 8-16c0-4.5-3.5-8-8-8z"/></svg>
         <span style="position:absolute;inset:2px 0 0 0;display:grid;place-items:center;color:#fff;font-weight:800;font-size:11px">P</span>
       </div>`;
-      const [lat, lng] = _uniquePinFor('pickup:' + (p.suppliers ?? String(p.id)));
+      const st = firstStoreOf(p);
+      const [lat, lng] = st && st.lat != null && st.lng != null
+        ? [st.lat + 0.00018, st.lng] // just above the store square
+        : _uniquePinFor('pickup:' + (p.suppliers ?? String(p.id)));
+      const when = whenText(String(p.scheduled_date ?? '').slice(0, 10), String(p.scheduled_time ?? '').slice(0, 5));
+      const tip = `<b>${esc(p.suppliers || 'Pickup')}</b><br>${esc(when)} · ${need > 0 ? `needs ${plural(need, 'driver')}` : 'has a driver'}`;
       L.marker([lat, lng], { icon: L.divIcon({ html, className: '', iconSize: [30, 36], iconAnchor: [15, 36] }) })
+        .bindTooltip(tip, { direction: 'top', offset: [0, -30] })
         .on('click', () => onOpen(p.id))
         .addTo(lyr);
     });
@@ -1789,32 +2057,253 @@ function CoordMap({ rows, suppliers, showVolunteers, onOpen }: { rows: PiRow[]; 
           .addTo(lyr);
       });
     }
-  }, [rows, suppliers, onOpen, showVolunteers, driverPositions.data]);
+  }, [L, rows, onOpen, showVolunteers, driverPositions.data, coverage.data, needsOnly]);
 
+  // Panel → map: tapping an area in the panel moves the map to it.
+  useEffect(() => {
+    const on = (e: Event) => {
+      const id = Number((e as CustomEvent).detail?.id);
+      const a = (coverage.data?.data ?? []).find((x) => x.id === id);
+      if (a?.center && mapRef.current) mapRef.current.flyTo(a.center, 14, { duration: 0.6 });
+    };
+    window.addEventListener(COVERAGE_FOCUS_EVENT, on);
+    return () => window.removeEventListener(COVERAGE_FOCUS_EVENT, on);
+  }, [coverage.data]);
+
+  const dot = (hex: string) => <span className="inline-block w-[12px] h-[12px] rounded-full shrink-0" style={{ background: hex, opacity: 0.85 }} />;
   return (
     <div className="w-full h-full relative" style={{ background: '#F4F8F0' }}>
       <div ref={ref} className="w-full h-full" />
-      {/* Legend — explains the symbology to the coordinator */}
-      <div className="absolute top-3 left-3 z-[400] bg-paper rounded-[12px] border border-line shadow-card px-3 py-2 text-[11px]">
-        <div className="font-extrabold uppercase tracking-[.05em] text-muted mb-1.5">Legend</div>
+      {/* Oct 30 client: a clear legend + the "Needs drivers" filter */}
+      <div className="absolute top-3 left-3 z-[400] bg-paper rounded-[12px] border border-line shadow-card px-3 py-2.5 text-[11.5px] max-w-[230px]" data-map-legend>
+        <div className="font-extrabold uppercase tracking-[.05em] text-muted mb-1.5">What the map shows</div>
+        <div className="text-muted font-bold mb-1">Areas (circle color)</div>
+        <div className="flex items-center gap-2 mb-0.5">{dot(COVER_HEX.red)}<span className="text-ink font-semibold">No drivers</span></div>
+        <div className="flex items-center gap-2 mb-0.5">{dot(COVER_HEX.orange)}<span className="text-ink font-semibold">1–2 drivers</span></div>
+        <div className="flex items-center gap-2 mb-1.5">{dot(COVER_HEX.green)}<span className="text-ink font-semibold">3+ drivers</span></div>
         <div className="flex items-center gap-2 mb-1">
-          <span className="inline-grid place-items-center w-[18px] h-[22px] text-paper font-extrabold text-[10px] rounded-sm" style={{ background: '#2C5A3B', clipPath: 'polygon(50% 100%, 0 40%, 25% 0, 75% 0, 100% 40%)' }}>P</span>
-          <span className="text-ink font-semibold">Pickup</span>
+          <span className="inline-grid place-items-center w-[16px] h-[16px] text-paper font-extrabold text-[9px] rounded-[4px] shrink-0" style={{ background: COVER_HEX.none }}>S</span>
+          <span className="text-ink font-semibold">Store <span className="text-muted font-normal">(color of its area; tap for details)</span></span>
         </div>
         <div className="flex items-center gap-2 mb-1">
-          <span className="inline-grid place-items-center w-[18px] h-[18px] text-paper font-extrabold text-[10px] rounded-[4px]" style={{ background: '#3E6F8E' }}>S</span>
-          <span className="text-ink font-semibold">Supplier</span>
+          <span className="inline-block w-[14px] h-[17px] shrink-0" style={{ background: COVER_HEX.red, clipPath: 'polygon(50% 100%, 0 40%, 25% 0, 75% 0, 100% 40%)' }} />
+          <span className="text-ink font-semibold">Pickup that needs a driver</span>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="inline-grid place-items-center w-[18px] h-[18px] text-paper font-extrabold text-[10px] rounded-full border-2 border-white" style={{ background: '#D27A4C' }}>D</span>
-          <span className="text-ink font-semibold">Driver <span className="text-muted italic">(live GPS)</span></span>
+        <div className="flex items-center gap-2 mb-1">
+          <span className="inline-block w-[14px] h-[17px] shrink-0" style={{ background: COVER_HEX.green, clipPath: 'polygon(50% 100%, 0 40%, 25% 0, 75% 0, 100% 40%)' }} />
+          <span className="text-ink font-semibold">Pickup that has a driver</span>
         </div>
+        <div className="flex items-center gap-2 mb-2">
+          <span className="inline-grid place-items-center w-[16px] h-[16px] text-paper font-extrabold text-[9px] rounded-full border-2 border-white shrink-0" style={{ background: '#D27A4C' }}>D</span>
+          <span className="text-ink font-semibold">Driver <span className="text-muted font-normal">(live GPS)</span></span>
+        </div>
+        <button type="button" onClick={() => setNeedsOnly((v) => !v)} aria-pressed={needsOnly}
+                className={cx('haptic w-full text-[12px] font-bold px-2.5 py-1.5 rounded-full border',
+                  needsOnly ? 'bg-clay text-paper border-clay' : 'bg-paper text-clay border-clay/60')}>
+          {needsOnly ? '✓ Needs drivers only' : 'Show only what needs drivers'}
+        </button>
+        <div className="text-[10.5px] text-muted mt-1.5">Pickups: today and tomorrow. Stores show only if their location is saved.</div>
       </div>
     </div>
   );
 }
 
-function CoordRow({ p, onAssign, onOpen, onEdit, onDuplicate, allowDriverCancel }: { p: PiRow; onAssign: () => void; onOpen: () => void; onEdit?: () => void; onDuplicate?: () => void; allowDriverCancel?: boolean }) {
+// ── Oct 21 client: Cleaner Live Board ───────────────────────────────────────
+/** Driver spots still open — the same rule as the card's "Needs N drivers". */
+function liveNeedOf(p: PiRow): number {
+  const s = String(p.status || '').toLowerCase();
+  if (['completed', 'delivered', 'cancelled'].includes(s)) return 0;
+  const rem = (p as any).slots_remaining;
+  if (rem != null) return Math.max(0, Number(rem));
+  const cap = Number((p as any).slots_capacity ?? 1) || 1;
+  return Math.max(0, cap - ((p as any).signups ?? []).length);
+}
+function liveStartMs(p: PiRow): number {
+  return new Date(String(p.scheduled_date).slice(0, 10) + 'T' + (p.scheduled_time || '00:00:00')).getTime();
+}
+function liveColorOf(p: PiRow, nowMs: number): PickupColor {
+  const st = (p as any).store_texts;
+  return pickupColor({
+    status: p.status,
+    cancelled: !!(p as any).cancelled_at,
+    confirmationPending: (p as any).confirmation_state === 'pending',
+    startMs: showsUnderToday(p) ? nowMs : liveStartMs(p), // reposted from an earlier day = "now" for drivers
+    nowMs,
+    need: liveNeedOf(p),
+    storeCancelOpen: !!st?.cancel && st.cancel.cancelled !== true,
+    foodCheckAlert: !!st?.held && ['food_check_no_answer', 'food_check_skipped'].includes(String(st?.food?.action ?? '')),
+    dropOffOnly: !!(p as any).dropOffOnly, // Oct 22 client
+  });
+}
+
+/** "📤 Last pickup text 2:06 PM · next 3:00 PM" — the same data as Messaging → Upcoming SMS (no polling). */
+function LiveTextsLine() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['upcoming-drop'], queryFn: () => upcomingSms.get(), staleTime: 5 * 60_000, refetchOnWindowFocus: false });
+  const d = q.data?.data;
+  const nextAt = d?.scheduledFor ?? null;
+  // Refresh once, just after the next text goes out.
+  useEffect(() => {
+    if (!nextAt) return;
+    const wait = Date.parse(nextAt) - Date.now() + 90_000;
+    if (!(wait > 0) || wait > 12 * 3600e3) return;
+    const t = setTimeout(() => { void qc.invalidateQueries({ queryKey: ['upcoming-drop'] }); }, wait);
+    return () => clearTimeout(t);
+  }, [nextAt, qc]);
+  if (!d) return null;
+  const last = d.lastScheduledDropAt ? `Last pickup text ${fmtSendTime(d.lastScheduledDropAt)}` : 'No pickup text yet';
+  const next = d.kind === 'cancelled' ? 'next one skipped' : nextAt ? `next ${fmtSendTime(nextAt)}` : 'no more today';
+  return <span className="text-[12.5px] text-muted" data-testid="live-texts-line" title="The pickup text that goes to drivers">📤 {last} · {next}</span>;
+}
+
+/**
+ * The Live Board list: the whole day, colored (pickup-color.ts), opened at "now": the first card that
+ * needs attention / confirmation or starts from 30 minutes ago on is scrolled to the top; earlier ones sit above.
+ */
+function LiveBoardList({ rows, searching, onAssign, onOpen, onEdit, onAdd }: {
+  rows: PiRow[]; searching: boolean;
+  onAssign?: (p: PiRow) => void; onOpen: (id: number) => void; onEdit?: (p: PiRow) => void; onAdd?: () => void;
+}) {
+  const nowMs = useMinuteNow();
+  const today = nyToday();
+  const all = useMemo(() => rows
+    .map((p) => ({ p, color: liveColorOf(p, nowMs), startMs: liveStartMs(p), earlier: String(p.scheduled_date).slice(0, 10) < today }))
+    .filter((x) => x.color !== 'hidden')
+    // Oct 23 client: days cancelled only because the steady pickup was archived / paused aren't real cancellations — keep them off the board.
+    .filter((x) => !scheduleOnlyCancel(x.p))
+    // Oct 22 client: drop-off steady days (e.g. the school) show only once they actually came (completed).
+    .filter((x) => !(x.p as any).dropOffOnly || ['completed', 'delivered'].includes(String(x.p.status ?? '').toLowerCase()))
+    .sort((a, b) => a.startMs - b.startMs), [rows, nowMs, today]);
+  // Oct 22 client ("need all this stuff to be neater"): finished / cancelled fold into ONE summary line at the top.
+  const finished = useMemo(() => all.filter((x) => x.color === 'grey').map((x) => ({ p: x.p, fin: finishedOf(x.p) })), [all]);
+  const items = useMemo(() => all.filter((x) => x.color !== 'grey'), [all]);
+  const [finOpen, setFinOpen] = useState<boolean>(() => { try { return localStorage.getItem(FIN_OPEN_KEY) === '1'; } catch { return false; } });
+  const toggleFin = () => setFinOpen((v) => { const n = !v; try { localStorage.setItem(FIN_OPEN_KEY, n ? '1' : '0'); } catch { /* private mode */ } return n; });
+  const showFin = finOpen || searching; // a search shows the matching finished ones too
+  const anchorIdx = items.findIndex((x) => x.color === 'red' || x.color === 'orange' || (x.color !== 'grey' && x.startMs >= nowMs - 30 * 60_000));
+  const nowIdx = items.findIndex((x) => !x.earlier && x.startMs >= nowMs);
+  const anchorRef = useRef<HTMLDivElement | null>(null);
+  const didScroll = useRef(false);
+  useEffect(() => {
+    if (didScroll.current || items.length === 0) return;
+    didScroll.current = true;
+    if (anchorIdx <= 0) return; // nothing above it
+    const t = setTimeout(() => anchorRef.current?.scrollIntoView({ block: 'start' }), 250);
+    return () => clearTimeout(t);
+  }, [items.length, anchorIdx]);
+  const nowLabel = new Date(nowMs).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
+  const nowLine = (
+    <div className="flex items-center gap-2 py-0.5 text-[11px] font-extrabold uppercase tracking-[.06em] text-forest" data-testid="live-now-line">
+      <span className="h-px flex-1 bg-forest/40" />Now · {nowLabel}<span className="h-px flex-1 bg-forest/40" />
+    </div>
+  );
+  const label = (t: string) => <div className="pt-1 text-[11px] font-extrabold uppercase tracking-[.05em] text-muted">{t}</div>;
+  const finishedBlock = finished.length > 0 && (
+    <FinishedSummary rows={finished} open={showFin} onToggle={toggleFin} onOpen={onOpen} />
+  );
+  if (items.length === 0 && finished.length === 0) {
+    return (
+      <div className="text-center py-16">
+        <div className="font-display font-semibold text-[18px] text-ink">{searching ? 'No pickups match the search' : 'No pickups today'}</div>
+        {onAdd && !searching && (
+          <button onClick={onAdd}
+                  className="haptic mt-5 inline-flex items-center gap-1.5 text-[12.5px] font-bold bg-forest text-paper rounded-[10px] px-3.5 py-2 shadow-ctag hover:brightness-110">
+            <Plus size={13} /> New pickup
+          </button>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-2.5 pb-6" data-testid="live-board-list">
+      {finishedBlock}
+      {items.length === 0 && <div className="py-6 text-center text-[13px] text-muted">{searching ? 'No open pickups match the search' : 'Nothing open right now'}</div>}
+      {items.map((x, i) => (
+        <Fragment key={x.p.id}>
+          {i === 0 && x.earlier && label('Earlier days · still open')}
+          {i > 0 && items[i - 1]!.earlier && !x.earlier && label('Today')}
+          <div ref={i === anchorIdx ? anchorRef : undefined} className="scroll-mt-16 space-y-2.5">
+            {i === nowIdx && nowLine}
+            <CoordRow p={x.p} tone={x.color}
+                      onAssign={onAssign ? () => onAssign(x.p) : () => {}}
+                      onOpen={() => onOpen(Number(x.p.id))}
+                      onEdit={onEdit ? () => onEdit(x.p) : undefined} />
+          </div>
+        </Fragment>
+      ))}
+      {nowIdx === -1 && items.length > 0 && nowLine}
+    </div>
+  );
+}
+
+const FIN_OPEN_KEY = 'zlz.liveBoard.finishedOpen';
+type FinishedRowData = { p: PiRow; fin: { kind: string; word: string; cls: string; tip: string } };
+/** Oct 22 client (neater): one consistent status word per finished pickup — no pill borders. */
+function finishedOf(p: PiRow): FinishedRowData['fin'] {
+  const office = officeStatusOf(p);
+  const st = String(p.status || '').toLowerCase();
+  const fin = finishedPill({
+    status: p.status, cancelled: st === 'cancelled' || !!(p as any).cancelled_at, cancelReason: (p as any).cancellation_reason ?? null,
+    noKiosk: office === 'complete_nokiosk', openLabel: OFFICE_SPILL[office]?.label,
+    doneAt: (p as any).delivered_at ?? (p as any).picked_up_at ?? (p as any).actual_end_at ?? null,
+  });
+  const tip = fin.text;
+  switch (fin.kind) {
+    // Oct 23 client: words + colors from the one map (src/display.ts STATUS).
+    case 'done': return { kind: 'done', word: `${STATUS.done.icon} ${STATUS.done.word}`, cls: STATUS.done.text, tip };
+    case 'nokiosk': return { kind: 'nokiosk', word: `${STATUS.nokiosk.icon} ${STATUS.nokiosk.word}`, cls: STATUS.nokiosk.text, tip: 'Done, but no kiosk sign-in' };
+    case 'cancelled': { const k = fin.text === STATUS.cancelled.word ? 'cancelled' : 'no_dropoff'; return { kind: 'cancelled', word: `${STATUS[k].icon} ${STATUS[k].word}`, cls: STATUS[k].text, tip: String((p as any).cancellation_reason ?? '').replace(/^dismissed:\s*/i, '') || tip }; }
+    case 'missed': return { kind: 'missed', word: `${STATUS.missed.icon} ${STATUS.missed.word}`, cls: STATUS.missed.text, tip };
+    case 'expired': return { kind: 'expired', word: `${STATUS.expired.icon} ${STATUS.expired.word}`, cls: STATUS.expired.text, tip };
+    default: return { kind: 'quiet', word: fin.text, cls: 'text-muted', tip };
+  }
+}
+/** "✓ 8 done earlier today · 1 cancelled  ▸ Show" + (open) a tidy aligned list: time | name | status | driver. */
+function FinishedSummary({ rows, open, onToggle, onOpen }: {
+  rows: FinishedRowData[]; open: boolean; onToggle: () => void; onOpen: (id: number) => void;
+}) {
+  const n = (k: string[]) => rows.filter((r) => k.includes(r.fin.kind)).length;
+  const done = n(['done', 'nokiosk']);
+  const parts = [
+    done ? `✓ ${done} done` : '',
+    n(['cancelled']) ? `${n(['cancelled'])} cancelled` : '',
+    n(['missed']) ? `${n(['missed'])} missed` : '',
+    n(['expired']) ? `${n(['expired'])} expired` : '',
+    n(['quiet']) ? `${n(['quiet'])} other` : '',
+  ].filter(Boolean);
+  parts[0] = `${parts[0]} earlier today`;
+  return (
+    <div data-testid="live-finished" data-open={open ? '1' : '0'} className="rounded-[12px] border border-line/70 bg-paper">
+      <button type="button" onClick={onToggle} aria-expanded={open}
+              className="haptic flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12.5px] text-muted hover:text-ink">
+        <span className="min-w-0 flex-1 truncate"><span className="font-semibold text-forest/90">{parts[0]}</span>{parts.slice(1).map((t) => <span key={t}> · {t}</span>)}</span>
+        <span className="shrink-0 text-[12px] font-bold text-forest">{open ? '▾ Hide' : '▸ Show'}</span>
+      </button>
+      {open && (
+        <div className="border-t border-line/60 py-0.5" role="list">
+          {rows.map(({ p, fin }) => {
+            const drivers = (p.signups ?? []).filter((s: any) => !s.role || s.role === 'primary');
+            const who = (drivers.length ? drivers : (p.signups ?? [])).map((s: any) => driverShort(s.first_name, s.last_name)).filter(Boolean);
+            const dlv = (p as any).delivery_to_name as string | null | undefined;
+            const name = dlv ? `Delivery to ${dlv}` : (pickupPlace(p as any) ?? 'Pickup');
+            return (
+              <div key={p.id} role="listitem" onClick={() => onOpen(Number(p.id))} data-finished={fin.kind}
+                   title={`${name} · ${fin.tip}`}
+                   className="grid cursor-pointer grid-cols-[3.9rem_minmax(0,1fr)_6.6rem_minmax(0,4.6rem)] items-center gap-x-2.5 px-3 py-[3px] text-[11.5px] leading-5 text-muted hover:bg-cream/70 sm:grid-cols-[4.5rem_minmax(0,22rem)_8.5rem_minmax(0,11rem)] sm:gap-x-4 sm:text-[12px]">
+                <span className="text-right tabular-nums">{fmtTime(p.scheduled_time?.slice(0, 5) ?? '')}</span>
+                <span className="truncate text-ink/80"><Name>{name}</Name></span>
+                <span className={cx('truncate font-semibold', fin.cls)}>{fin.word}</span>
+                <span className="truncate"><Name>{who.join(', ')}</Name></span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CoordRow({ p, onAssign, onOpen, onEdit, onDuplicate, allowDriverCancel, tone }: { p: PiRow; onAssign: () => void; onOpen: () => void; onEdit?: () => void; onDuplicate?: () => void; allowDriverCancel?: boolean; tone?: PickupColor /* Oct 21 client: Live Board color */ }) {
   const time = fmtTime(p.scheduled_time?.slice(0, 5) ?? '');
   // Oct 13 client: reposted → a "Reposted" tag with when + the real time; past its time it reads "Now".
   const _repost = repostOpen(p);
@@ -1829,12 +2318,15 @@ function CoordRow({ p, onAssign, onOpen, onEdit, onDuplicate, allowDriverCancel 
   // upsms (Aug 20): per-pickup "Send now" broadcast. Only shows on Needs-a-
   // Driver cards (no signups, not supplier-posted, not resolved). Confirms
   // before firing so a mis-tap doesn't blast the group.
+  const sendingNow = useSendingSince(Number((p as any).id)); // Oct 25 client
   const sendNowMut = useMutation({
     // Oct 8: real sends go through sendPickupNowConfirmed (asks before re-sending).
     mutationFn: async (dryRun: boolean) => (dryRun
       ? (await upcomingSms.pickupSendNow(Number((p as any).id), true)).data
       : await sendPickupNowConfirmed(Number((p as any).id))),
+    onMutate: (dryRun) => { if (!dryRun) markSending(Number((p as any).id)); }, // Oct 25 client: "Sending now…" right away
     onSuccess: (d, dryRun) => {
+      if (!dryRun) { afterSendAnswer(Number((p as any).id), d); qc.invalidateQueries({ queryKey: ['pickup-text-info', Number((p as any).id)] }); }
       if (!d) return; // office chose not to re-send
       // Oct 9 client: in-page notices, not browser alert boxes.
       if (dryRun) {
@@ -1847,7 +2339,7 @@ function CoordRow({ p, onAssign, onOpen, onEdit, onDuplicate, allowDriverCancel 
       qc.invalidateQueries({ queryKey: ['admin-pickups'] });
       qc.invalidateQueries({ queryKey: ['upcoming-drop'] });
     },
-    onError: (e: Error) => uiNotify(`Send now failed: ${e.message}`, 'err'),
+    onError: (e: Error) => { clearSending(Number((p as any).id)); uiNotify(`Send now failed: ${e.message}`, 'err'); },
   });
   // Issue #13/14/15 Aug 10 — a pickup with no driver yet isn't "overdue",
   // it's "looking for a driver". Show wait time in a calm/warm chip.
@@ -1908,8 +2400,11 @@ function CoordRow({ p, onAssign, onOpen, onEdit, onDuplicate, allowDriverCancel 
     .sort((a: any, b: any) => (a.role === 'backup' ? 1 : 0) - (b.role === 'backup' ? 1 : 0))
     .map((s) => ({
       initials: (s.first_name?.[0] ?? '') + (s.last_name?.[0] ?? ''),
-      full: `${s.first_name} ${s.last_name}${s.unit_number != null ? ` #${s.unit_number}` : ''}`,
+      // Oct 22 client (neater): no unit numbers on the card (still in the tooltip).
+      full: `${s.first_name ?? ''} ${s.last_name ?? ''}`.trim(),
+      unit: s.unit_number != null ? `#${s.unit_number}` : '',
     }));
+  const unitTip = (list: { full: string; unit: string }[]) => list.map((f) => [f.full, f.unit].filter(Boolean).join(' ')).join(', ');
   const filled = _allDrivers.slice(0, _cap);
   const backups = _allDrivers.slice(_cap);
   // §1: the row's status pill uses the office-facing label ("Volunteer Needed"
@@ -1928,13 +2423,14 @@ function CoordRow({ p, onAssign, onOpen, onEdit, onDuplicate, allowDriverCancel 
   // one-time pickups don't read as anonymous "Pickup".
   // Oct 8 client: deliveries (from 3 Regina to a family) lead with the family.
   const _dlv = (p as any).delivery_to_name as string | null | undefined;
-  const primaryLabel = _dlv ? `Delivery to ${_dlv}` : (p.suppliers || p.steady_name || p.contact_name || p.pickup_address || 'One-time pickup');
+  // Oct 22 client (neater): the shared name helper — no ", NY, USA", no " - 51 Carlton Rd" tails.
+  const primaryLabel = _dlv ? `Delivery to ${_dlv}` : (pickupPlace(p as any) || 'One-time pickup');
   // Secondary line: food description, then address/notes. Address is worth
   // its own line when different from the primary label, so the driver knows
   // WHERE to go at a glance.
   const foodLine = p.food_description || null;
   const contactLine = !p.suppliers && p.contact_phone && p.contact_name !== primaryLabel
-    ? `${p.contact_name ? p.contact_name + ' · ' : ''}${p.contact_phone}`
+    ? `${p.contact_name ? p.contact_name + ' · ' : ''}${displayPhone(p.contact_phone)}`
     : null;
   // Oct 7 client: one time on the card, never a "2:00 PM–10:00 PM" range
   // (the end was just how long drivers keep getting offered it). Store posts
@@ -1960,11 +2456,9 @@ function CoordRow({ p, onAssign, onOpen, onEdit, onDuplicate, allowDriverCancel 
   // the supplier's default address. Previously the render short-circuited on
   // supplier_address and hid the manually-picked address entirely.
   const displayAddress = (() => {
-    if (_dlv) return `${(p as any).delivery_to_address || 'no address'}  ·  from ${p.pickup_address || '3 Regina Road'}`;
-    if (p.pickup_address && p.pickup_address.trim()) return p.pickup_address;
-    if (p.supplier_address) {
-      return p.supplier_city ? `${p.supplier_address}, ${p.supplier_city}` : p.supplier_address;
-    }
+    if (_dlv) return `${shortAddress((p as any).delivery_to_address) || 'no address'}  ·  from ${shortAddress(p.pickup_address) || '3 Regina Road'}`;
+    if (p.pickup_address && p.pickup_address.trim()) return tidyAddress(p.pickup_address);
+    if (p.supplier_address) return shortAddressOf(p.supplier_address, p.supplier_city); // Oct 23 client: one short-address rule
     return null;
   })();
   const showAddress = displayAddress && displayAddress !== primaryLabel;
@@ -1978,12 +2472,36 @@ function CoordRow({ p, onAssign, onOpen, onEdit, onDuplicate, allowDriverCancel 
   const needDrivers = _resolved ? 0
     : _srvRemaining != null ? Math.max(0, Number(_srvRemaining))
     : (!isFullyCovered ? _slotsNeeded - _slotsFilled : 0);
+  // Oct 21 client (Cleaner Live Board): finished / cancelled = one short line (tap = the pickup).
+  // Oct 22 client: not grey any more — a calm white card with a light border, smaller lower-contrast text and a
+  // small muted pill ("✓ Done 2:40 PM" / "Cancelled"); no tint, no color bar. "Hide finished" still hides them.
+  if (tone === 'grey') {
+    const fin = finishedPill({
+      status: p.status, cancelled: _cancelled, cancelReason: (p as any).cancellation_reason ?? null,
+      noKiosk: office === 'complete_nokiosk', openLabel: spill.label,
+      doneAt: (p as any).delivered_at ?? (p as any).picked_up_at ?? (p as any).actual_end_at ?? null,
+    });
+    return (
+      <div onClick={onOpen} data-color="grey" data-finished={fin.kind} title={COLOR_CARD.grey.label}
+           className="haptic cursor-pointer rounded-[12px] border border-line/60 bg-paper px-3 py-1.5 transition hover:border-line hover:shadow-sm">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px] text-muted">
+          <span className="font-semibold tabular-nums">{time}</span>
+          <span className="min-w-0 max-w-full truncate"><Name>{primaryLabel}</Name></span>
+          <span className={cx('rounded-full border px-1.5 py-px text-[10.5px] font-bold', fin.cls)}>{fin.text}</span>
+          {filled.length > 0 && <span className="min-w-0 truncate text-[11.5px] text-muted/80"><Name>{filled.map((f) => f.full).join(', ')}</Name></span>}
+        </div>
+      </div>
+    );
+  }
+  const toneCss = tone && tone !== 'hidden' ? COLOR_CARD[tone] : null;
   return (
-    <div onClick={onOpen} className={cx(
-        'haptic cursor-pointer bg-paper rounded-[14px] overflow-hidden hover:shadow-card transition',
-        isTrulyLate ? 'border-2 border-clay' : needDrivers > 0 ? 'border border-amber/60' : 'border border-line')}>
+    <div onClick={onOpen} data-color={toneCss ? tone : undefined} className={cx(
+        'haptic cursor-pointer rounded-[14px] overflow-hidden hover:shadow-card transition',
+        toneCss ? cx('border', toneCss.card)
+          : cx('bg-paper', isTrulyLate ? 'border-2 border-clay' : needDrivers > 0 ? 'border border-amber/60' : 'border border-line'))}>
       <div className="flex">
-        {/* Oct 6 client: no color stripe — keep cards clean. */}
+        {/* Oct 6 client: no color stripe — keep cards clean. Oct 21 client: on the Live Board, a color bar (covered / needs attention / confirm). */}
+        {toneCss && <div className={cx('w-1.5 shrink-0', toneCss.bar)} title={toneCss.label}><span className="sr-only">{toneCss.label}</span></div>}
         {false && stripeColor && <div className="w-1.5 shrink-0" style={{ background: stripeColor! }} />}
         <div className="flex-1 min-w-0 p-3.5 sm:grid sm:grid-cols-[1fr_136px] sm:gap-4">
           {/* LEFT — what / where / when / who */}
@@ -2003,12 +2521,15 @@ function CoordRow({ p, onAssign, onOpen, onEdit, onDuplicate, allowDriverCancel 
                   No driver yet · {storeWaitMin < 60 ? `${storeWaitMin} min` : `${Math.floor(storeWaitMin / 60)}h ${storeWaitMin % 60}m`}
                 </span>
               )}
-              <span className="font-extrabold tracking-wider text-muted">#{p.ref_number ?? p.id}</span>
+              {/* Oct 21 client: still no driver 1 hour after its time (escalation step 3). */}
+              <NoDriverLateBadge date={p.scheduled_date} time={p.scheduled_time} need={needDrivers} open={!_resolved && !_cancelled && _statusLower !== 'missed'} />
               {(p as any).reply_code != null && (
                 <><span className="inline-flex items-center font-bold text-sky-deep bg-sky-soft rounded-full px-2 py-0.5">Text code {(p as any).reply_code}<Tip text="The number drivers see in their text. They reply with it to take the pickup." /></span></>
               )}
-              {_dlv
-                ? <span className="font-extrabold tracking-wider bg-sage text-forest px-1.5 py-0.5 rounded-full">🚚 DELIVERY</span>
+              {runPlaceOf((p as any).pickup_type)
+                ? <RunTag pickupType={(p as any).pickup_type} />
+                : _dlv
+                ? <span className="font-extrabold tracking-wider bg-sage text-forest px-1.5 py-0.5 rounded-full">🚚 DELIVERY{p.steady_pickup_id != null ? ' · STEADY' : ''/* Oct 30 client: 🏠 steady delivery keeps the delivery color */}</span>
                 : p.steady_pickup_id != null
                 ? <span className="font-extrabold tracking-wider bg-sky-soft text-sky-deep px-1.5 py-0.5 rounded-full">STEADY</span>
                 : <span className="font-extrabold tracking-wider bg-amber-soft text-[#9a7415] px-1.5 py-0.5 rounded-full">ONE-TIME</span>}
@@ -2026,14 +2547,14 @@ function CoordRow({ p, onAssign, onOpen, onEdit, onDuplicate, allowDriverCancel 
               {_cancelled ? (
                 // Oct 14 client: who cancelled it and when, small and grey under the pill (+ the reason).
                 <span className="inline-flex flex-col items-start leading-tight">
-                  <span title={String((p as any).cancellation_reason ?? '').replace(/^dismissed:\s*/i, '') || undefined}
-                        className="font-bold px-2 py-0.5 rounded-full bg-line/70 text-muted">Cancelled</span>
+                  <StatusPill k={statusKeyOf(p as any) === 'no_dropoff' ? 'no_dropoff' : 'cancelled'} className="text-[11px]"
+                              title={String((p as any).cancellation_reason ?? '').replace(/^dismissed:\s*/i, '') || undefined} />
                   {cancelledLine(p, true) && (
                     <span className="mt-0.5 max-w-[280px] truncate text-[11px] font-normal text-muted" title={cancelledLine(p, true)}>{cancelledLine(p, true)}</span>
                   )}
                 </span>
               ) : office !== 'need' && office !== 'assigned' && (
-                <span className={cx('font-bold px-2 py-0.5 rounded-full', spill.bg, spill.fg)}>{spill.label}</span>
+                <StatusPill k={spill.key} className="text-[11px]" />
               )}
               {/* Oct 5: kiosk verification shown separately from the outcome. */}
               {office === 'complete' && (
@@ -2045,9 +2566,9 @@ function CoordRow({ p, onAssign, onOpen, onEdit, onDuplicate, allowDriverCancel 
                 <span className="font-bold uppercase tracking-wide bg-clay text-paper px-2 py-0.5 rounded-full">Late · {_waitLabel}</span>
               )}
             </div>
-            <div className="font-display font-bold text-[16px] text-ink leading-tight truncate">{primaryLabel}</div>
-            {showAddress && <div className="text-[12px] text-muted truncate">📍 {displayAddress}</div>}
-            {contactLine && <div className="text-[12px] text-muted truncate">☎ {contactLine}</div>}
+            <div className="font-display font-bold text-[16px] text-ink leading-tight truncate"><Name>{primaryLabel}</Name></div>
+            {showAddress && <div className="text-[12px] text-muted truncate" title={p.pickup_address || undefined}>📍 {displayAddress}</div>}
+            {contactLine && <div className="text-[12px] text-muted truncate">☎ {p.contact_name && <><Name>{p.contact_name}</Name> · </>}{displayPhone(p.contact_phone)}</div>}
             {/* Oct 14 client: 📷 thumbnail of the store's photo next to the food line (tap = large). */}
             {(p as any).store_photo_url ? (
               <div className="flex items-center gap-2 min-w-0 my-0.5">
@@ -2065,21 +2586,25 @@ function CoordRow({ p, onAssign, onOpen, onEdit, onDuplicate, allowDriverCancel 
             )}
             <div className="pt-0.5 text-[12px] font-bold">
               {filled.length > 0 && (
-                <span className="inline-flex items-center gap-1.5 text-forest">
+                <span className="inline-flex items-center gap-1.5 text-forest" title={unitTip(filled)}>
                   <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: driverHue(filled[0]!.full) }} />
-                  {filled.map((f) => f.full).join(', ')}
+                  <Name>{filled.map((f) => f.full).join(', ')}</Name>
                 </span>
               )}
               {backups.length > 0 && (
-                <span className="ml-2 text-muted font-semibold">Backup: {backups.map((b) => b.full).join(', ')}</span>
+                <span className="ml-2 text-muted font-semibold" title={unitTip(backups)}>Backup: <Name>{backups.map((b) => b.full).join(', ')}</Name></span>
               )}
               {needDrivers > 0 && (
-                <span className={cx('text-clay', filled.length > 0 && 'ml-2')}>
+                <span className={cx(STATUS.needs_driver.text, filled.length > 0 && 'ml-2')}>
                   Needs {needDrivers} {needDrivers === 1 ? 'driver' : 'drivers'}
                   {isLookingForDriver && !isTrulyLate ? ` · waiting ${_waitLabel}` : ''}
                 </span>
               )}
             </div>
+            {/* Oct 16 client (idea 8): 📞 call a driver in one tap — logged; "Called 2:14 PM — No answer" under it. */}
+            {!_cancelled && !_resolved && (p.signups ?? []).length > 0 && (
+              <DriverCallButtons pickupId={Number(p.id)} pickupRef={p.ref_number ?? null} pickup={p as any} drivers={(p.signups ?? []) as any[]} />
+            )}
             {/* Oct 12 client: how many drivers the next text will reach and when; how many times it was sent. Tap = who got it. */}
             {((needDrivers > 0 && !_cancelled) || (p as any).reply_code != null) && (
               <PickupTextLines pickupId={Number(p.id)}
@@ -2097,6 +2622,10 @@ function CoordRow({ p, onAssign, onOpen, onEdit, onDuplicate, allowDriverCancel 
                 {filled.length === 0 ? 'Assign driver' : '+ Add driver'}
               </button>
             )}
+            {/* Oct 23 client: has a driver but still "needs more" (e.g. set to 2 by mistake) → the drivers on it are enough. */}
+            {!_cancelled && showOnlyNeeds(p, _resolved) && (
+              <OnlyNeedsButton p={p} className={cx(btn, 'border-sage-line text-forest hover:bg-sage/60')} />
+            )}
             {/* Oct 2 client: ask for more drivers even when the pickup is covered. */}
             {allowDriverCancel && !_resolved && (
               <button onClick={() => setShowMoreDrivers(true)} className={cx(btn, 'border-sage-line text-forest hover:bg-sage/60', moreActs ? '' : 'hidden sm:block')}
@@ -2111,10 +2640,10 @@ function CoordRow({ p, onAssign, onOpen, onEdit, onDuplicate, allowDriverCancel 
             )}
             {/* Oct 7 client: Send SMS on store posts too. */}
             {needDrivers > 0 && (
-              <button onClick={() => setShowSendChoice(true)} disabled={sendNowMut.isPending}
-                      className={cx(btn, 'border-sky/40 text-sky hover:bg-sky/10', sendNowMut.isPending && 'bg-sky/15 animate-pulse')}
-                      title="Text drivers about this pickup, or about every open pickup">
-                {sendNowMut.isPending ? 'Sending…' : 'Send SMS'}
+              <button onClick={() => setShowSendChoice(true)} disabled={sendNowMut.isPending || !!sendingNow}
+                      className={cx(btn, 'border-sky/40 text-sky hover:bg-sky/10', (sendNowMut.isPending || !!sendingNow) && 'bg-sky/15 animate-pulse')}
+                      title={sendingNow ? 'Sending now — wait for the text to go out' : 'Text drivers about this pickup, or about every open pickup'}>
+                {sendNowMut.isPending || sendingNow ? 'Sending…' : 'Send SMS'}
               </button>
             )}
             {!_resolved && (
@@ -2166,25 +2695,34 @@ function CoordRow({ p, onAssign, onOpen, onEdit, onDuplicate, allowDriverCancel 
 // mass text, so it shows a dry-run count first and needs a second OK.
 function SendSmsChoiceModal({ p, onSendThis, onClose }: { p: any; onSendThis: () => void; onClose: () => void }) {
   const qc = useQueryClient();
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<false | 'checking' | 'sending'>(false);
   const [err, setErr] = useState<string | null>(null);
   // Oct 14 client: name the pickup (e.g. "Hive Discount Store · 9:00 AM") instead of its id,
   // and show how many open pickups "send all" would include.
   const pickupName = String(p.suppliers || p.steady_name || p.donor_name || p.contact_name || 'This pickup').trim();
   const pickupTime = p.scheduled_time ? fmtTime(String(p.scheduled_time).slice(0, 5)) : '';
-  const openCount = useQuery({ queryKey: ['send-all-preview'], queryFn: async () => (await upcomingSms.sendNow(true)).data, staleTime: 30_000 });
+  // Oct 20 client ("Checking…" took too long): a light count (no full dry run), fetched once when
+  // the box opens and reused by the button if under 60 s old. 10 s timeout → plain error + Retry.
+  const allowAll = !isDispatcherLogin(); // Oct 22 client: "Send all open pickups" is a group text — office only
+  const openCount = useQuery({ queryKey: ['send-all-count'], queryFn: async () => (await upcomingSms.sendNowCount()).data, staleTime: 60_000, gcTime: 60_000, retry: false, enabled: allowAll });
   const nOpen = openCount.data?.pickups;
+  const countErr = openCount.isError ? ((openCount.error as any)?.message || "Couldn't check the open pickups.") : null;
   async function sendAll() {
-    setBusy(true); setErr(null);
+    setBusy('checking'); setErr(null);
     try {
-      const preview = (await upcomingSms.sendNow(true)).data;
-      if (!preview.pickups) { alert('There are no open pickups to send right now.'); onClose(); return; }
+      const fresh = openCount.data && Date.now() - openCount.dataUpdatedAt < 60_000;
+      const preview = fresh ? openCount.data! : (await upcomingSms.sendNowCount()).data;
+      if (!fresh) qc.setQueryData(['send-all-count'], preview);
+      if (!preview.pickups || preview.skipped === 'no-open-pickups') { alert('There are no open pickups to send right now.'); onClose(); return; }
       const who = preview.recipients != null ? ` to ${preview.recipients} driver(s)` : '';
-      if (!(await uiConfirm(`Send ${preview.pickups} open pickup(s)${who} now?`))) { setBusy(false); return; }
+      setBusy(false);
+      if (!(await uiConfirm(`Send ${preview.pickups} open pickup(s)${who} now?`))) return;
+      setBusy('sending');
       const d = (await upcomingSms.sendNow(false)).data;
       alert(d.skipped ? smsReasonText(d.skipped) : textedText(d.sent, d.recipients));
       qc.invalidateQueries({ queryKey: ['admin-pickups'] });
       qc.invalidateQueries({ queryKey: ['upcoming-drop'] });
+      qc.removeQueries({ queryKey: ['send-all-count'] });
       onClose();
     } catch (e: any) {
       setErr(e?.message || 'Send failed'); setBusy(false);
@@ -2195,16 +2733,25 @@ function SendSmsChoiceModal({ p, onSendThis, onClose }: { p: any; onSendThis: ()
       <div onClick={(e) => e.stopPropagation()} className="relative z-[2101] bg-paper rounded-[18px] shadow-lift border border-line w-full max-w-sm p-5 space-y-3">
         <div className="font-display font-semibold text-[16px]">Send SMS</div>
         <div className="text-[12.5px] text-muted">What should drivers be texted about?</div>
-        <button disabled={busy} onClick={onSendThis}
+        <button disabled={!!busy} onClick={onSendThis}
                 className="haptic w-full text-left rounded-[12px] border border-sky/40 px-4 py-3 hover:bg-sky/10">
           <div className="text-[13px] font-extrabold text-sky-deep">Send only this pickup</div>
           <div className="text-[11px] text-muted">{pickupName}{pickupTime ? ` · ${pickupTime}` : ''}</div>
         </button>
-        <button disabled={busy} onClick={sendAll}
+        {allowAll && <button disabled={!!busy} onClick={sendAll}
                 className="haptic w-full text-left rounded-[12px] border border-sky/40 px-4 py-3 hover:bg-sky/10">
-          <div className="text-[13px] font-extrabold text-sky-deep">{busy ? 'Checking…' : `Send all currently open pickups${typeof nOpen === 'number' ? ` (${nOpen})` : ''}`}</div>
+          <div className="text-[13px] font-extrabold text-sky-deep flex items-center gap-1.5">
+            {busy === 'sending' ? 'Sending…' : `Send all currently open pickups${typeof nOpen === 'number' ? ` (${nOpen})` : ''}`}
+            {(busy || openCount.isFetching) && <Loader2 size={13} className="animate-spin shrink-0" />}
+          </div>
           <div className="text-[11px] text-muted">Shows how many first and asks again before sending.</div>
-        </button>
+        </button>}
+        {countErr && !busy && (
+          <div className="text-[12px] text-clay flex items-center gap-2">
+            <span>{countErr}</span>
+            <button onClick={() => openCount.refetch()} className="haptic underline font-bold">Retry</button>
+          </div>
+        )}
         {err && <div className="text-[12px] text-clay">{err}</div>}
         <button onClick={onClose} className="haptic w-full rounded-[12px] border border-line px-4 py-2.5 text-[13px] font-bold text-muted hover:bg-cream">Cancel</button>
       </div>
@@ -2220,8 +2767,7 @@ function RecurringEditChoiceModal({ p, loading, onOccurrence, onSchedule, onClos
   p: PiRow; loading: boolean;
   onOccurrence: () => void; onSchedule: (fromThisDate: boolean) => void; onClose: () => void;
 }) {
-  const day = new Date(String(p.scheduled_date).slice(0, 10) + 'T12:00:00')
-    .toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+  const day = dayText(String(p.scheduled_date).slice(0, 10)); // Oct 23 client: one date format
   const opt = 'haptic w-full text-left rounded-[12px] border border-line px-4 py-3 hover:bg-cream/60 disabled:opacity-50';
   return (
     <div className="fixed inset-0 z-[2100] bg-ink/50 flex items-start justify-center pt-16 px-4">
@@ -2306,7 +2852,7 @@ function DriverCancelModal({ p, onClose }: { p: PiRow; onClose: () => void }) {
   const qc = useQueryClient();
   const drivers = (p.signups ?? []).map((s: any) => ({
     id: Number(s.volunteer_id),
-    name: `${s.first_name ?? ''} ${s.last_name ?? ''}`.trim() + (s.unit_number != null ? ` #${s.unit_number}` : ''),
+    name: personFull(s.first_name, s.last_name), // Oct 23 client: no unit numbers outside the Drivers list
   })).filter((d) => Number.isFinite(d.id));
   const [vid, setVid] = useState<number | ''>(drivers.length === 1 ? drivers[0]!.id : '');
   const [reason, setReason] = useState(DRIVER_CANCEL_REASONS[0]!);
@@ -2381,6 +2927,7 @@ function DismissPickupModal({ p, onClose }: { p: any; onClose: () => void }) {
   const [note, setNote] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const canSubmit = reason !== 'other' || note.trim().length > 0;
+  const [warned, setWarned] = useState(() => driversOnOf(p) < 1); // Oct 23 client: a driver is on it → warn first
   const mut = useMutation({
     mutationFn: () => api(`/api/pickup-instances/${p.id}/dismiss`, {
       method: 'POST',
@@ -2397,6 +2944,7 @@ function DismissPickupModal({ p, onClose }: { p: any; onClose: () => void }) {
           <button onClick={onClose} className="haptic grid h-8 w-8 place-items-center rounded-full hover:bg-cream text-muted">✕</button>
         </div>
         <div className="p-5 space-y-4">
+          {!warned ? <CancelDriverWarning p={p} onFewerDone={onClose} onCancelAnyway={() => setWarned(true)} onBack={onClose} /> : <>
           <div className="text-[13px] text-muted">Closes this pickup and stops texting for a driver. Stays in history with your reason.</div>
           <fieldset className="space-y-2">
             <legend className="text-[12px] font-extrabold uppercase tracking-[.05em] text-muted mb-1">Reason</legend>
@@ -2429,6 +2977,7 @@ function DismissPickupModal({ p, onClose }: { p: any; onClose: () => void }) {
               {mut.isPending ? 'Dismissing…' : 'Dismiss pickup'}
             </button>
           </div>
+          </>}
         </div>
       </div>
     </div>
@@ -2540,8 +3089,7 @@ function PeopleSidebar({ people, loading, kind, suppliers, suppliersLoading }: {
       <span className="h-2.5 w-2.5 rounded-full shrink-0 ring-1 ring-white/20"
             style={{ background: driverHue(`${v.firstName} ${v.lastName}`) }} />
       <span className="truncate flex-1 text-paper">
-        {v.firstName} {v.lastName}
-        {(v as any).unitNumber != null && <span className="ml-1 text-[#a5c69d] font-semibold text-[11.5px]">#{(v as any).unitNumber}</span>}
+        <Name first={v.firstName} last={v.lastName} />
       </span>
     </div>
   ))}</>;
@@ -2559,55 +3107,7 @@ function PeopleSidebar({ people, loading, kind, suppliers, suppliersLoading }: {
  * provided we filter to that contact list's peers; without kind it shows the
  * total. Returns null when there's nothing unread.
  */
-// Consolidated brief #15 (Aug 18): dispatcher-on-duty action summary at the
-// top of the Live Board. Answers "what requires my attention right now?" —
-// uncovered pickups, pickups within 30 min, unread SMS, pending
-// confirmations. Only shows when there's actually something to act on.
-function OnDutyBanner({ setTab, onFocus }: { setTab: (t: TabKey) => void; onFocus: (f: { label: string; ids: number[] }) => void }) {
-  const q = useQuery({
-    queryKey: ['on-duty-summary'],
-    queryFn: () => onDuty.summary(),
-    refetchInterval: 30_000,
-    refetchOnWindowFocus: true,
-  });
-  const s = q.data?.data;
-  if (!s) return null;
-  const total = Number(s.pickups_need_driver) + Number(s.unread_sms) + Number(s.pickups_within_30m) + Number(s.pending_confirmation);
-  if (total === 0) return null;
-  // abc900 (Aug 20): each chip is a button that jumps to the relevant surface.
-  // Prior version was a plain <span> — clicking it did nothing.
-  // abc901 (Aug 21): the "within 30 min" chip was pointed at the confirmation
-  // anchor, which is unrelated — it should scroll to the Live Board's
-  // "rest of today" pickup list where imminent pickups actually appear.
-  const scrollToConfirm = () => {
-    document.getElementById('needs-confirmation-anchor')
-      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
-  // Oct 5 client (declutter #3): short clickable items on one line.
-  const n1 = (n: number, one: string, many: string) => (n === 1 ? one : many);
-  const items: Array<{ key: string; n: number; text: string; tone: string; onClick: () => void }> = [
-    { key: 'soon', n: Number(s.pickups_within_30m), tone: 'text-clay',
-      text: `⏰ ${s.pickups_within_30m} ${n1(Number(s.pickups_within_30m), 'starts', 'start')} within 30 min`,
-      onClick: () => onFocus({ label: (Number(s.pickups_within_30m) === 1 ? 'starts' : 'start') + ' in the next 30 minutes', ids: (s.pickups_within_30m_ids ?? []).map(Number) }) },
-    { key: 'driver', n: Number(s.pickups_need_driver), tone: 'text-clay',
-      text: `🚗 ${s.pickups_need_driver} overdue, ${n1(Number(s.pickups_need_driver), 'needs', 'need')} a driver`,
-      onClick: () => onFocus({ label: (Number(s.pickups_need_driver) === 1 ? 'needs' : 'need') + ' a driver', ids: (s.pickups_need_driver_ids ?? []).map(Number) }) },
-    { key: 'sms', n: Number(s.unread_sms), tone: 'text-ink',
-      text: `💬 ${s.unread_sms} new ${n1(Number(s.unread_sms), 'reply', 'replies')}`, onClick: () => setTab('driver-messages') },
-    { key: 'confirm', n: Number(s.pending_confirmation), tone: 'text-ink',
-      text: `✋ ${s.pending_confirmation} to confirm`, onClick: scrollToConfirm },
-  ];
-  return (
-    <>
-      {items.filter((c) => c.n > 0).map((c) => (
-        <button key={c.key} type="button" onClick={c.onClick}
-                className={cx('haptic font-semibold underline-offset-2 hover:underline', c.tone)}>
-          {c.text}
-        </button>
-      ))}
-    </>
-  );
-}
+// Oct 21 client (Cleaner Live Board): the OnDutyBanner count chips were removed — the card colors say it.
 
 // Consolidated brief #1 (Aug 18): SMS Threads unread count for the sidebar
 // SMS Composer tab. Polls every 30s.
@@ -2635,12 +3135,20 @@ function DriverMessagesBadge() {
 
 // Oct 9 client: one "Driver messages" inbox. Each tab is the existing panel, unchanged.
 function DriverMessagesPanel({ sub, onSub, onOpenPerson }: { sub: DmSub; onSub: (s: DmSub) => void; onOpenPerson?: (id: number, kind: 'driver' | 'store') => void }) {
-  const tabs: { key: DmSub; label: string; badge?: any }[] = [
-    { key: 'texts',   label: 'Texts',   badge: <SmsUnreadBadge /> },
+  // Oct 22 client (dispatcher view): a dispatcher sees the 1:1 conversations only — Texts, App chat, WhatsApp.
+  const disp = isDispatcherLogin();
+  // Oct 28 client: texts and WhatsApp are ONE list ("Texts & WhatsApp"); the separate WhatsApp tab is gone
+  // (old links to it open the merged list). The unread count includes WhatsApp messages.
+  const tabs: { key: DmSub; label: string; badge?: any }[] = disp ? [
+    { key: 'texts',    label: 'Texts & WhatsApp', badge: <SmsUnreadBadge /> },
+    { key: 'chat',     label: 'App chat', badge: <UnreadBadge kind="volunteers" /> },
+  ] : [
+    { key: 'texts',   label: 'Texts & WhatsApp', badge: <SmsUnreadBadge /> },
     { key: 'chat',    label: 'App chat', badge: <UnreadBadge kind="volunteers" /> },
     { key: 'replies', label: 'Replies to pickup texts' },
     { key: 'words',   label: 'Code words' }, // Oct 11 client
   ];
+  if (!tabs.some((t) => t.key === sub)) sub = 'texts';
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-1.5 border-b border-line overflow-x-auto">
@@ -2652,7 +3160,7 @@ function DriverMessagesPanel({ sub, onSub, onOpenPerson }: { sub: DmSub; onSub: 
           </button>
         ))}
       </div>
-      {sub === 'texts' ? <SmsThreadsPanel /> : sub === 'chat' ? <ChatList kind="volunteers" />
+      {sub === 'texts' ? <SmsThreadsPanel /> : sub === 'chat' ? <ChatList kind="volunteers" /> : sub === 'whatsapp' ? <WaThreadsPanel />
         : sub === 'words' ? <CodeWordsPanel onOpenPerson={onOpenPerson} /> : <DriverRepliesPanel />}
     </div>
   );
@@ -2679,21 +3187,6 @@ function UnreadBadge({ kind, peerUserId }: { kind?: 'stores' | 'volunteers'; pee
   return <span className="ml-auto inline-grid place-items-center min-w-[20px] h-[20px] px-1.5 rounded-full bg-red-500 text-paper text-[11px] font-extrabold">{total > 99 ? '99+' : total}</span>;
 }
 
-/** Human-friendly relative time like "2m", "45m", "3h", "yesterday", "Mar 4" */
-function relTime(iso: string): string {
-  const d = new Date(iso);
-  const ms = Date.now() - d.getTime();
-  if (isNaN(ms)) return '';
-  const min = Math.floor(ms / 60_000);
-  if (min < 1) return 'now';
-  if (min < 60) return `${min}m`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h`;
-  const day = Math.floor(hr / 24);
-  if (day < 2) return 'yesterday';
-  if (day < 7) return `${day}d`;
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
 
 function ChatList({ kind }: { kind: 'stores' | 'volunteers' }) {
   const [selected, setSelected] = useState<{ userId: number; name: string; color: string } | null>(null);
@@ -2775,7 +3268,7 @@ function ChatList({ kind }: { kind: 'stores' | 'volunteers' }) {
         const preview = thread?.lastBody ? `${thread.lastFromMe ? 'You: ' : ''}${thread.lastBody}` : 'Tap to open chat';
         const hasUnread = (thread?.unread ?? 0) > 0;
         // "when" text next to preview — relative time for chat rows
-        const whenText = thread?.lastAt ? relTime(thread.lastAt) : '';
+        const whenText = thread?.lastAt ? msgWhen(thread.lastAt) : ''; // Oct 27 client: "Always write date"
         return (
           <button key={rowKey} onClick={() => setSelected({ userId: r.user_id, name, color })}
                   className={cx('w-full text-left border rounded-[14px] overflow-hidden haptic transition',
@@ -2899,16 +3392,19 @@ function officeStatusOf(p: PiRow): OfficeStatus {
   if (s === 'en_route' || s === 'picked_up')  return 'onway';
   return (p.signups?.length ?? 0) > 0 ? 'assigned' : 'need';
 }
-const OFFICE_SPILL: Record<OfficeStatus, { bg: string; fg: string; label: string }> = {
-  need:     { bg: 'bg-clay-soft',  fg: 'text-clay',       label: 'Needs a driver' },
-  assigned: { bg: 'bg-sky-soft',   fg: 'text-sky-deep',   label: 'Driver on it' },
-  onway:    { bg: 'bg-amber-soft', fg: 'text-[#9a7415]',  label: 'On the Way' },
-  complete: { bg: 'bg-sage',       fg: 'text-forest',     label: 'Completed' },
-  complete_nokiosk: { bg: 'bg-amber-soft', fg: 'text-[#9a7415]', label: 'Taken, no kiosk sign-in' },
-  review:   { bg: 'bg-amber-soft', fg: 'text-[#9a7415]',  label: 'Needs review' },
-  expired:  { bg: 'bg-clay/10',    fg: 'text-clay',       label: 'Expired — no driver' },
-  missed:   { bg: 'bg-clay/10',    fg: 'text-clay',       label: 'Confirmed missed' },
+// Oct 23 client ("same style everywhere"): office statuses → the one status map (src/display.ts).
+// `csv` keeps the export's old words (exports stay as they were).
+const OFFICE_KEY: Record<OfficeStatus, StatusKey> = {
+  need: 'needs_driver', assigned: 'covered', onway: 'on_the_way', complete: 'done', complete_nokiosk: 'nokiosk',
+  review: 'review', expired: 'expired', missed: 'missed',
 };
+const OFFICE_CSV: Record<OfficeStatus, string> = {
+  need: 'Needs a driver', assigned: 'Driver on it', onway: 'On the Way', complete: 'Completed', complete_nokiosk: 'Taken, no kiosk sign-in',
+  review: 'Needs review', expired: 'Expired — no driver', missed: 'Confirmed missed',
+};
+const OFFICE_SPILL = Object.fromEntries((Object.keys(OFFICE_KEY) as OfficeStatus[]).map((k) => [k, {
+  key: OFFICE_KEY[k], pill: STATUS[OFFICE_KEY[k]].pill, label: STATUS[OFFICE_KEY[k]].word, csv: OFFICE_CSV[k],
+}])) as Record<OfficeStatus, { key: StatusKey; pill: string; label: string; csv: string }>;
 
 /**
  * batch abc820 · Pickups-tab sub-tab strip. Always visible so tabs stay
@@ -2917,14 +3413,24 @@ const OFFICE_SPILL: Record<OfficeStatus, { bg: string; fg: string; label: string
  * by the parent (see PICKUPS_SUB_EMPTY).
  */
 // Oct 2 client fix (UI plan §3): unified Pickups views.
-type PickupsSubTab = 'today' | 'list' | 'calendar' | 'history' | 'recurring' | 'attention';
+/** Oct 23/26/27 client: a day cancelled only because its steady pickup was archived, paused, deleted or
+ *  its schedule was changed (e.g. Hive's Tuesdays moved to Hive Deli) isn't a real cancellation —
+ *  keep it off the Live Board and Pickups → Today (it stays in History). */
+// Oct 29 client: + "drop-off place: no set days" (days made before a drop-off place's days were cleared).
+function scheduleOnlyCancel(p: any): boolean {
+  // Nov 1 client: a day taken off a steady schedule with no reason text (cancelled_by source 'auto-schedule')
+  // is not a real cancellation either — "Why u show by pickups, it's one time cancel or always?"
+  if (String(p?.cancelled_by?.source ?? '') === 'auto-schedule') return true;
+  return /^(steady template (archived|paused|deleted)|recurring schedule changed|drop-off place: no set days)$/i.test(String(p?.cancellation_reason ?? '').trim());
+}
+type PickupsSubTab = 'today' | 'calendar' | 'history' | 'recurring' | 'attention' | 'closeout'; // Oct 21 client: + Close out
 const PICKUPS_SUB_EMPTY: Record<PickupsSubTab, string> = {
   today:     'No pickups scheduled for today.',
-  list:      'No pickups match these dates and filters.',
   calendar:  '',
   history:   'No past pickups match these dates and filters.',
   recurring: '',
   attention: 'No pickups need attention right now.',
+  closeout:  '',
 };
 // Oct 2 client fix (UI plan §3): List / History views of the unified Pickups
 // section. Any date range (own fetch, not limited to the shared 60-day cache),
@@ -2955,7 +3461,7 @@ function pickupHaystack(p: PiRow): string {
     p.ref_number, p.id, p.suppliers, p.steady_name, p.supplier_address, p.supplier_city,
     p.pickup_address, p.contact_name, p.contact_phone, p.food_description, p.estimated_quantity,
     p.notes, (p as any).special_instructions, (p as any).pickup_instructions,
-    os === 'cancelled' ? 'Cancelled' : OFFICE_SPILL[os].label,
+    os === 'cancelled' ? 'Cancelled' : `${OFFICE_SPILL[os].label} ${OFFICE_SPILL[os].csv}`,
     ...(p.signups ?? []).map((s) => `${s.first_name ?? ''} ${s.last_name ?? ''} ${s.unit_number ?? ''}`),
     p.steady_pickup_id != null ? 'steady' : 'one-time', p.scheduled_date, fmtTime(String(p.scheduled_time ?? '').slice(0, 5)),
   ].filter((v) => v != null && v !== '').join(' ').toLowerCase();
@@ -2976,7 +3482,7 @@ function PickupSearchBar({ value, onChange }: { value: string; onChange: (v: str
 }
 
 function PickupsRangeView({ mode, search, onOpen, onAssign, onEdit, onDuplicate, onAdd }: {
-  mode: 'list' | 'history';
+  mode: 'history'; // Oct 21 client: the List tab is gone (History's dates can be in the future)
   search: string;
   onOpen: (id: number) => void;
   onAssign?: (p: PiRow) => void;
@@ -2985,8 +3491,8 @@ function PickupsRangeView({ mode, search, onOpen, onAssign, onEdit, onDuplicate,
   onAdd?: () => void;
 }) {
   const today = nyToday();
-  const [from, setFrom] = useState(mode === 'list' ? today : shiftDay(today, -30));
-  const [to, setTo]     = useState(mode === 'list' ? shiftDay(today, 7) : shiftDay(today, -1));
+  const [from, setFrom] = useState(shiftDay(today, -30));
+  const [to, setTo]     = useState(shiftDay(today, -1));
   const q = search;
   const [status, setStatus] = useState<'' | OfficeStatus | 'cancelled'>('');
   const [kind, setKind] = useState<'' | 'steady' | 'one-time'>('');
@@ -3002,7 +3508,7 @@ function PickupsRangeView({ mode, search, onOpen, onAssign, onEdit, onDuplicate,
   const supplierOptions = useMemo(() => [...new Set(rows.map(rowLabel))].sort(), [rows]);
   const driverOptions = useMemo(() => [...new Set(rows.flatMap(rowDrivers))].sort(), [rows]);
   const statusOf = (p: PiRow) => String(p.status || '').toLowerCase() === 'cancelled' ? 'cancelled' : officeStatusOf(p);
-  const statusLabelOf = (p: PiRow) => { const s = statusOf(p); return s === 'cancelled' ? 'Cancelled' : OFFICE_SPILL[s].label; };
+  const statusLabelOf = (p: PiRow) => { const s = statusOf(p); return s === 'cancelled' ? 'Cancelled' : OFFICE_SPILL[s].csv; }; // CSV only
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const out = rows.filter((p) => {
@@ -3018,7 +3524,7 @@ function PickupsRangeView({ mode, search, onOpen, onAssign, onEdit, onDuplicate,
       return pickupHaystack(p).includes(needle);
     });
     const key = (p: PiRow) => String(p.scheduled_date).slice(0, 10) + String(p.scheduled_time);
-    return out.sort((a, b) => mode === 'list' ? key(a).localeCompare(key(b)) : key(b).localeCompare(key(a)));
+    return out.sort((a, b) => key(b).localeCompare(key(a)));
   }, [rows, q, status, kind, supplier, driver, verify, mode]);
   // Oct 11 client: speed — show 50 pickups at a time ("Show more"); a long
   // History range used to draw thousands of cards at once. Day headers keep
@@ -3057,7 +3563,7 @@ function PickupsRangeView({ mode, search, onOpen, onAssign, onEdit, onDuplicate,
     URL.revokeObjectURL(a.href);
   }
   const sel = 'rounded-[9px] border border-line bg-paper px-2 py-1.5 text-[12px]';
-  const dayLabel = (d: string) => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+  const dayLabel = (d: string) => dayText(d); // Oct 23 client: one date format
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -3079,7 +3585,7 @@ function PickupsRangeView({ mode, search, onOpen, onAssign, onEdit, onDuplicate,
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <select value={status} onChange={(e) => setStatus(e.target.value as any)} className={sel}>
           <option value="">All statuses</option>
-          {(Object.keys(OFFICE_SPILL) as OfficeStatus[]).map((k) => <option key={k} value={k}>{({ complete: 'Completed — marked done', complete_nokiosk: 'Taken, no kiosk sign-in' } as Record<string, string>)[k] ?? OFFICE_SPILL[k].label}</option>)}
+          {(Object.keys(OFFICE_SPILL) as OfficeStatus[]).map((k) => <option key={k} value={k}>{OFFICE_SPILL[k].label}</option>)}
           <option value="cancelled">Cancelled</option>
         </select>
         <select value={kind} onChange={(e) => setKind(e.target.value as any)} className={sel}>
@@ -3097,8 +3603,8 @@ function PickupsRangeView({ mode, search, onOpen, onAssign, onEdit, onDuplicate,
         </select>
         <select value={verify} onChange={(e) => setVerify(e.target.value as any)} className={sel}>
           <option value="">Any verification</option>
-          <option value="kiosk">Completed – verified</option>
-          <option value="nokiosk">Taken, no kiosk sign-in</option>
+          <option value="kiosk">{STATUS.done.word} (kiosk)</option>
+          <option value="nokiosk">{STATUS.nokiosk.word}</option>
         </select>
         <span className="text-[11.5px] text-muted ml-auto">{rangeQ.isFetching ? 'Loading…' : `${filtered.length} of ${rows.length} pickups`}</span>
       </div>
@@ -3148,11 +3654,11 @@ function PickupsSubTabStrip({
 }) {
   const tabs: { key: PickupsSubTab; label: string; count?: number; accent?: boolean }[] = [
     { key: 'today',     label: 'Today',              count: counts.today },
-    { key: 'list',      label: 'List' },
     { key: 'calendar',  label: 'Calendar' },
     { key: 'history',   label: 'History' },
     { key: 'recurring', label: 'Steady' },
     { key: 'attention', label: 'Needs attention',    count: counts.attention, accent: counts.attention > 0 },
+    { key: 'closeout',  label: 'Close out' }, // Oct 21 client: end-of-day close-out
   ];
   return (
     <div className="mb-4 flex items-center gap-1.5 border-b border-line overflow-x-auto">
@@ -3199,7 +3705,7 @@ function groupByDate(items: PiRow[]) {
     const closed = ['completed', 'delivered', 'cancelled', 'missed'].includes(status) || !!it.cancelled_at
       || CLOSED_OFFICE_STATUSES.includes(officeStatusOf(it));
     const hasDriver = (it.signups?.length ?? 0) > 0;
-    if (!closed && !hasDriver) {
+    if (!closed && !hasDriver && !(it as any).dropOffOnly) { // Oct 22 client: drop-off days never "Looking for a driver"
       const startMs = new Date(it.scheduled_date.slice(0, 10) + 'T' +
         (it.scheduled_time || '00:00:00')).getTime();
       const windowEnd = it.must_pickup_by ? new Date(it.must_pickup_by).getTime() : startMs + 60 * 60_000;
@@ -3215,9 +3721,11 @@ function groupByDate(items: PiRow[]) {
     // Oct 13 client: a reposted pickup still open goes under TODAY, not its old date.
     const d = showsUnderToday(it) ? new Date(today) : new Date(it.scheduled_date.slice(0, 10) + 'T00:00:00');
     let label: string;
-    if (sameDay(d, today)) label = 'Today · ' + d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
-    else if (sameDay(d, tomorrow)) label = 'Tomorrow · ' + d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
-    else label = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    // Oct 23 client: "Thu Oct 23" everywhere (src/display.ts dayText)
+    const pretty = dayText(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+    if (sameDay(d, today)) label = 'Today · ' + pretty;
+    else if (sameDay(d, tomorrow)) label = 'Tomorrow · ' + pretty;
+    else label = pretty;
     const key = d.toISOString().slice(0, 10);
     (groups.get(key) ?? groups.set(key, { key, label, items: [] }).get(key)!).items.push(it);
   }
@@ -3278,7 +3786,7 @@ function SmsComboPanel() {
     { key: 'compose',    label: 'Compose' },
     { key: 'groups',     label: 'Groups' },
     { key: 'broadcast',  label: 'Broadcast (push)' },
-    { key: 'whatsapp',   label: 'WhatsApp' },
+    ...(canOfficeOnly(getUser()?.role) ? [{ key: 'whatsapp' as SmsSubTab, label: 'WhatsApp' }] : []), // Oct 21 client: WhatsApp setup = office only
     { key: 'wa-threads', label: 'WA threads' },
   ];
   return (
@@ -3301,7 +3809,7 @@ function SmsComboPanel() {
         {sub === 'threads'   && <SmsThreadsPanel />}
         {sub === 'groups'    && <SmsGroupsPanel />}
         {sub === 'broadcast' && <BroadcastPanel />}
-        {sub === 'whatsapp'  && <WhatsappAdminPanel />}
+        {sub === 'whatsapp'  && canOfficeOnly(getUser()?.role) && <WhatsappAdminPanel />}
         {sub === 'wa-threads' && <WaThreadsPanel />}
         {sub === 'jewish-calendar' && <JewishCalendarPanel />}
       </div>
@@ -3376,6 +3884,8 @@ function UsuallyActiveNow({ onOpenPerson }: { onOpenPerson: (id: number) => void
   const thin = d.daysWithActivity < 3;
   // Oct 8 client: plain words, never "0.1 drivers".
   const howMany = (a: number) => a < 0.5 ? 'usually quiet' : a < 1.5 ? 'usually about 1 driver out' : `usually about ${Math.round(a)} drivers out`;
+  // Oct 22 client (neater): the header line — "Usually ~1 driver out now · busiest 10 PM".
+  const howShort = (a: number) => a < 0.5 ? 'Usually quiet now' : a < 1.5 ? 'Usually ~1 driver out now' : `Usually ~${Math.round(a)} drivers out now`;
   const max = Math.max(0.1, ...d.hours.map((h) => h.avg));
   const shown = d.hours.filter((h) => h.hr >= 7 && h.hr <= 23);
   const names = (list: TypicalNow['topDow']) => list.length === 0
@@ -3388,19 +3898,15 @@ function UsuallyActiveNow({ onOpenPerson }: { onOpenPerson: (id: number) => void
         </span>
       ));
   return (
-    <div className="mb-4 rounded-[14px] border border-line bg-paper">
-      <button onClick={() => setOpen(!open)} className="haptic flex w-full flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-left">
-        <span className="text-[13px] text-ink">
-          <b>{day} · {hourLabel(d.hour)}</b>
-          {thin
-            ? <span className="text-muted"> — not enough history for {day}s yet</span>
-            : <> — <b>{howMany(now)}</b> at this hour
-                {later && <span className="text-muted"> · busiest later today: {hourLabel(later.hr)}</span>}</>}
+    <div className="mb-3" data-testid="live-usually">
+      <button onClick={() => setOpen(!open)} className="haptic inline-flex max-w-full items-center gap-2 text-left text-[12px] text-muted hover:text-ink">
+        <span className="truncate">
+          {thin ? `Not enough history for ${day}s yet` : <>{howShort(now)}{later && <> · busiest {hourLabel(later.hr)}</>}</>}
         </span>
-        <span className="text-[12px] font-bold text-forest">{open ? 'Hide' : 'Who usually?'}</span>
+        <span className="shrink-0 font-bold text-forest/80">{open ? '▾ Hide' : 'Who usually?'}</span>
       </button>
       {open && (
-        <div className="border-t border-line px-4 py-3 space-y-3">
+        <div className="mt-2 rounded-[14px] border border-line bg-paper px-4 py-3 space-y-3">
           <div>
             <div className="text-[11.5px] font-extrabold uppercase tracking-[.05em] text-muted mb-1.5">
               How busy a {day} usually is, hour by hour (last {d.weeks} weeks)
@@ -3455,7 +3961,7 @@ function SmsPausedGlobalBanner({ onOpen }: { onOpen: () => void }) {
   const at = q.data.pausedAt ? fmtDateTimeEastern(q.data.pausedAt) : null;
   return (
     <div className="bg-clay text-paper px-4 py-2 text-[13px] font-bold flex flex-wrap items-center gap-x-3 gap-y-1">
-      <span>⏸ ALL messages are PAUSED — automatic and manual{at ? ` · since ${at}` : ''}{q.data.pausedBy ? ` by ${q.data.pausedBy}` : ''}{q.data.resumeAt ? ` · resumes ${new Date(q.data.resumeAt).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: true })}` : ' · until someone resumes'}.</span>
+      <span>⏸ ALL messages are PAUSED — automatic and manual{at ? ` · since ${at}` : ''}{q.data.pausedBy ? ` by ${q.data.pausedBy}` : ''}{q.data.resumeAt ? ` · resumes ${whenAt(q.data.resumeAt)}` : ' · until someone resumes'}.</span>
       <button onClick={onOpen} className="haptic underline">Open Holiday &amp; SMS Controls to resume</button>
     </div>
   );
@@ -3506,8 +4012,8 @@ function SmsPauseBanner() {
   };
   const overrideLeft = Math.max(0, Math.round((smsOverrideUntil() - Date.now()) / 60_000));
   if (q.data.paused) {
-    const at = q.data.pausedAt ? new Date(q.data.pausedAt).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: true }) : '';
-    const res = q.data.resumeAt ? new Date(q.data.resumeAt).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }) : null;
+    const at = q.data.pausedAt ? whenAt(q.data.pausedAt) : ''; // Oct 23 client: one date + time format
+    const res = q.data.resumeAt ? whenAt(q.data.resumeAt) : null;
     return (
       <div className="space-y-2">
         <div className="rounded-[12px] border-2 border-clay bg-clay/10 p-3 flex flex-wrap items-center gap-3">
@@ -3710,8 +4216,8 @@ function UncoveredAlertsPanel() {
                 <button key={v.id} onClick={() => addM.mutate(Number(v.id))} disabled={addM.isPending}
                         className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-cream/50 disabled:opacity-40">
                   <div className="flex-1 min-w-0">
-                    <div className="font-bold text-[12.5px] text-ink truncate">{v.firstName} {v.lastName}{v.unitNumber != null ? ` · #${v.unitNumber}` : ''}</div>
-                    <div className="text-[11px] text-muted truncate">{v.phonePrimary ?? '—'}</div>
+                    <div className="font-bold text-[12.5px] text-ink truncate"><Name first={v.firstName} last={v.lastName} /></div>
+                    <div className="text-[11px] text-muted truncate">{v.phonePrimary ? displayPhone(v.phonePrimary) : '—'}</div>
                   </div>
                   <span className="text-[11px] font-bold text-forest">+ Add</span>
                 </button>
@@ -3729,8 +4235,8 @@ function UncoveredAlertsPanel() {
             {rows.map((m) => (
               <div key={m.volunteerId} className="px-4 py-2.5 flex items-center gap-3 text-[13px]">
                 <div className="flex-1 min-w-0">
-                  <div className="font-bold text-ink truncate">{m.firstName} {m.lastName}{m.unitNumber != null ? ` · #${m.unitNumber}` : ''}</div>
-                  <div className="text-[11.5px] text-muted truncate">{m.phone ?? '—'} · added {fmtDay(m.addedAt)}</div>
+                  <div className="font-bold text-ink truncate"><Name first={m.firstName} last={m.lastName} /></div>
+                  <div className="text-[11.5px] text-muted truncate">{m.phone ? displayPhone(m.phone) : '—'} · added {fmtDay(m.addedAt)}</div>
                 </div>
                 <button onClick={() => { void uiConfirm(`Remove ${m.firstName} ${m.lastName} from the 90-min alert group?`).then((ok) => { if (ok) { removeM.mutate(m.volunteerId); } }); }}
                         className="haptic text-[12.5px] font-bold text-clay hover:underline">Remove</button>
@@ -3853,7 +4359,7 @@ function DispDayCard({ label, rows, onAssign, onUnassign }: {
               {r.volunteerId ? (
                 <div>
                   <div className="font-bold text-ink truncate">{r.firstName} {r.lastName}</div>
-                  {r.phone && <div className="text-[11px] text-muted truncate">{r.phone}</div>}
+                  {r.phone && <div className="text-[11px] text-muted truncate">{displayPhone(r.phone)}</div>}
                 </div>
               ) : (
                 <div className="font-bold text-clay">Open — needs dispatcher</div>
@@ -3920,8 +4426,8 @@ function AssignDispatcherModal({ row, weekStart, onClose, onSaved }: {
               <button key={id} onClick={() => assignM.mutate(id)} disabled={assignM.isPending}
                       className="w-full text-left px-3 py-2 flex items-center gap-2 rounded-[8px] hover:bg-cream/60 disabled:opacity-40">
                 <div className="flex-1 min-w-0">
-                  <div className="font-bold text-[13px] text-ink truncate">{first} {last}</div>
-                  <div className="text-[11.5px] text-muted truncate">{phone}</div>
+                  <div className="font-bold text-[13px] text-ink truncate"><Name first={first} last={last} /></div>
+                  <div className="text-[11.5px] text-muted truncate">{phone ? displayPhone(phone) : ''}</div>
                 </div>
                 <span className="text-[11px] font-bold text-forest">Assign →</span>
               </button>

@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import { cx } from './design';
+import { displayPhone } from './display'; // Oct 23 client
 
 type InviteState = 'none' | 'pending' | 'expired' | 'used';
 type Status = {
@@ -131,7 +132,7 @@ export function VolunteerAppInviteModal({ volunteerId, name, onClose }: { volunt
             )}
             <button onClick={() => send.mutate('sms')} disabled={!!p.textProblem || !text.trim() || send.isPending} data-testid="vol-invite-sms"
                     className="haptic rounded-[10px] bg-forest px-4 py-2 text-[13px] font-bold text-paper disabled:opacity-50">
-              {send.isPending ? 'Sending…' : `Send by text${p.phone ? ` to ${p.phone}` : ''}`}
+              {send.isPending ? 'Sending…' : `Send by text${p.phone ? ` to ${displayPhone(p.phone)}` : ''}`}
             </button>
           </div>
         </>
@@ -229,9 +230,8 @@ function BulkInviteModal({ data, onClose }: { data: { eligible: BulkRow[]; skipp
           <label key={r.id} className="flex items-center gap-2 px-3 py-1.5 text-[12.5px]">
             <input type="checkbox" className="h-4 w-4 accent-forest" disabled={running} checked={picked.has(r.id)}
                    onChange={(e) => setPicked((s) => { const n = new Set(s); if (e.target.checked) n.add(r.id); else n.delete(r.id); return n; })} />
-            <span className="font-bold">{r.name}</span>
-            {r.unitNumber != null && <span className="text-muted">#{r.unitNumber}</span>}
-            <span className="ml-auto text-muted tabular-nums">{results[r.id] ?? r.phone}</span>
+            <span className="font-bold"><bdi dir="auto">{r.name}</bdi></span>
+            <span className="ml-auto text-muted tabular-nums">{results[r.id] ?? displayPhone(r.phone)}</span>
           </label>
         ))}
       </div>

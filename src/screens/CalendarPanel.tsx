@@ -15,6 +15,7 @@ import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { admin, api } from '../api';
 import { cx } from '../design';
+import { STATUS, shortAddress, statusKeyOf } from '../display'; // Oct 23 client: one status map
 import { ChevronLeft, ChevronRight, Download } from 'lucide-react';
 
 const NY_TZ = 'America/New_York';
@@ -133,39 +134,36 @@ type StatusChip = 'needs_driver' | 'covered' | 'missed';
 // ── colour language (must be consistent everywhere) ─────────────────────
 function statusColors(s: ScheduleEvent['status']) {
   switch (s) {
+    // Oct 23 client ("same style everywhere"): pill colors from the one status map (src/display.ts STATUS).
     case 'covered':
     case 'taken':
-      return { pill: 'bg-sage/40 text-forest-deep border border-forest/30', bar: 'border-forest' };
     case 'assigned':
-      return { pill: 'bg-sage/40 text-forest-deep border border-forest/30', bar: 'border-forest' };
+      return { pill: `border ${STATUS.covered.pill}`, bar: 'border-sky' };
     case 'needs_driver':
     case 'empty':
-      return { pill: 'bg-amber/15 text-forest-deep border border-amber/50', bar: 'border-amber' };
-    case 'missed':
-      return { pill: 'bg-clay/10 text-clay border border-clay/40', bar: 'border-clay' };
-    case 'completed':
-      return { pill: 'bg-forest/15 text-forest-deep border border-forest/40', bar: 'border-forest-deep' };
+    // Consolidated brief #7 (Aug 18): "available" = no driver = Needs a driver.
     case 'available':
-      // Consolidated brief #7 (Aug 18): "available" was showing as a neutral
-      // grey chip which read as covered/informational — but a pickup with no
-      // driver is really "Needs driver". Merge the visual with needs_driver.
-      return { pill: 'bg-amber/15 text-forest-deep border border-amber/50', bar: 'border-amber' };
+      return { pill: `border ${STATUS.needs_driver.pill}`, bar: 'border-clay' };
+    case 'missed':
+      return { pill: `border ${STATUS.missed.pill}`, bar: 'border-clay' };
+    case 'completed':
+      return { pill: `border ${STATUS.done.pill}`, bar: 'border-forest' };
     default:
       return { pill: 'bg-cream text-muted border border-line', bar: 'border-line' };
   }
 }
 function statusLabel(s: ScheduleEvent['status']): string {
   switch (s) {
-    case 'covered':      return 'Covered';
-    case 'taken':        return 'Assigned';
-    case 'assigned':     return 'Assigned';
-    case 'needs_driver': return 'Needs driver';
+    case 'covered':      return STATUS.covered.word;
+    case 'taken':        return STATUS.covered.word;
+    case 'assigned':     return STATUS.covered.word;
+    case 'needs_driver': return STATUS.needs_driver.word;
     case 'empty':        return 'Needs coverage';
-    case 'missed':       return 'Missed';
-    case 'completed':    return '✓ Completed';
+    case 'missed':       return STATUS.missed.word;
+    case 'completed':    return `✓ ${STATUS.done.word}`;
     // Consolidated brief #7 (Aug 18): never render "Available" — it read as
     // "covered". A pickup with no assigned driver is always "Needs driver".
-    case 'available':    return 'Needs driver';
+    case 'available':    return STATUS.needs_driver.word;
     default:             return String(s);
   }
 }
@@ -374,7 +372,7 @@ export function CalendarPanel({ onOpenScheduleDownload, onNavigateTab, onOpenPic
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-[10.5px] font-extrabold uppercase tracking-[.05em] text-muted mr-1">Status</span>
-          <Chip label="Needs Driver"      active={statusChips.has('needs_driver')} onClick={() => toggleStatus('needs_driver')} tone="amber" />
+          <Chip label={STATUS.needs_driver.word} active={statusChips.has('needs_driver')} onClick={() => toggleStatus('needs_driver')} tone="amber" />
           <Chip label="Covered/Assigned"  active={statusChips.has('covered')}      onClick={() => toggleStatus('covered')}      tone="sage" />
           <Chip label="Missed"            active={statusChips.has('missed')}       onClick={() => toggleStatus('missed')}       tone="clay" />
         </div>
@@ -763,16 +761,16 @@ function EventTile({ e, compact, onOpen }: {
       </div>
       <div className={cx('font-bold text-ink leading-tight mt-0.5',
                          compact ? 'text-[12px]' : 'text-[13.5px]')}>
-        {e.title}
+        <bdi dir="auto">{e.title}</bdi>
       </div>
       {!compact && e.subtitle && (
-        <div className="text-[11.5px] text-muted mt-0.5 truncate">{e.subtitle}</div>
+        <div className="text-[11.5px] text-muted mt-0.5 truncate" title={e.subtitle}>{shortAddress(e.subtitle)}</div>
       )}
       <div className="flex items-center justify-between gap-1 mt-1">
-        <span className={cx('inline-block rounded-full px-1.5 py-0.5', c.pill,
+        <span className={cx('inline-block rounded-full px-1.5 py-0.5', (e as any).outcomeLabel ? `border ${STATUS[statusKeyOf({ outcome_label: (e as any).outcomeLabel })].pill}` : c.pill,
                             compact ? 'text-[9.5px] font-extrabold uppercase tracking-[.05em]'
                                     : 'text-[10.5px] font-extrabold uppercase tracking-[.05em]')}>
-          {(e as any).outcomeLabel ?? statusLabel(e.status)}
+          {(e as any).outcomeLabel ? STATUS[statusKeyOf({ outcome_label: (e as any).outcomeLabel })].word : statusLabel(e.status)}
         </span>
         {showCounts && (
           <span className={cx('text-muted', compact ? 'text-[10.5px]' : 'text-[11.5px]')}>

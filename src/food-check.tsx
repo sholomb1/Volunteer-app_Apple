@@ -11,6 +11,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import { uiConfirm, uiNotify } from './ui-dialogs';
 import { cx } from './design';
+import { nyToday } from './time-format'; // Oct 21 client: confirm only on its day
 
 // ---------------------------------------------------------------- steady form
 export type FoodCheckSetting = { on: boolean; hours: number };
@@ -139,6 +140,10 @@ export function StoreTextLines({ p }: { p: any }) {
   const st: StoreTexts = p?.store_texts;
   const qc = useQueryClient();
   const held = !!st?.held;
+  // Oct 21 client: Send to drivers / Cancel today (and "Needs confirmation") only on the pickup's day;
+  // a future one says "Confirm on the day".
+  const heldOpen = held && !p?.cancelled_at && String(p?.status ?? '') !== 'cancelled';
+  const isToday = String(p?.scheduled_date ?? '').slice(0, 10) === nyToday();
   const food = foodCheckLine(st?.food, held);
   const act = useMutation({
     mutationFn: (what: 'send' | 'cancel') => api(`/api/pickup-instances/${p.id}/food-check/${what}`, { method: 'POST', body: '{}' }),
@@ -149,16 +154,30 @@ export function StoreTextLines({ p }: { p: any }) {
     },
     onError: (e: Error) => uiNotify(e.message, 'err'),
   });
+  // Oct 21 client (Cleaner Live Board): Confirm / Decline right on the (orange) card — the box at the top is gone.
+  const conf = useMutation({
+    mutationFn: (what: 'confirm' | 'decline') => api(`/api/pickup-instances/${p.id}/${what}`, { method: 'POST', body: '{}' }),
+    onSuccess: (_d, what) => {
+      uiNotify(what === 'confirm' ? 'Confirmed for today.' : 'Declined: cancelled for today, drivers are not texted.', 'ok');
+      qc.invalidateQueries({ queryKey: ['admin-pickups'] });
+      qc.invalidateQueries({ queryKey: ['needs-confirmation'] });
+    },
+    // Oct 21 client: a press that "did nothing" says why (e.g. already declined).
+    onError: (e: Error) => { uiNotify(e.message, 'err'); qc.invalidateQueries({ queryKey: ['admin-pickups'] }); },
+  });
   const driverTold = driverToldLine(st?.driver);
   const cnShow = contactNoticeShown(p); // Oct 14 client
-  if (!food && !st?.told && !st?.cancel && !driverTold && !cnShow) return null;
+  if (!food && !heldOpen && !st?.told && !st?.cancel && !driverTold && !cnShow) return null;
   const who = st?.told?.action === 'store_ontheway_text' ? 'Store' : 'Donor';
   return (
     <div className="pt-0.5 space-y-1" data-testid="store-text-lines" onClick={(e) => e.stopPropagation()}>
       {food && (
         <div className="flex flex-wrap items-center gap-1.5 text-[11.5px]">
           <span className={cx('inline-flex items-center font-bold rounded-full px-2 py-0.5', TONE[food.tone])}>🥖 {food.text}</span>
-          {held && st?.food?.action !== 'food_check_answer' && (
+          {heldOpen && !isToday && st?.food?.action !== 'food_check_answer' && (
+            <span className="text-[11.5px] font-semibold text-muted" data-testid="confirm-on-the-day">Confirm on the day</span>
+          )}
+          {heldOpen && isToday && st?.food?.action !== 'food_check_answer' && (
             <>
               <button disabled={act.isPending} onClick={() => act.mutate('send')}
                       className="haptic text-[11.5px] font-extrabold px-2.5 py-1 rounded-[9px] bg-forest text-paper hover:brightness-110 disabled:opacity-50">
@@ -173,6 +192,23 @@ export function StoreTextLines({ p }: { p: any }) {
           )}
         </div>
       )}
+      {/* Oct 21 client: a needs-confirmation pickup (no store check) — the prompt only on its day. */}
+      {!food && heldOpen && (isToday
+        ? (
+          <div className="flex flex-wrap items-center gap-1.5 text-[11.5px]" data-testid="needs-confirmation-today">
+            <span className="font-bold text-[#9a7415]">✋ Needs confirmation today</span>
+            <button disabled={conf.isPending} onClick={() => conf.mutate('confirm')}
+                    className="haptic text-[11.5px] font-extrabold px-2.5 py-1 rounded-[9px] bg-forest text-paper hover:brightness-110 disabled:opacity-50">
+              {conf.isPending && conf.variables === 'confirm' ? '…' : 'Confirm'}
+            </button>
+            <button disabled={conf.isPending}
+                    onClick={() => { void uiConfirm('Decline this pickup for today? It will be cancelled and drivers will not be notified.').then((ok) => { if (ok) conf.mutate('decline'); }); }}
+                    className="haptic text-[11.5px] font-extrabold px-2.5 py-1 rounded-[9px] border border-clay text-clay hover:bg-clay-soft disabled:opacity-50">
+              {conf.isPending && conf.variables === 'decline' ? '…' : 'Decline'}
+            </button>
+          </div>
+        )
+        : <div className="text-[11.5px] font-semibold text-muted" data-testid="confirm-on-the-day">Confirm on the day</div>)}
       {driverTold && <div className="text-[11.5px] font-semibold text-muted" data-testid="driver-told">🚐 {driverTold}</div>}
       {cnShow && <ContactNoticeLine p={p} />}
       {(st?.told || st?.cancel) && (

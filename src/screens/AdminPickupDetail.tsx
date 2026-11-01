@@ -11,24 +11,35 @@
  * (DriverPickerModal) — no duplicate write path.
  */
 import { Tip } from '../design';
+import { RunTag, runPlaceOf } from '../runs'; // Oct 30 client: 🚚 Run to Lakewood / Fallsburg
 import { ContactNoticeLine } from '../food-check'; // Oct 14 client
 import { StorePhotoCard } from '../store-photo'; // Oct 14 client
 import { uiConfirm, uiNotify } from '../ui-dialogs';
 import { cancelledByText } from '../cancelled-by'; // Oct 14 client: who cancelled
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { PickupFoodResult } from '../food-handle'; // Oct 30 client
+import { StockAddedLine } from '../stock-link'; // Oct 30 client: ordering portal adds credited to this pickup
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Pencil, UserPlus, Trash2 } from 'lucide-react';
 import { adminCRUD, api, upcomingSms } from '../api';
 import { sendPickupNowConfirmed } from '../pickup-send-now';
 import { smsReasonText, textedText } from '../sms-reason';
-import { fmtDateTimeEastern, repostedLabel } from '../time-format';
+import { repostedLabel, nyToday } from '../time-format';
 import { QuickPickupModal } from '../portal-sections';
+import { DriverAvatar, usePhotoMap } from '../driver-photo'; // Oct 30 client: driver photo on the driver line
 import { DriverPickerModal } from './CoordinatorPortal';
 import { SuggestedDriversCard } from '../profiles';
-import { TextedDriversLink, PickupTextLines } from '../text-recipients'; // Oct 11 client: who got the pickup text; Oct 12: next text + times sent
+import { TextedDriversLink, PickupTextLines, markSending, clearSending, afterSendAnswer, useSendingSince } from '../text-recipients'; // Oct 11 client: who got the pickup text; Oct 12: next text + times sent
 import { submittedByLabel } from '../submitted-by'; // Oct 12 client
 import { readExtraContacts, telHref } from '../extra-contacts'; // Oct 12 client
+import { DriverCallButtons } from '../call-driver'; // Oct 16 client (idea 8): one-tap call the driver, logged
+import { NoDriverHelp } from '../closeout'; // Oct 21 client: usual drivers to call; 1h late → choose
+import { pickupLabel } from '../pickup-label'; // Oct 22 client: pickups by name, never by id
+import { OnlyNeedsButton, showOnlyNeeds, driversOnOf, CancelDriverWarningModal } from '../drivers-needed'; // Oct 23 client: "✓ Only needs N driver(s)"
+import { STATUS, displayPhone, shortAddress, statusKeyOf, stripUnit, whenAt, whenText } from '../display'; // Oct 23 client: same style everywhere
+import { Name, StatusPill } from '../display-ui';
+import { shortTimeline, type HistoryRow } from '../pickup-timeline'; // Oct 24 client: short History timeline
 
 type Signup = {
   volunteer_id: number;
@@ -68,24 +79,11 @@ type PickupRow = {
   slots_filled?: number;
 };
 
-function fmt12(hhmm?: string | null): string {
-  if (!hhmm) return '';
-  const m = String(hhmm).match(/^(\d{1,2}):(\d{2})/);
-  if (!m) return String(hhmm);
-  const h = Number(m[1]); const mi = m[2];
-  const ap = h >= 12 ? 'PM' : 'AM';
-  const h12 = ((h + 11) % 12) + 1;
-  return `${h12}:${mi} ${ap}`;
-}
-function fmtDate(d: string): string {
-  const dt = new Date(d + 'T12:00:00');
-  return dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-}
 // Oct 13 client: "Submitted through the store app by <store> (<login>) · Oct 13, 3:05 PM · Ready now".
 function storeAppLine(row: any): string {
   const store = String(row.suppliers ?? '').trim() || 'the store';
   const user = String(row.store_app_user ?? '').trim();
-  const at = row.created_at ? fmtDateTimeEastern(row.created_at) : '';
+  const at = row.created_at ? whenAt(row.created_at) : '';
   return [`Submitted through the store app by ${store}${user && !store.toLowerCase().includes(user.toLowerCase()) ? ` (${user})` : ''}`, at, storeAppKind(row)]
     .filter(Boolean).join(' · ');
 }
@@ -102,15 +100,6 @@ function storeAppKind(row: any): string {
   if (!m || !s) return 'Ready';
   return Number(m[1]) * 60 + Number(m[2]) > Number(s[1]) * 60 + Number(s[2]) + 15 ? 'Later today' : 'Ready now';
 }
-function statusLabel(s: string): { label: string; cls: string } {
-  const st = (s || '').toLowerCase();
-  if (st === 'completed' || st === 'delivered') return { label: 'Completed', cls: 'bg-sage text-forest border-sage-line' };
-  if (st === 'cancelled') return { label: 'Cancelled', cls: 'bg-line/50 text-muted border-line' };
-  if (st === 'en_route' || st === 'on_the_way') return { label: 'On the Way', cls: 'bg-amber-soft text-amber-deep border-amber/40' };
-  if (st === 'assigned' || st === 'accepted' || st === 'claimed') return { label: 'Assigned', cls: 'bg-sky-soft text-sky-deep border-sky/40' };
-  if (st === 'pending') return { label: 'Pending', cls: 'bg-clay-soft text-clay border-clay/40' };
-  return { label: 'Volunteer Needed', cls: 'bg-clay-soft text-clay border-clay/40' };
-}
 
 // C1 Aug 13 — dual-mode: default route uses useParams (deep-link stays live),
 // but the Live Board opens this inside a modal and passes pickupIdOverride +
@@ -126,6 +115,7 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
   // "not found" without ever asking the server. Coerce to a number here.
   const pickupId = Number(pickupIdOverride != null ? pickupIdOverride : id);
   const dismiss = onClose ?? (() => nav('/'));
+  const photoMap = usePhotoMap(); // Oct 30 client
 
   // abc862 (Aug 15): stop depending on the Live Board list cache. Previously
   // we fetched today->+7d and searched client-side; if that list query failed
@@ -166,6 +156,7 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
 
   const [editing, setEditing] = useState(false);
   const [assigning, setAssigning] = useState(false);
+  const [cancelWarn, setCancelWarn] = useState(false); // Oct 23 client: a driver is on it → warn before cancelling
   const del = useMutation({
     mutationFn: () => adminCRUD.deletePickup(pickupId),
     onSuccess: () => {
@@ -185,12 +176,15 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
     },
   });
   // upsms (Aug 20): per-pickup Send Now — same endpoint as the Live Board card.
+  const sendingNow = useSendingSince(pickupId); // Oct 25 client
   const sendNowMut = useMutation({
     // Oct 8: real sends go through sendPickupNowConfirmed (asks before re-sending).
     mutationFn: async (dryRun: boolean) => (dryRun
       ? (await upcomingSms.pickupSendNow(pickupId, true)).data
       : await sendPickupNowConfirmed(pickupId)),
+    onMutate: (dryRun) => { if (!dryRun) markSending(pickupId); }, // Oct 25 client: "Sending now…" right away
     onSuccess: (d, dryRun) => {
+      if (!dryRun) { afterSendAnswer(pickupId, d); qc.invalidateQueries({ queryKey: ['pickup-text-info', pickupId] }); }
       if (!d) return; // office chose not to re-send
       // Oct 9 client: in-page notices, not browser alert boxes.
       if (dryRun) {
@@ -203,12 +197,13 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
       qc.invalidateQueries({ queryKey: ['admin-pickups'] });
       qc.invalidateQueries({ queryKey: ['upcoming-drop'] });
     },
-    onError: (e: Error) => uiNotify(`Send now failed: ${e.message}`, 'err'),
+    onError: (e: Error) => { clearSending(pickupId); uiNotify(`Send now failed: ${e.message}`, 'err'); },
   });
 
   function onCancelClick() {
     if (!row) return;
-    const label = row.suppliers || row.contact_name || `pickup #${(row as any).ref_number ?? row.id}`;
+    if (driversOnOf(row) >= 1) { setCancelWarn(true); return; } // Oct 23 client
+    const label = pickupLabel(row as any); // Oct 22 client: never the pickup number
     void uiConfirm(`Cancel this pickup (${label})?\n\nThis marks it cancelled and removes it from the live board. Cannot be undone.`).then((ok) => { if (ok) {
       del.mutate();
     } });
@@ -235,11 +230,11 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
           <div className="rounded-[14px] border border-line bg-paper p-6 text-[14px] text-muted">
             {loadFailed ? (
               <>
-                Couldn't load pickup #{pickupId} — the connection or server had a problem. The pickup itself is fine.
+                Couldn't load this pickup — the connection or server had a problem. The pickup itself is fine.
                 <button onClick={() => fallbackQ.refetch()} className="haptic ml-2 font-bold text-forest underline">Try again</button>
               </>
             ) : (
-              <>Pickup #{pickupId} not found. It may have been cancelled or archived.</>
+              <>This pickup was not found. It may have been cancelled or archived.</>
             )}
           </div>
         </div>
@@ -247,13 +242,8 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
     );
   }
 
-  // Oct 2 review items 1–2: the shared outcome label wins when present.
-  const st = (row as any).outcome_label
-    ? { label: (row as any).outcome_label as string,
-        cls: String((row as any).outcome).startsWith('completed') ? 'bg-sage text-forest border-sage-line'
-           : (row as any).outcome === 'cancelled' ? 'bg-line/50 text-muted border-line'
-           : 'bg-clay-soft text-clay border-clay/40' }
-    : statusLabel(row.status);
+  // Oct 23 client: the one status word + color (same as the Live Board and every list).
+  const stKey = statusKeyOf(row as any);
   const supplierName = row.suppliers?.trim() || row.steady_name?.trim() || '';
   // xyz126 (Aug 20): user's manually-picked pickup_address always wins over
   // the supplier's stored default. Fall back to supplier_address only when
@@ -277,7 +267,10 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
   const _slotsNeeded     = Number(row.slots_capacity ?? 1) || 1;
   const _slotsFilled     = signups.length;
   const _isFullyCovered  = _slotsFilled >= _slotsNeeded;
-  const showAssignBtn    = !_resolved && !_isFullyCovered;
+  // Oct 28 client (Yakov): a closed pickup (completed / done no kiosk / missed / expired) gets
+  // "Set driver" / "Change driver" instead (who did it; credit moves; no texts).
+  const _closedForDriver = ['completed', 'delivered', 'missed'].includes(_statusLower);
+  const showAssignBtn    = !_resolved && !_closedForDriver && !_isFullyCovered;
   // Same remaining-slot rule as the cards and every SMS (server outcome.ts).
   const _remaining       = _resolved ? 0 : Math.max(0, Number((row as any).slots_remaining ?? (_slotsNeeded - _slotsFilled)));
 
@@ -289,7 +282,7 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
     } });
   }
   // Oct 7 client: fall back to the address before the generic label.
-  const title        = supplierName || contactName || address.replace(/,?\s*(USA|United States)\.?\s*$/i, '') || 'One-time pickup';
+  const title        = supplierName || contactName || shortAddress(address) || 'One-time pickup';
 
   return (
     <div className="min-h-screen bg-cream">
@@ -301,7 +294,9 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4 mb-4">
           <div className="min-w-0">
             <h1 className="font-display font-bold text-[24px] leading-tight text-ink sm:truncate">
-              {title} <span className="text-muted font-normal text-[16px]">· #{(row as any).ref_number ?? row.id}</span>
+              <Name>{title}</Name>
+              {/* Oct 22 client: a tiny grey ref for support only (people go by the name). */}
+              {(row as any).ref_number && <span className="ml-2 align-middle text-muted font-normal text-[11px]">ref {(row as any).ref_number}</span>}
               {(row as any).reply_code != null && (
                 <span className="ml-2 align-middle inline-flex items-center rounded-full bg-sky-soft px-2.5 py-0.5 text-[12px] font-bold text-sky-deep">Text code {(row as any).reply_code}<Tip text="The number drivers see in their text. They reply with it to take the pickup." /></span>
               )}
@@ -309,19 +304,21 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
             </h1>
             {/* Oct 12 client: next text (drivers + time) and every time it was sent. */}
             <PickupTextLines pickupId={Number(row.id)} sig={`${(row as any).auto_broadcast_sent_at ?? ''}|${(row as any).status ?? ''}|${(row as any).reply_code ?? ''}`} className="mt-1 text-[12.5px]" />
+            {/* Oct 30 client: what came out of this pickup's kiosk drop-off (Food to handle ticks). */}
+            {(row as any).kiosk_verified && <div className="mt-1.5"><PickupFoodResult pickupId={Number(row.id)} /></div>}
+            {/* Oct 30 client: what was added to the ordering portal from this pickup (nothing until connected). */}
+            {String((row as any).status ?? '') === 'completed' && <StockAddedLine pickupId={Number(row.id)} className="mt-1.5" />}
             <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11.5px] font-bold border ${st.cls}`}>
-                {(row as any).outcome === 'taken' ? 'Taken, no kiosk sign-in' : String((row as any).outcome ?? '').startsWith('completed') ? 'Completed' : st.label}
-              </span>
+              {(_resolved || (stKey !== 'needs_driver' && stKey !== 'covered')) && <StatusPill k={stKey} className="px-2.5 text-[11.5px]" />}
               {/* Oct 5: kiosk verification is separate from the outcome. */}
               {String((row as any).outcome ?? '').startsWith('completed') && (
                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11.5px] font-bold border ${(row as any).kiosk_verified ? 'bg-sage text-forest border-sage-line' : 'bg-line/50 text-muted border-line'}`}>
                   {(row as any).kiosk_verified ? '✓ Kiosk verified' : 'No kiosk verification'}
                 </span>
               )}
-              {!_resolved && (
-                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11.5px] font-bold border ${_remaining > 0 ? 'bg-clay-soft text-clay border-clay/40' : 'bg-sage text-forest border-sage-line'}`}>
-                  {_remaining > 0 ? `Needs ${_remaining} more ${_remaining === 1 ? 'driver' : 'drivers'}` : 'Covered'}
+              {!_resolved && !['missed', 'expired', 'cancelled', 'no_dropoff'].includes(stKey) && (
+                <span data-status={_remaining > 0 ? 'needs_driver' : 'covered'} className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11.5px] font-bold border ${STATUS[_remaining > 0 ? 'needs_driver' : 'covered'].pill}`}>
+                  {_remaining > 0 ? `Needs ${_remaining} more ${_remaining === 1 ? 'driver' : 'drivers'}` : STATUS.covered.word}
                 </span>
               )}
               {row.urgency_level === 'urgent' && (
@@ -330,7 +327,9 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
               {row.steady_pickup_id != null && (
                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10.5px] font-extrabold uppercase tracking-[.05em] bg-sage text-forest">Steady</span>
               )}
-              {row.is_one_time && (
+              {/* Oct 30 client: a run to Lakewood / Fallsburg (texted only to drivers who go there). */}
+              <RunTag pickupType={row.pickup_type} big />
+              {row.is_one_time && !runPlaceOf(row.pickup_type) && (
                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10.5px] font-extrabold uppercase tracking-[.05em] bg-amber-soft text-amber-deep">One-time</span>
               )}
               {/* Oct 13 client: reposted → when, and the time it was for (drivers see "now"). */}
@@ -340,6 +339,12 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
               {/* Oct 12 client: who filled out the pickup form */}
               {(row as any).submitted_by && (
                 <span className="text-[11.5px] text-muted">Form by: {submittedByLabel((row as any).submitted_by)}</span>
+              )}
+              {/* Oct 21 client: confirm / decline only on the pickup's day. */}
+              {(row as any).confirmation_state === 'pending' && !(row as any).cancelled_at && (
+                String(row.scheduled_date ?? '').slice(0, 10) === nyToday()
+                  ? <span className="text-[11.5px] font-bold text-[#9a7415]" data-testid="needs-confirmation-today">✋ Needs confirmation today — Confirm or Decline on the Live Board</span>
+                  : <span className="text-[11.5px] font-semibold text-muted" data-testid="confirm-on-the-day">Confirm on the day</span>
               )}
             </div>
             {/* Oct 13 client: food a store sent through its app — say so clearly. */}
@@ -356,18 +361,29 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
                 <UserPlus size={14} /> Assign Driver
               </button>
             )}
+            {_closedForDriver && (
+              <button onClick={() => setAssigning(true)} data-testid="closed-driver-btn"
+                      title="Record who did this pickup. He gets the credit. No texts are sent."
+                      className="haptic inline-flex items-center gap-1.5 text-[12.5px] font-bold text-paper bg-forest px-3 py-2 rounded-[8px] shadow-ctag">
+                <UserPlus size={14} /> {signups.length > 0 ? 'Change driver' : 'Set driver'}
+              </button>
+            )}
+            {/* Oct 23 client: has a driver but still "needs more" → the drivers on it are enough. */}
+            {showOnlyNeeds(row, _resolved || _statusLower === 'missed') && (
+              <OnlyNeedsButton p={row} className="haptic inline-flex items-center gap-1.5 text-[12.5px] font-bold text-forest bg-sage border border-sage-line px-3 py-2 rounded-[8px] hover:bg-sage/60" />
+            )}
             {/* upsms (Aug 20): "Send now" — Needs-a-Driver only. Fires this
                 one pickup to the default group. Mirrors the Live Board card
                 button so coordinators have the same control from either view. */}
             {_remaining > 0 && !(row as any).posted_via_supplier && (
               <button onClick={() => {
-                        const ref = (row as any).ref_number ? `#${(row as any).ref_number}` : `id ${row.id}`;
-                        void uiConfirm(`Text drivers about pickup ${ref} now?\n\nIt asks for ${_remaining} more ${_remaining === 1 ? 'driver' : 'drivers'}.`).then((ok) => { if (ok) sendNowMut.mutate(false); });
+                        const ref = pickupLabel(row as any);
+                        void uiConfirm(`Text drivers about ${ref} now?\n\nIt asks for ${_remaining} more ${_remaining === 1 ? 'driver' : 'drivers'}.`).then((ok) => { if (ok) sendNowMut.mutate(false); });
                       }}
-                      disabled={sendNowMut.isPending}
-                      title="Broadcast just this pickup to the default driver group"
+                      disabled={sendNowMut.isPending || !!sendingNow}
+                      title={sendingNow ? 'Sending now — wait for the text to go out' : 'Broadcast just this pickup to the default driver group'}
                       className="haptic inline-flex items-center gap-1.5 text-[12.5px] font-bold text-sky bg-paper border border-sky/40 px-3 py-2 rounded-[8px] hover:bg-sky/10 disabled:opacity-50">
-                {sendNowMut.isPending ? 'Sending…' : 'Send SMS'}
+                {sendNowMut.isPending || sendingNow ? 'Sending…' : 'Send SMS'}
               </button>
             )}
             {showReleaseBtn && (
@@ -392,6 +408,10 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
             <div className="text-clay text-[12px] mt-2">{(release.error as Error).message}</div>
           )}
           {/* Oct 9 client: say so when cancelling didn't work (was silent). */}
+          {cancelWarn && (
+            <CancelDriverWarningModal p={row} notTold="the driver isn't texted" onBack={() => setCancelWarn(false)}
+              onFewerDone={() => setCancelWarn(false)} onCancelAnyway={() => { setCancelWarn(false); del.mutate(); }} />
+          )}
           {del.error && (
             <div role="alert" className="text-clay text-[12.5px] font-bold mt-2">Couldn't cancel this pickup — {(del.error as Error).message || 'please try again'}</div>
           )}
@@ -405,23 +425,28 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
           {(row as any).outcome === 'expired' && <RequeueBanner pickupId={pickupId} />}
           {/* Oct 6 client: taken but not checked in — the office settles it. */}
           {(row as any).outcome === 'taken' && <SettleTakenBanner pickupId={pickupId} />}
+          {/* Oct 21 client: no driver close to / past its time → call the usual drivers; 1h late → choose. */}
+          <NoDriverHelp pickupId={pickupId} pickupRef={(row as any).ref_number ?? null} pickup={row as any} date={row.scheduled_date} time={row.scheduled_time}
+                        remaining={_remaining} resolved={_resolved || _statusLower === 'missed'}
+                        onTextAgain={(row as any).posted_via_supplier ? undefined : () => void uiConfirm('Text drivers about this pickup again now?').then((ok) => { if (ok) sendNowMut.mutate(false); })}
+                        onCancel={onCancelClick} />
           {/* 1. Donor / supplier + contact */}
           <Card title="Donor / Supplier">
-            <Row label="Name" value={supplierName || contactName || <em className="text-muted">(none)</em>} />
+            <Row label="Name" value={supplierName || contactName ? <Name>{supplierName || contactName}</Name> : <em className="text-muted">(none)</em>} />
             {/* Oct 14 client: who filled out the form — clearly, in the donor box. */}
             <Row label="Form submitted by" value={(row as any).posted_via_supplier ? '📱 The store (app)'
               : (row as any).submitted_by ? `✍️ ${submittedByLabel((row as any).submitted_by)}` : <em className="text-muted">Not recorded</em>} />
             {contactName && supplierName && contactName !== supplierName && (
-              <Row label="Contact name" value={contactName} />
+              <Row label="Contact name" value={<Name>{contactName}</Name>} />
             )}
             <Row label="Contact phone" value={contactPhone
-              ? <a href={`tel:${contactPhone}`} className="text-forest font-bold hover:underline">{contactPhone}</a>
+              ? <a href={telHref(contactPhone)} className="text-forest font-bold hover:underline">{displayPhone(contactPhone)}</a>
               : <em className="text-muted">(none)</em>} />
             {/* Oct 12 client: the pickup's other contacts. */}
             {readExtraContacts((row as any).extra_contacts).map((c, i) => (
               <Row key={`xc${i}`} label="Other contact" value={<span data-extra-contact>
-                {c.name ? <>{c.name} — </> : null}
-                <a href={telHref(c.phone)} className="text-forest font-bold hover:underline">{c.phone}</a>
+                {c.name ? <><Name>{c.name}</Name> — </> : null}
+                <a href={telHref(c.phone)} className="text-forest font-bold hover:underline">{displayPhone(c.phone)}</a>
               </span>} />
             ))}
             {contactEmail && <Row label="Email" value={<a href={`mailto:${contactEmail}`} className="text-forest hover:underline">{contactEmail}</a>} />}
@@ -436,10 +461,9 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
                    target="_blank" rel="noreferrer"
                    className="text-forest hover:underline">{address}</a>
               : <em className="text-muted">(no address)</em>} />
-            <Row label="Pickup time" value={`${fmtDate(row.scheduled_date)} · ${fmt12(row.scheduled_time?.slice(0, 5))}`} />
+            <Row label="Pickup time" value={whenText(row.scheduled_date, row.scheduled_time)} />
             {row.must_pickup_by && (
-              <Row label="Must be picked up by" value={new Date(row.must_pickup_by).toLocaleString('en-US',
-                { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })} />
+              <Row label="Must be picked up by" value={whenAt(row.must_pickup_by)} />
             )}
             <OfferWindow pickupId={pickupId} />
 
@@ -457,25 +481,29 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
           {/* 4. Drivers */}
           <Card title={`Drivers (${Math.min(signups.length, _slotsNeeded)} of ${_slotsNeeded} needed)`}>
             {signups.length === 0 ? (
-              <div className="text-[13px] text-muted italic">No driver assigned.{showAssignBtn && <> Tap <b>Assign Driver</b> above.</>}</div>
+              <div className="text-[13px] text-muted italic">No driver assigned.{showAssignBtn && <> Tap <b>Assign Driver</b> above.</>}{_closedForDriver && <> Tap <b>Set driver</b> above to record who did it.</>}</div>
             ) : (
               <div className="space-y-1.5">
                 {[...signups].sort((a: any, b: any) => (a.role === 'backup' ? 1 : 0) - (b.role === 'backup' ? 1 : 0)).map((s, i) => (
                   <div key={s.volunteer_id} className="flex items-center justify-between gap-2 py-1 border-b border-line/50 last:border-b-0">
                     <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="font-bold text-[13.5px] text-ink truncate">{s.first_name} {s.last_name}</span>
-                      {s.unit_number != null && (
-                        <span className="text-muted font-semibold text-[11px]">#{s.unit_number}</span>
-                      )}
+                      {photoMap?.[String(s.volunteer_id)] && <DriverAvatar url={photoMap[String(s.volunteer_id)]} first={s.first_name} last={s.last_name} size={26} />}
+                      <span className="font-bold text-[13.5px] text-ink truncate"><Name first={s.first_name} last={s.last_name} /></span>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
                       <span className="text-[11px] font-extrabold uppercase tracking-[.05em] text-muted">{i >= _slotsNeeded || s.role === 'backup' ? 'Backup' : 'Driver'}</span>
                       <span className="text-[11px] font-bold text-forest">
-                        {({ assigned: 'On the schedule', accepted: 'Driver confirmed', completed: 'Completed', no_show: 'No-show' } as Record<string, string>)[String(s.assignment_status)] ?? String(s.assignment_status ?? '')}
+                        {({ assigned: 'On the schedule', accepted: 'Driver confirmed', completed: STATUS.done.word, no_show: 'No-show' } as Record<string, string>)[String(s.assignment_status)] ?? String(s.assignment_status ?? '')}
                       </span>
                     </div>
                   </div>
                 ))}
+                {/* Oct 16 client (idea 8): 📞 call a driver in one tap — logged in their call log. */}
+                {String(row.status).toLowerCase() !== 'cancelled' && (
+                  <div className="pt-1.5">
+                    <DriverCallButtons big pickupId={Number((row as any).id ?? pickupId)} pickupRef={(row as any).ref_number ?? null} pickup={row as any} drivers={signups as any[]} />
+                  </div>
+                )}
               </div>
             )}
           </Card>
@@ -485,7 +513,7 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
             <Card title="Notes & Recurrence">
               {row.notes && <Row label="Notes" value={<span className="whitespace-pre-wrap">{row.notes}</span>} />}
               {row.steady_pickup_id != null && (
-                <Row label="Steady" value={`Made automatically from the steady schedule${row.steady_name ? ` "${row.steady_name}"` : ''} (#${row.steady_pickup_id})`} />
+                <Row label="Steady" value={`Made automatically from the steady schedule${row.steady_name ? ` "${row.steady_name}"` : ''}`} />
               )}
             </Card>
           )}
@@ -496,7 +524,7 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
           {/* Oct 5 client (idea 4): who covered this place before — ask or assign. */}
           {_remaining > 0 && <SuggestedDriversCard pickupId={pickupId} />}
           {/* Oct 5 client (declutter #4): history, past drivers and failed replies in one place. */}
-          <ActivityCard pickupId={pickupId} />
+          <ActivityCard pickupId={pickupId} pickupDate={String(row.scheduled_date ?? '').slice(0, 10) || null} />
         </div>
       </div>
 
@@ -515,6 +543,7 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
       {assigning && (
         <DriverPickerModal
           pickup={row as any}
+          closed={_closedForDriver}
           volunteers={volunteersQ.data?.data ?? []}
           onClose={() => setAssigning(false)}
           onChanged={() => {
@@ -576,12 +605,11 @@ function PickupAttemptsCard({ pickupId, bare }: { pickupId: number; bare?: boole
             <div key={r.id} className="flex items-start justify-between gap-3 text-[12.5px] py-1 border-b border-line/50 last:border-b-0">
               <div className="min-w-0 flex-1">
                 <div className="font-bold text-ink truncate">
-                  {r.volunteer_name ?? `Unknown (${r.phone_last10})`}
-                  {r.unit_number != null && <span className="text-muted font-semibold text-[11px] ml-1">#{r.unit_number}</span>}
+                  {r.volunteer_name ? <Name>{stripUnit(r.volunteer_name)}</Name> : `Unknown (${displayPhone(r.phone_last10)})`}
                 </div>
                 <div className="text-[11.5px] text-muted truncate">{r.reason_label} · via {r.method}</div>
               </div>
-              <div className="text-[11px] text-muted shrink-0">{fmtDateTimeEastern(r.created_at)}</div>
+              <div className="text-[11px] text-muted shrink-0">{whenAt(r.created_at)}</div>
             </div>
           ))}
         </div>
@@ -592,23 +620,48 @@ function PickupAttemptsCard({ pickupId, bare }: { pickupId: number; bare?: boole
 
 
 // Oct 5 (UI pass item 1): what happened to this pickup, oldest first.
-function PickupHistoryCard({ pickupId, bare }: { pickupId: number; bare?: boolean }) {
+// Oct 24 client ("too many steps … make it shorter"): a short plain timeline by default
+// (src/pickup-timeline.ts); "Show all details" opens the full list.
+function PickupHistoryCard({ pickupId, bare, pickupDate }: { pickupId: number; bare?: boolean; pickupDate?: string | null }) {
   const q = useQuery({
     queryKey: ['pickup-history', pickupId],
     enabled: Number.isFinite(pickupId),
-    queryFn: () => api<{ data: { at: string; kind: string; text: string; detail: string | null }[] }>(`/api/pickup-instances/${pickupId}/history`),
+    queryFn: () => api<{ data: HistoryRow[] }>(`/api/pickup-instances/${pickupId}/history`),
   });
   const rows = q.data?.data ?? [];
+  const [all, setAll] = useState(false);
+  const short = useMemo(() => shortTimeline(rows, pickupDate), [rows, pickupDate]);
+  const tone: Record<string, string> = { done: 'bg-forest', bad: 'bg-clay', plain: 'bg-line' };
   const dot: Record<string, string> = {
     created: 'bg-line', texted: 'bg-sky', assigned: 'bg-forest', accepted: 'bg-forest', claimed: 'bg-forest',
     driver_cancel: 'bg-clay', released: 'bg-amber', kiosk: 'bg-forest', completed: 'bg-forest', closed: 'bg-clay',
+    confirm: 'bg-amber', // Oct 21 client: office Confirm / Decline
+    dropoff_ask: 'bg-sky', dropoff_answer: 'bg-forest', // Oct 22 client: Ask driver: dropped off?
   };
   return (
     <section className={bare ? '' : 'rounded-[14px] border border-line bg-paper px-4 py-3'}>
       {!bare && <h2 className="text-[11px] font-extrabold uppercase tracking-[.05em] text-muted mb-2">History</h2>}
       {q.isLoading ? <div className="text-[13px] text-muted">Loading…</div> :
        q.isError ? <div className="text-[13px] text-clay">Couldn't load the history. <button onClick={() => q.refetch()} className="underline font-bold">Try again</button></div> :
-       rows.length === 0 ? <div className="text-[13px] text-muted">Nothing recorded yet.</div> : (
+       rows.length === 0 ? <div className="text-[13px] text-muted">Nothing recorded yet.</div> :
+       !all ? (<>
+        <ol className="space-y-1.5">
+          {short.map((l, i) => (
+            <li key={i} className="flex items-baseline gap-3">
+              <span className={`h-2 w-2 shrink-0 translate-y-[-1px] rounded-full ${tone[l.tone] ?? 'bg-line'}`} />
+              <span className="w-[68px] shrink-0 text-[12px] tabular-nums text-muted whitespace-nowrap">{l.when.includes(' · ') ? l.when.split(' · ')[1] : l.when}</span>
+              <div className="min-w-0">
+                <div className={`text-[13.5px] ${l.tone === 'done' ? 'font-semibold text-forest' : l.tone === 'bad' ? 'text-clay' : 'text-ink'}`}>
+                  {l.when.includes(' · ') && <span className="text-[11.5px] text-muted">{l.when.split(' · ')[0]} · </span>}
+                  {l.text}
+                </div>
+                {l.note && <div className="text-[11.5px] text-muted">{l.note}</div>}
+              </div>
+            </li>
+          ))}
+        </ol>
+        <button onClick={() => setAll(true)} className="haptic mt-2 text-[12px] font-bold text-forest hover:underline">Show all details</button>
+       </>) : (<>
         <ol className="space-y-2">
           {rows.map((h, i) => (
             <li key={i} className="flex gap-3">
@@ -616,14 +669,15 @@ function PickupHistoryCard({ pickupId, bare }: { pickupId: number; bare?: boolea
               <div className="min-w-0">
                 <div className="text-[13px] text-ink">{h.text}</div>
                 <div className="text-[11.5px] text-muted">
-                  {new Date(h.at).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' })}
+                  {whenAt(h.at)}
                   {h.detail ? ` · ${h.detail}` : ''}
                 </div>
               </div>
             </li>
           ))}
         </ol>
-      )}
+        <button onClick={() => setAll(false)} className="haptic mt-2 text-[12px] font-bold text-forest hover:underline">Show short timeline</button>
+       </>)}
     </section>
   );
 }
@@ -641,27 +695,23 @@ function PastCoverageCard({ pickupId, bare }: { pickupId: number; bare?: boolean
   const [open, setOpen] = useState(false);
   const rows = open ? all : all.slice(0, 3);
   const lastCovered = all.find((r) => r.drivers);
-  const fmt = (d: string, t: string | null) => {
-    const dt = new Date(`${d}T${(t ?? '12:00').slice(0, 5)}:00`);
-    const day = dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-    return t ? `${day} · ${dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}` : day;
-  };
+  const fmt = (d: string, t: string | null) => whenText(d, t);
   return (
     <section className={bare ? '' : 'rounded-[14px] border border-line bg-paper px-4 py-3'}>
       {!bare && <h2 className="text-[11px] font-extrabold uppercase tracking-[.05em] text-muted mb-2">Who covered it before</h2>}
       {q.isLoading ? <div className="text-[13px] text-muted">Loading…</div> :
        q.isError ? <div className="text-[13px] text-clay">Couldn't load past pickups. <button onClick={() => q.refetch()} className="underline font-bold">Try again</button></div> :
        rows.length === 0 ? <div className="text-[13px] text-muted">No earlier pickups from this place yet.</div> : (<>
-        <div className="text-[12.5px] text-muted mb-1">{lastCovered ? <>Last covered by <b className="text-ink">{lastCovered.drivers}</b> on {fmt(lastCovered.date, lastCovered.time)}</> : 'No driver covered it in the recent past.'}</div>
+        <div className="text-[12.5px] text-muted mb-1">{lastCovered ? <>Last covered by <b className="text-ink"><Name>{lastCovered.drivers}</Name></b> on {fmt(lastCovered.date, lastCovered.time)}</> : 'No driver covered it in the recent past.'}</div>
         <ul className="divide-y divide-line">
           {rows.map((r) => (
             <li key={r.id} className="flex items-start justify-between gap-3 py-2">
               <div className="min-w-0">
-                <div className="text-[13.5px] font-semibold text-ink">{r.drivers || <span className="italic font-normal text-muted">No driver</span>}</div>
-                <div className="text-[11.5px] text-muted">{fmt(r.date, r.time)} · #{r.ref_number ?? r.id}</div>
+                <div className="text-[13.5px] font-semibold text-ink">{r.drivers ? <Name>{r.drivers}</Name> : <span className="italic font-normal text-muted">No driver</span>}</div>
+                <div className="text-[11.5px] text-muted">{fmt(r.date, r.time)}</div>
               </div>
               <div className="shrink-0 text-right text-[11.5px]">
-                <div className="font-bold text-ink">{r.outcome_label ?? 'Still open'}</div>
+                <div>{r.outcome_label ? <StatusPill of={{ outcome_label: r.outcome_label, kiosk_verified: r.kiosk_verified }} /> : <span className="font-bold text-ink">Still open</span>}</div>
                 {String(r.outcome_label ?? '').startsWith('Completed') && (
                   <div className={r.kiosk_verified ? 'text-forest font-bold' : 'text-muted'}>{r.kiosk_verified ? '✓ Kiosk' : 'No kiosk'}</div>
                 )}
@@ -685,7 +735,7 @@ function MaybeCard({ bare, title, children }: { bare?: boolean; title: string; c
 }
 
 // Oct 5 client (declutter #4): one Activity box with tabs.
-function ActivityCard({ pickupId }: { pickupId: number }) {
+function ActivityCard({ pickupId, pickupDate }: { pickupId: number; pickupDate?: string | null }) {
   const [t, setT] = useState<'history' | 'before' | 'failed'>('history');
   const tabs: [typeof t, string][] = [['history', 'History'], ['before', 'Who covered it before'], ['failed', 'Failed replies']];
   return (
@@ -698,7 +748,7 @@ function ActivityCard({ pickupId }: { pickupId: number }) {
           </button>
         ))}
       </div>
-      {t === 'history' ? <PickupHistoryCard pickupId={pickupId} bare />
+      {t === 'history' ? <PickupHistoryCard pickupId={pickupId} pickupDate={pickupDate} bare />
         : t === 'before' ? <PastCoverageCard pickupId={pickupId} bare />
         : <PickupAttemptsCard pickupId={pickupId} bare />}
     </section>
@@ -775,7 +825,7 @@ function OfferWindow({ pickupId }: { pickupId: number }) {
     : days === 1 ? `1 day${hrs ? `, ${plural(hrs, 'hour')}` : ''}`
     : hrs > 0 ? `${plural(hrs, 'hour')}${mm ? `, ${plural(mm, 'minute')}` : ''}`
     : plural(mm, 'minute');
-  const at = until.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' });
+  const at = whenAt(until);
   const btn = 'haptic rounded-[8px] border border-line bg-paper px-2.5 py-1 text-[12px] font-bold text-ink hover:bg-cream disabled:opacity-50';
   return (
     <Row label="Drivers can take it for" value={
@@ -803,7 +853,8 @@ function useRequeue(pickupId: number) {
   const m = useMutation({
     mutationFn: (textNow: boolean) => api<{ data: { sent: number; skipped: string | null } }>(`/api/pickup-instances/${pickupId}/requeue`, { method: 'POST', body: JSON.stringify({ textNow }) }),
     onSuccess: (r) => {
-      setMsg(r.data.skipped === 'not-texted' ? 'Back in the queue for 6 more hours — no text sent. Drivers see it in the app and in PICKUPS.'
+      setMsg((r.data as any).sending ? `Reposted for 6 more hours. ${(r.data as any).note ?? 'Texting drivers now.'}` // Oct 20 client
+        : r.data.skipped === 'not-texted' ? 'Back in the queue for 6 more hours — no text sent. Drivers see it in the app and in PICKUPS.'
         : r.data.sent > 0 ? 'Reposted for 6 more hours — texted to drivers now.'
         : r.data.skipped === 'dry-run' ? 'Reposted for 6 more hours — texted to drivers now (test site — not really sent).'
         : String(r.data.skipped ?? '').startsWith('quiet-hours') ? 'Reposted for 6 more hours — it goes out in the morning text (quiet hours now).' /* Oct 12 client: was 9 AM */ /* Oct 14 client: 9 AM, or 8 AM if before 9 */
@@ -844,7 +895,8 @@ function CancelledBanner({ pickupId, row }: { pickupId: number; row: any }) {
   const m = useMutation({
     mutationFn: (textNow: boolean) => api<{ data: { sent: number; skipped: string | null } }>(`/api/pickup-instances/${pickupId}/uncancel`, { method: 'POST', body: JSON.stringify({ textNow }) }),
     onSuccess: (r) => {
-      setMsg(r.data.skipped === 'not-texted' ? 'Un-cancelled — back as an open pickup. No text sent.'
+      setMsg((r.data as any).sending ? `Un-cancelled. ${(r.data as any).note ?? 'Texting drivers now.'}` // Oct 20 client
+        : r.data.skipped === 'not-texted' ? 'Un-cancelled — back as an open pickup. No text sent.'
         : r.data.sent > 0 ? 'Un-cancelled — texted to drivers now.'
         : r.data.skipped === 'dry-run' ? 'Un-cancelled — texted to drivers (test site — not really sent).'
         : 'Un-cancelled.');
@@ -852,14 +904,22 @@ function CancelledBanner({ pickupId, row }: { pickupId: number; row: any }) {
     },
     onError: (e: any) => setMsg(`⚠️ ${e?.message || 'Could not un-cancel'}`),
   });
-  const when = row?.cancelled_at ? new Date(row.cancelled_at).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' }) : null;
+  const when = row?.cancelled_at ? whenAt(row.cancelled_at) : null;
   const why = String(row?.cancellation_reason ?? '').replace(/^dismissed:\s*/i, '').trim();
   const by = cancelledByText(row?.cancelled_by); // Oct 14 client
+  // Oct 28 client: cancelled because the steady schedule changed -> who changed it and when (API computes the line).
+  const schedCancel = String(row?.cancelled_by?.source ?? '') === 'auto-schedule' || /^recurring schedule changed$/i.test(why);
+  const schedQ = useQuery({
+    queryKey: ['schedule-cancel', pickupId], enabled: schedCancel && Number.isFinite(pickupId), staleTime: 60_000,
+    queryFn: () => api<{ data: { line: string | null } }>(`/api/pickup-instances/${pickupId}/schedule-cancel`),
+  });
+  const schedLine = schedCancel ? (schedQ.data?.data?.line ?? null) : null;
   return (
     <section className="rounded-[14px] border border-clay/40 bg-clay/10 px-4 py-3 flex flex-wrap items-center gap-3">
       <div className="flex-1 min-w-[220px] text-[13px] text-ink">
         {msg ?? (asking ? 'Text the drivers about it now?' : (
-          <><b>Cancelled{by ? ` ${by}` : ''}{when ? ` · ${when}` : ''}.</b>{why ? ` ${why}` : ''}</>
+          schedLine ? <b data-testid="schedule-cancel-line">{schedLine}.</b> // Oct 28 client
+          : <><b>Cancelled{by ? ` ${by}` : ''}{when ? ` · ${when}` : ''}.</b>{why ? ` ${why}` : ''}</>
         ))}
       </div>
       {!msg && !asking && (

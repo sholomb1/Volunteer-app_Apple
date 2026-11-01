@@ -120,7 +120,7 @@ export function DispatcherAttendancePanel() {
                 {rows.map(({ s, st }) => (
                   <tr key={s.id} className="border-b border-line/70">
                     <td className="px-3 py-2 whitespace-nowrap">{fmtDT(s.starts_at)} – {fmtT(s.ends_at)}</td>
-                    <td className="px-3 py-2 font-bold whitespace-nowrap">{[s.first_name, s.last_name].filter(Boolean).join(' ')}{s.unit_number != null ? ` #${s.unit_number}` : ''}</td>
+                    <td className="px-3 py-2 font-bold whitespace-nowrap"><bdi dir="auto">{[s.first_name, s.last_name].filter(Boolean).join(' ')}</bdi></td>
                     <td className="px-3 py-2 text-muted">{s.signed_in_at ? fmtT(s.signed_in_at) : '—'}</td>
                     <td className="px-3 py-2 text-muted">{s.signed_out_at ? fmtT(s.signed_out_at) : '—'}</td>
                     <td className="px-3 py-2"><span className={cx('text-[11px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap', TONE[st])}>{LABEL[st]}</span></td>

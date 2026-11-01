@@ -24,6 +24,8 @@ import { SandboxPill } from './sandbox-pill';
 import { FilterBlockedBanner } from './filter-banner'; // Oct 11 client: internet-filter banner
 import { fetchRemoteAppVersion, storeUpdateDue, noteNewerVersion, decideUpdatePopup, getLaterUntil, snoozeUpdatePopup } from './app-version-check'; // Oct 14 client
 import { UpdatePopup } from './update-popup'; // Oct 14 client: update pop-up
+import { isPhoneLink } from './phone-sign-in'; // Oct 28 client: phone-code sign-in email link
+import { useViewMode, useDriverLink, canSwitchViews, DispatcherViewBar } from './view-switch'; // Oct 29 client: one login per person
 
 // Oct 11 client: speed — loaded only when opened (was one 1.6 MB bundle).
 const AcceptInvite              = lazyNamed(() => import('./staff-invite'), 'AcceptInvite');
@@ -256,6 +258,10 @@ function Root() {
 
 function AuthedApp() {
   const [user, setUser] = useState<AuthUser | null>(() => getUser());
+  // Oct 28 client: the email link (/rescue/?phone=1 or /rescue/phone) — signed out it opens the
+  // phone-code sign-in (Login); a driver already signed in goes straight to Settings.
+  const loc = useLocation();
+  const phoneLink = isPhoneLink(loc.pathname, loc.search);
 
   // Register for push whenever we have an authenticated user — on a fresh login
   // AND on app startup with a persisted session. This is what actually triggers
@@ -294,7 +300,17 @@ function AuthedApp() {
     const platform: string = cap?.getPlatform?.() ?? (typeof navigator !== 'undefined' ? 'web' : 'unknown');
     // Oct 14 client: Vite replaces the bare __APP_VERSION_NAME__ only — the globalThis form was always empty (App Usage showed no version).
     const version = typeof __APP_VERSION_NAME__ !== 'undefined' ? String(__APP_VERSION_NAME__) : '';
-    const ping = () => { void volunteerApi.ping(platform, version).catch(() => {}); };
+    // Oct 21 client: + versionCode; at most once per 30 minutes per user on this device.
+    const versionCode = Number(__APP_VERSION_CODE__ || 0) || undefined;
+    const pingKey = `zlz_app_ping_at_${(user as any)?.id ?? ''}`;
+    const ping = () => {
+      try {
+        const last = Number(localStorage.getItem(pingKey) || 0);
+        if (last && Date.now() - last < 30 * 60_000) return;
+        localStorage.setItem(pingKey, String(Date.now()));
+      } catch { /* no storage: just send */ }
+      void volunteerApi.ping(platform, version, versionCode).catch(() => {});
+    };
     ping();
     const onVis = () => { if (document.visibilityState === 'visible') ping(); };
     document.addEventListener('visibilitychange', onVis);
@@ -317,13 +333,19 @@ function AuthedApp() {
     };
   }, [user]);
 
+  // Oct 29 client (one login per person): an office login that is also a driver can open the driver app
+  // ("Driver view"); the choice is kept on this device. Default: the office view.
+  const driverId = useDriverLink(user);
+  const view = useViewMode(user?.id ?? null);
+  const driverView = !!user && view === 'driver' && canSwitchViews({ role: user.role, driverProfileId: driverId });
+
   if (!user) return <Login onAuthed={setUser} />;
 
   // Admins / coordinators land in the dispatch portal on desktop.
   // Oct 8: dispatchers + viewers too — they were falling through to the
   // volunteer phone screens (the portal already scopes their tabs).
   const isOffice = user.role === 'admin' || user.role === 'coordinator' || user.role === 'staff';
-  if (isOffice || user.role === 'dispatcher' || user.role === 'viewer') {
+  if ((isOffice || user.role === 'dispatcher' || user.role === 'viewer') && !driverView) {
     return (
       <>
         {isOffice && <SandboxPill />}
@@ -358,8 +380,10 @@ function AuthedApp() {
   }
 
   // Volunteer
+  if (phoneLink) return <Navigate to="/settings" replace />; // Oct 28 client: email link while signed in
   return (
     <PhoneFrame>
+      {driverView && <DispatcherViewBar user={user} />}{/* Oct 29 client: back to the office view */}
       <div className="flex-1 min-h-0 overflow-y-auto">
         <Routes>
           <Route path="/"                 element={<VolunteerHome user={user} />} />
@@ -369,6 +393,7 @@ function AuthedApp() {
           <Route path="/you"              element={<Activity user={user} />} />
           <Route path="/profile"          element={<VolunteerProfile />} />
           <Route path="/settings"         element={<DriverSettings />} />{/* Oct 14 client */}
+          {/* Oct 31 client: Food to handle is office-only for now — not in the driver app. */}
           <Route path="/application"      element={<MyApplication />} />{/* Oct 14 client */}
           <Route path="/pickup/:mode/:id" element={<PickupDetail />} />
           <Route path="/trip/:id"         element={<TripCapture />} />

@@ -18,6 +18,8 @@ import { Bell, BellOff, X } from 'lucide-react';
 import { api, getUser } from './api';
 import { ensureWebPushSubscribed } from './web-push-client';
 import { cx } from './design';
+import { callNumber } from './office-phone'; // Oct 20 client: Call back through the dispatch phone
+import { EscalationAlertExtra } from './closeout'; // Oct 21 client: no-driver escalation pop-up extras
 
 export type OfficeAlert = {
   id: number; kind: string; createdAt: string;
@@ -25,6 +27,7 @@ export type OfficeAlert = {
   pickupId: number | null; phone: string | null;
   handled?: boolean; // Oct 11 client: no longer needed
   dismissed?: boolean; dismissedBy?: string | null; // Oct 12 client: the office dismissed it
+  targetType?: string | null; targetId?: number | null; recordingUrl?: string | null; // Oct 20 client: office phone alerts
 };
 
 /** Oct 11 client: close this device's pop-ups (tag office_alert_<id>) for alerts that are handled. */
@@ -54,9 +57,11 @@ const fmtTime = (iso: string) => new Date(iso).toLocaleString('en-US', {
   timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit',
 });
 const kindIcon = (k: string) =>
+  ['no_driver_soon', 'no_driver_now', 'no_driver_late', 'no_driver_leaving', 'closeout_reminder', 'account_delete_request', 'food_unhandled'].includes(k) ? '' : // Oct 30 client: title starts with 🥡 // Oct 28 client: leaves the drivers' list (title starts with ⏰) // Oct 25 client: delete request title starts with 🗑️ // Oct 21 client: the title starts with its own ⏰ / 🚨 / 🌙
   k === 'reply' ? '📩' : k === 'reply_waiting' ? '⏰' : k === 'gave_back' ? '↩️'
-  : k === 'food_check' || k === 'food_check_info' ? '🥖' : k === 'store_cancel' ? '✋'
-  : k === 'bug_report' ? '🐞' : '🚗'; // Oct 13 client; Oct 14 client: problem report
+  : k === 'food_check' || k === 'food_check_info' ? '🥖' : k === 'store_cancel' ? '✋' : k === 'dropoff_no' ? '🏷️'
+  : k === 'bug_report' ? '🐞' : k === 'bug_fixed' ? '✅' : k === 'checkup' ? '🩺' : k === 'numbers' ? '📊' : k === 'speed' ? '🐢'
+  : k === 'missed_call' ? '📵' : k === 'voicemail' ? '📼' : k === 'pbx' ? '☎️' : k === 'security' ? '🔑' : '🚗'; // Oct 20 client: office phone // Oct 13 client; Oct 14 client: problem report; Oct 16 client: your report was fixed
 
 // ---- Sound: two short beeps, made with the Web Audio API ----
 let audioCtx: AudioContext | null = null;
@@ -253,7 +258,18 @@ export function OfficeAlertsBell({ onOpenPickup, onOpenMessages }: {
   const toggleMute = () => { const v = !muted; setMuted(v); lsSet(MUTE_KEY, v ? '1' : '0'); if (!v) playAlertBeep(); };
   const go = (a: OfficeAlert) => {
     // Oct 14 client: a problem report opens the Problem reports list (Help menu).
-    if (a.kind === 'bug_report') window.dispatchEvent(new Event('zlz:problem-reports'));
+    if (a.kind === 'numbers') window.dispatchEvent(new Event('zlz:open-numbers')); // Oct 21 client: Reports → Numbers
+    else if (a.kind === 'checkup' || a.kind === 'speed') window.dispatchEvent(new Event('zlz:open-checkup')); // Oct 16 client: Reports → Check-up
+    else if (a.kind === 'bug_report') window.dispatchEvent(new Event('zlz:problem-reports'));
+    else if (a.kind === 'closeout_reminder') window.dispatchEvent(new Event('zlz:open-closeout')); // Oct 21 client: Pickups → Close out
+    else if (a.kind === 'food_unhandled') window.dispatchEvent(new Event('zlz:open-food-handle')); // Oct 30 client: Food to handle
+    else if (a.kind === 'bug_fixed') { /* Oct 16 client: just a notice — nothing to open */ }
+    else if (a.kind === 'pbx') { /* Oct 20 client: office phone health — fixed in Settings → Office phone */ }
+    else if (a.kind === 'security') { /* Oct 22 client: office login password reset asked for — just a notice */ }
+    else if ((a.kind === 'missed_call' || a.kind === 'voicemail' || a.kind === 'account_delete_request') && a.targetType && a.targetId) { // Oct 20 client: the caller's profile; Oct 25 client: + driver asked to delete their account
+      const ev = a.targetType === 'volunteer' ? 'zlz:open-volunteer' : a.targetType === 'supplier' ? 'zlz:open-store' : 'zlz:open-pickup';
+      window.dispatchEvent(new CustomEvent(ev, { detail: { id: Number(a.targetId), tab: 'overview' }, cancelable: true }));
+    }
     else if (a.pickupId) onOpenPickup(Number(a.pickupId));
     else onOpenMessages(a.phone);
     setToasts((t) => t.filter((x) => x.id !== a.id));
@@ -307,6 +323,15 @@ export function OfficeAlertsBell({ onOpenPickup, onOpenMessages }: {
                     </span>
                   </span>
                 </button>
+                {/* Oct 20 client: office phone — Call back / Listen */}
+                {(a.kind === 'missed_call' || a.kind === 'voicemail') && a.phone && !a.handled && (
+                  <button onClick={() => callNumber(a.phone)} title="Call back" aria-label="Call back"
+                          className="haptic shrink-0 px-2 text-[15px] hover:bg-cream/60">📞</button>
+                )}
+                {a.recordingUrl && (
+                  <a href={a.recordingUrl} target="_blank" rel="noreferrer" title="Listen" aria-label="Listen to the voicemail"
+                     className="haptic shrink-0 grid place-items-center px-2 text-[14px] hover:bg-cream/60">▶</a>
+                )}
                 {/* Oct 12 client: Dismiss (open alerts) / Undo (dismissed ones) */}
                 {!a.handled && (
                   <button onClick={() => void dismiss([a.id])} title="Dismiss" aria-label="Dismiss"
@@ -339,11 +364,19 @@ export function OfficeAlertsBell({ onOpenPickup, onOpenMessages }: {
                 <div className="flex-1 min-w-0">
                   <div className="font-bold text-[14px]">{a.title}</div>
                   <div className="text-[13px] text-ink mt-1 whitespace-pre-wrap break-words">{a.body}</div>
+                  <EscalationAlertExtra kind={a.kind} pickupId={a.pickupId} />{/* Oct 21 client */}
                   <div className="flex gap-2 mt-3">
-                    <button onClick={() => go(a)}
+                    {a.kind !== 'bug_fixed' && a.kind !== 'pbx' && a.kind !== 'security' && <button onClick={() => go(a)}
                             className="haptic text-[12px] font-bold bg-sky text-paper px-3 py-1.5 rounded-[8px]">
-                      {a.kind === 'bug_report' ? 'Open problem reports →' : a.pickupId ? 'Open pickup →' : 'Open driver messages →'}{/* Oct 14 client */}
-                    </button>
+                      {a.kind === 'numbers' ? 'Open numbers →' : a.kind === 'closeout_reminder' ? 'Open close-out →' : a.kind === 'food_unhandled' ? 'Open Food to handle →' : a.kind === 'checkup' || a.kind === 'speed' ? 'Open check-up →' : a.kind === 'bug_report' ? 'Open problem reports →' : a.pickupId ? 'Open pickup →' : (a.kind === 'missed_call' || a.kind === 'voicemail' || a.kind === 'account_delete_request') && a.targetId ? 'Open profile →' : 'Open driver messages →'}{/* Oct 14 client */}
+                    </button>}
+                    {(a.kind === 'missed_call' || a.kind === 'voicemail') && a.phone && ( // Oct 20 client: office phone
+                      <button onClick={() => { callNumber(a.phone); setToasts((t) => t.filter((x) => x.id !== a.id)); }}
+                              className="haptic text-[12px] font-bold bg-forest text-paper px-3 py-1.5 rounded-[8px]">📞 Call back</button>
+                    )}
+                    {a.recordingUrl && (
+                      <a href={a.recordingUrl} target="_blank" rel="noreferrer" className="haptic text-[12px] font-bold border border-line text-ink px-3 py-1.5 rounded-[8px]">▶ Listen</a>
+                    )}
                     <button onClick={() => setToasts((t) => t.filter((x) => x.id !== a.id))}
                             className="haptic text-[12px] font-bold text-muted px-3 py-1.5 rounded-[8px] hover:bg-cream/60">
                       Dismiss
