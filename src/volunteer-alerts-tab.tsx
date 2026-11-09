@@ -12,7 +12,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, canOfficeOnly, getUser } from './api';
 import { cx } from './design';
 import { uiConfirm } from './ui-dialogs';
-import { OnCallHoursEditor, RecentCalls } from './on-call';
+import { OnCallHoursEditor } from './on-call';
 import { LastChanged } from './change-history'; // Oct 16 client: "Last changed by … · when"
 import { OfficePauseReach } from './office-driver-app'; // Oct 14 client: same Pause + reach choice as the driver app
 import { fmtTime } from './time-format';
@@ -299,10 +299,8 @@ export function VolunteerAlertsTab({ volunteerId }: { volunteerId: number }) {
       <Card title="On call" help="">
         <OnCallHoursEditor endpoint={`/api/volunteers/${volunteerId}/on-call`} title="" who={`${name} is`} />
         <LastChanged volunteerId={volunteerId} field="calls" />
-        {/* Oct 11 client: calls the office made to this driver (logged from the Live Board or here). */}
-        <div className="mt-3 border-t border-line pt-3">
-          <RecentCalls volunteerId={volunteerId} name={name} />
-        </div>
+        {/* Oct 11 client: calls the office made to this driver. Nov 3 client: moved to the card's Notes tab. */}
+        <div className="mt-2 text-[12px] text-muted">Calls to {name === 'This volunteer' ? 'them' : name} and "📞 I called" are in the <b>Notes</b> tab.</div>
       </Card>
 
       <Card title="Coming up (next 2 weeks)" help="Pickups they're on, and the reminder texts they'll get.">

@@ -28,7 +28,7 @@ import { LastChanged } from './change-history'; // Oct 16 client: "Last changed 
 export function OfficePauseReach({ volunteerId, name }: { volunteerId: number; name: string }) {
   const q = useDriverSettings(volunteerId);
   const s = q.data?.data;
-  const pause = usePause(s, volunteerId);
+  const pause = usePause(s, volunteerId, name);
   const [pauseOpen, setPauseOpen] = useState(false);
   if (q.isLoading) return <div className="text-[13px] text-muted">Loading…</div>;
   if (!s) return <div className="text-[13px] text-clay">Couldn't load. <button onClick={() => q.refetch()} className="underline font-bold">Try again</button></div>;

@@ -16,6 +16,7 @@
  */
 import { useEffect, useState } from 'react';
 import {
+  api,
   getUser,
   isSandboxAvailable,
   refreshMeFromServer,
@@ -25,11 +26,58 @@ import {
 type Mode = 'sandbox' | 'live_test';
 const BAR_HEIGHT = 36;
 
+// Nov 5 client: the test site holds AUTOMATIC texts / WhatsApps / calls (sweeps); an admin can let
+// them through for an hour from this bar. Messages a person sends by pressing something still go
+// to the sandbox phone. (API: GET/POST /api/dev/auto-sends — test site only, admins only.)
+type AutoSends = { until: string | null; held: number };
+const autoOn = (a: AutoSends | null) => !!a?.until && Date.parse(a.until) > Date.now();
+const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
+function AutoSendsSwitch() {
+  const [auto, setAuto] = useState<AutoSends | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const load = () => api<{ data: AutoSends }>('/api/dev/auto-sends')
+      .then((r) => { if (alive) setAuto(r.data); }).catch(() => { /* not available — hide */ });
+    void load();
+    const t = setInterval(load, 60_000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+  if (!auto) return null;
+  const on = autoOn(auto);
+  async function set(minutes: number) {
+    setBusy(true);
+    try {
+      const r = await api<{ data: AutoSends }>('/api/dev/auto-sends', { method: 'POST', body: JSON.stringify({ minutes }) });
+      setAuto(r.data);
+    } catch (err) {
+      alert('Could not change it: ' + (err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#333', whiteSpace: 'nowrap' }}
+      title="Automatic messages = texts, WhatsApps and calls the system sends by itself (reminders, alerts, pickup texts). Messages you send by pressing a button still go to the sandbox phone.">
+      <b>Automatic messages:</b>
+      {on ? <span style={{ color: '#B91C1C', fontWeight: 700 }}>going out until {clock(auto.until!)}</span> : <span>held</span>}
+      <span>·</span>
+      <button onClick={() => void set(on ? 0 : 60)} disabled={busy}
+        style={{ padding: '2px 8px', fontSize: 12, fontWeight: 600, borderRadius: 5, border: '1px solid #333',
+          background: '#fff', cursor: busy ? 'wait' : 'pointer' }}>
+        {busy ? '…' : on ? 'Hold them again' : 'Let them through for 1 hour'}
+      </button>
+    </span>
+  );
+}
+
 export function SandboxPill() {
   const [available, setAvailable] = useState<boolean>(() => isSandboxAvailable());
   const [mode, setMode] = useState<Mode>(() => (getUser()?.testMode as Mode) ?? 'sandbox');
   const [showConfirm, setShowConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
+  const isAdmin = getUser()?.role === 'admin';
 
   useEffect(() => {
     (async () => {
@@ -82,6 +130,7 @@ export function SandboxPill() {
           display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 14,
           zIndex: 9999, fontFamily: 'system-ui, -apple-system, sans-serif',
           boxShadow: '0 2px 6px rgba(0,0,0,0.1)', userSelect: 'none',
+          overflowX: 'auto', whiteSpace: 'nowrap', // Nov 5 client: room for the automatic-messages switch on phones
         }}
       >
         <span style={{ fontSize: 12, fontWeight: 700, color: '#333', letterSpacing: 0.4 }}>
@@ -124,6 +173,7 @@ export function SandboxPill() {
             ? 'outbound SMS/WA -> +1 845-376-2748'
             : 'REAL recipients — real messages fire'}
         </span>
+        {isAdmin && <AutoSendsSwitch />}
       </div>
 
       {showConfirm && (

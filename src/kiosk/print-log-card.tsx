@@ -9,7 +9,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../api';
 import { whenAt } from '../display';
 
-type Face = { store: string[]; date: string; kind: string; container: string; count: string };
+type Face = { store: string[]; date: string; kind: string; container: string; count: string; caterer?: boolean; sub?: string }; // Nov 6 client: + caterer
 type Row = {
   id: number; at: string; driver: string | null; transport: 'tcp' | 'relay' | 'browser' | 'none'; ok: boolean;
   printed: number; total: number; stopped?: boolean; error?: string | null; layout?: string; faces?: Face[]; commands?: string | null;
@@ -22,6 +22,7 @@ function MiniLabel({ f }: { f: Face }) {
   return (
     <div className="shrink-0 w-[132px] h-[132px] rounded-full border-2 border-ink/70 bg-white flex flex-col items-center justify-center text-center leading-tight px-3">
       {f.store.map((s, i) => <div key={i} className="text-[10px] font-bold truncate max-w-full">{s}</div>)}
+      {f.sub && <div className="text-[8.5px] truncate max-w-full">{f.sub}</div>}
       <div className="text-[9px] text-muted">{f.date}</div>
       <div className="text-[13px] font-extrabold mt-0.5">{f.kind}</div>
       {f.container && <div className="text-[10px] font-bold">{f.container}</div>}
@@ -62,7 +63,7 @@ export function PrintLogCard() {
                   {f && <MiniLabel f={f} />}
                   <div className="min-w-0 text-[13px]">
                     <div className="font-bold">{whenAt(r.at)}{r.driver ? ` · ${r.driver}` : ''}</div>
-                    {f && <div className="text-muted">{f.store.join(' ')}</div>}
+                    {f && <div className="text-muted">{f.caterer ? `🍽 Caterer: ${f.store.join(' ')}${f.sub ? ` · ${f.sub}` : ''}` : f.store.join(' ')}</div>}
                     <div className={r.ok ? 'text-forest font-bold' : 'text-clay font-bold'}>{r.ok ? '✓ ' : '⚠️ '}{result}</div>
                     <div className="text-muted">Sent {PATH[r.transport] ?? r.transport}{r.layout ? ` · ${r.layout === 'round' ? 'new round label' : 'old label'}` : ''}</div>
                     {r.commands && (

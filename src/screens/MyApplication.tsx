@@ -104,16 +104,17 @@ export function ApplicationPanel({ volunteerId, name, editing, setEditing }: { v
         {d.hasApplication
           ? <>{office ? `What ${who} told us` : 'What you told us'} on the volunteer sign-up form{d.receivedAt ? ` (${fmtDate(d.receivedAt)})` : ''}.</>
           : office ? <>No sign-up form from {who} yet — the office added them. You can fill in the answers for them.</>
-          : <>We don't have a sign-up form from you yet — the office added you. You can fill in the answers now.</>}
+          : <>We don't have a sign-up form from you yet — the office added you.</>}
         {d.updatedAt && <> Last updated {fmtDate(d.updatedAt)}.</>}
       </div>
       <ApplicationSummary answers={answers} />
-      <div className="sticky bottom-0 -mx-5 mt-6 border-t border-line bg-paper/95 backdrop-blur px-5 py-3">
+      {/* Nov 3 Yakov: no "Update my answers" button for drivers (the office keeps Edit answers). */}
+      {office && <div className="sticky bottom-0 -mx-5 mt-6 border-t border-line bg-paper/95 backdrop-blur px-5 py-3">
         <button onClick={() => { setEditing(true); top(); }} data-edit-answers
                 className="haptic w-full min-h-[52px] rounded-[14px] bg-forest text-paper text-[17px] font-bold flex items-center justify-center gap-2">
-          <Pencil size={18} /> {office ? (d.hasApplication ? 'Edit answers' : 'Fill in answers') : d.hasApplication ? 'Update my answers' : 'Fill in my answers'}
+          <Pencil size={18} /> {d.hasApplication ? 'Edit answers' : 'Fill in answers'}
         </button>
-      </div>
+      </div>}
     </FadeUp>
   );
 }

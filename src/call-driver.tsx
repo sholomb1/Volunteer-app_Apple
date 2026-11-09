@@ -116,7 +116,7 @@ export function DriverCallButtons({ pickupId, pickupRef, pickup, drivers, big }:
                  onClick={(e) => { e.stopPropagation(); if (canCall && !start.isPending) start.mutate({ id: vid, name }); }}
                  title={`Call ${name} (${displayPhone(d.phone)}). The call is written in the call log.`}
                  className={`haptic inline-flex items-center gap-1 rounded-[9px] border border-forest/40 bg-paper px-2.5 ${big ? 'py-1.5' : 'py-1'} font-bold text-forest hover:bg-sage/60`}>
-                📞 Call {name}
+                📞 Call driver ({name}){/* Nov 4 client: "nobody knows who Chaim is" — say who he is */}
               </a>
             ) : (
               <span className="text-muted">{name}: no phone on file</span>
@@ -126,7 +126,7 @@ export function DriverCallButtons({ pickupId, pickupRef, pickup, drivers, big }:
                       onClick={(e) => { e.stopPropagation(); void openText(vid, name, String(d.phone)); }}
                       title={`Text ${name} (1:1). It shows in Driver messages → Texts.`}
                       className={`haptic inline-flex items-center gap-1 rounded-[9px] border border-sky/40 bg-paper px-2.5 ${big ? 'py-1.5' : 'py-1'} font-bold text-sky-deep hover:bg-sky/10`}>
-                💬 Text {name}
+                💬 Text driver ({name})
               </button>
             )}
             {last && <span data-called-line={vid} className="font-bold text-forest">{calledLine(last, big)}</span>}

@@ -7,6 +7,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import { cx } from './design';
+import { useLeaveGuard } from './next-dispatcher'; // Nov 6 client: the next dispatcher hasn't signed in → ask first
 
 type MyShift = {
   id: number; starts_at: string; ends_at: string; notes: string | null;
@@ -56,6 +57,7 @@ export function MyShiftPanel() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['my-shifts'] }),
     onError: (e: any) => alert(e?.message || 'Could not update the shift'),
   });
+  const lg = useLeaveGuard('Sign out anyway');
   const now = Date.now();
   const rows = q.data?.data ?? [];
   const current = rows.filter((s) => {
@@ -94,7 +96,7 @@ export function MyShiftPanel() {
                   className="haptic rounded-[10px] bg-forest px-4 py-2 text-[13px] font-bold text-paper disabled:opacity-50">Sign in</button>
         )}
         {actions && s.signed_in_at && !s.signed_out_at && (
-          <button disabled={act.isPending} onClick={() => act.mutate({ id: s.id, action: 'sign-out' })}
+          <button disabled={act.isPending} onClick={() => lg.guard(() => act.mutate({ id: s.id, action: 'sign-out' }))}
                   className="haptic rounded-[10px] border border-line px-4 py-2 text-[13px] font-bold text-forest disabled:opacity-50">Sign out</button>
         )}
       </div>
@@ -110,6 +112,7 @@ export function MyShiftPanel() {
   );
   return (
     <div className="space-y-5">
+      {lg.dialog}
       {section('Now', current, true, 'No shift right now.')}
       {section('Coming up', upcoming, false, 'No upcoming shifts in the next two weeks.')}
       {section('Last 7 days', past, false, 'No shifts in the last week.')}

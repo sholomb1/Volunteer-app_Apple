@@ -11,12 +11,13 @@
  * (DriverPickerModal) — no duplicate write path.
  */
 import { Tip } from '../design';
+import { SteadyOpenNote } from '../steady-open'; // Nov 6 Yakov: usual driver off — open for others
 import { RunTag, runPlaceOf } from '../runs'; // Oct 30 client: 🚚 Run to Lakewood / Fallsburg
 import { ContactNoticeLine } from '../food-check'; // Oct 14 client
 import { StorePhotoCard } from '../store-photo'; // Oct 14 client
 import { uiConfirm, uiNotify } from '../ui-dialogs';
 import { cancelledByText } from '../cancelled-by'; // Oct 14 client: who cancelled
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { PickupFoodResult } from '../food-handle'; // Oct 30 client
 import { StockAddedLine } from '../stock-link'; // Oct 30 client: ordering portal adds credited to this pickup
@@ -26,13 +27,16 @@ import { adminCRUD, api, upcomingSms } from '../api';
 import { sendPickupNowConfirmed } from '../pickup-send-now';
 import { smsReasonText, textedText } from '../sms-reason';
 import { repostedLabel, nyToday } from '../time-format';
-import { QuickPickupModal } from '../portal-sections';
+import { lazyNamed } from '../lazy-load';
+const QuickPickupModal = lazyNamed(() => import('../portal-sections'), 'QuickPickupModal'); // Nov 3 client: speed — the edit form loads when opened
 import { DriverAvatar, usePhotoMap } from '../driver-photo'; // Oct 30 client: driver photo on the driver line
 import { DriverPickerModal } from './CoordinatorPortal';
 import { SuggestedDriversCard } from '../profiles';
 import { TextedDriversLink, PickupTextLines, markSending, clearSending, afterSendAnswer, useSendingSince } from '../text-recipients'; // Oct 11 client: who got the pickup text; Oct 12: next text + times sent
 import { submittedByLabel } from '../submitted-by'; // Oct 12 client
 import { readExtraContacts, telHref } from '../extra-contacts'; // Oct 12 client
+import { FindDriverButton } from '../driver-finder'; // Nov 3 client: ranked drivers for an open pickup
+import { PickupTextButton } from '../pickup-text'; // Nov 3 client: text a whole pickup
 import { DriverCallButtons } from '../call-driver'; // Oct 16 client (idea 8): one-tap call the driver, logged
 import { NoDriverHelp } from '../closeout'; // Oct 21 client: usual drivers to call; 1h late → choose
 import { pickupLabel } from '../pickup-label'; // Oct 22 client: pickups by name, never by id
@@ -327,6 +331,8 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
               {row.steady_pickup_id != null && (
                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10.5px] font-extrabold uppercase tracking-[.05em] bg-sage text-forest">Steady</span>
               )}
+              {/* Nov 6 Yakov: set on the steady — the usual driver is off these days, open for others. */}
+              {row.steady_pickup_id != null && <SteadyOpenNote steadyId={row.steady_pickup_id} date={row.scheduled_date} big />}
               {/* Oct 30 client: a run to Lakewood / Fallsburg (texted only to drivers who go there). */}
               <RunTag pickupType={row.pickup_type} big />
               {row.is_one_time && !runPlaceOf(row.pickup_type) && (
@@ -361,6 +367,8 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
                 <UserPlus size={14} /> Assign Driver
               </button>
             )}
+            {showAssignBtn && <FindDriverButton pickupId={Number((row as any).id ?? pickupId)} />}{/* Nov 3 client: smart driver finder */}
+            <PickupTextButton pickupId={Number((row as any).id ?? pickupId)} />{/* Nov 3 client: text a whole pickup (driver / store / both) */}
             {_closedForDriver && (
               <button onClick={() => setAssigning(true)} data-testid="closed-driver-btn"
                       title="Record who did this pickup. He gets the credit. No texts are sent."
@@ -473,6 +481,7 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
           {/* 3. Food + quantity */}
           <Card title="Food">
             <Row label="Description" value={row.food_description || <em className="text-muted">(none)</em>} />
+            {(row as any).caterer && <Row label="🍽 Caterer" value={<b>{(row as any).caterer}</b>} />/* Nov 6 client */}
             {row.estimated_quantity && <Row label="Estimated quantity" value={row.estimated_quantity} />}
             {/* Oct 14 client: the photo the store added when posting. */}
             <StorePhotoCard url={(row as any).store_photo_url} className="max-w-[420px]" />
@@ -530,6 +539,7 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
 
       {/* Reused modals from the live board — same write paths, no duplication. */}
       {editing && (
+        <Suspense fallback={<div className="text-[13px] text-muted">Loading…</div>}>{/* Nov 3 client */}
         <QuickPickupModal
           pickup={row as any}
           onClose={() => setEditing(false)}
@@ -539,6 +549,7 @@ export function AdminPickupDetail({ pickupIdOverride, onClose }: { pickupIdOverr
             qc.invalidateQueries({ queryKey: ['admin-pickup-single', pickupId] });
           }}
         />
+        </Suspense>
       )}
       {assigning && (
         <DriverPickerModal

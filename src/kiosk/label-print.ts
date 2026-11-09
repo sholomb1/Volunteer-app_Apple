@@ -170,18 +170,37 @@ export async function printLabelsStepwise(
 // labels and keep the older layout.
 const KIND_WORDS = ['Fleishig', 'Milchig', 'Pareve', 'Mixed', 'Not sure'];
 const squish = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
-export type LabelFace = { isKind: boolean; store: string[]; date: string; kind: string; container: string; count: string };
-export function kioskLabelFace(lb: Pick<KioskLabel, 'supplierName' | 'date' | 'category' | 'unit' | 'index' | 'total'>): LabelFace {
+export type LabelFace = { isKind: boolean; store: string[]; date: string; kind: string; container: string; count: string; caterer: boolean; sub: string; note: string[]; times: string; code: string; driver: string };
+/**
+ * Nov 6 client: a pickup with a caterer → the caterer is the top line (1–2 lines) and, when it fits on
+ * one line, the store / address goes small under it. Same rule as the API's catererTop (kiosk-food.ts).
+ */
+export function catererTop(supplierName: unknown, caterer: unknown): { store: string[]; caterer: boolean; sub: string } {
+  const sup = squish(supplierName);
+  const cat = squish(caterer);
+  if (!cat) return { store: labelLines(sup || 'Drop-off', 20, 2), caterer: false, sub: '' };
+  const store = labelLines(cat, 20, 2);
+  const sub = store.length === 1 && sup && sup.toLowerCase() !== cat.toLowerCase() && sup !== 'Drop-off' ? labelLines(sup, 28, 1)[0] : '';
+  return { store, caterer: true, sub };
+}
+export function kioskLabelFace(lb: Pick<KioskLabel, 'supplierName' | 'caterer' | 'date' | 'category' | 'unit' | 'index' | 'total'> & { note?: string | null; acceptedTime?: string | null; dropTime?: string | null; code?: string | null; description?: string | null }): LabelFace {
   const cat = squish(lb.category);
   const hit = KIND_WORDS.find((k) => k.toLowerCase() === cat.toLowerCase());
   const unit = squish(lb.unit).toLowerCase();
+  const top = catererTop(lb.supplierName, lb.caterer);
   return {
     isKind: !!hit,
-    store: labelLines(squish(lb.supplierName) || 'Drop-off', 20, 2),
+    store: top.store, caterer: top.caterer, sub: top.sub,
     date: squish(lb.date).slice(0, 18),
     kind: (hit ?? cat).toUpperCase().slice(0, 12),
     container: (!unit || unit === 'item' ? '' : unit).toUpperCase().slice(0, 12),
     count: `${lb.index} of ${lb.total}`,
+    note: squish(lb.note) ? labelLines(squish(lb.note), 24, 2) : [], // Nov 8 client: up to 2 short lines at the bottom
+    // Nov 8 client: small and quiet — never a "how long it took".
+    times: [squish(lb.acceptedTime) ? `Accepted ${squish(lb.acceptedTime)}` : '', squish(lb.dropTime) ? `Drop-off ${squish(lb.dropTime)}` : ''].filter(Boolean).join('   ').slice(0, 40), // plain spaces: the printer font has no dot sign
+    code: squish(lb.code).replace(/[^A-Za-z0-9-]/g, '').slice(0, 40),
+    // Nov 8 client: the driver's name ("Binyomin G."), from the label's description (the driver on new kiosk labels)
+    driver: (() => { const w = squish(lb.description).split(' ').filter(Boolean); return (w.length > 1 ? `${w[0]} ${w[w.length - 1]![0]!.toUpperCase()}.` : (w[0] ?? '')).slice(0, 30); })(),
   };
 }
 function labelLines(text: string, maxChars: number, maxLines: number): string[] {
@@ -220,10 +239,20 @@ export function buildKindLabelTspl(lb: KioskLabel): Uint8Array {
   const esc = (s: string) => s.replace(/[\r\n\t\0]/g, ' ').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/…/g, '...');
   const BX = 64;   // 64-dot margin each side → 480 wide box
   const BW = 480;
-  const storeCmds = f.store.length === 1
-    ? [`BLOCK ${BX},130,${BW},36,"3",0,1,1,0,2,"${esc(f.store[0])}"`]
-    : [`BLOCK ${BX},108,${BW},30,"3",0,1,1,0,2,"${esc(f.store[0])}"`,
-       `BLOCK ${BX},140,${BW},30,"3",0,1,1,0,2,"${esc(f.store[1])}"`];
+  // Nov 8 client: new layout — same printer fonts and settings; the kind a bit smaller; small quiet times;
+  // the note; a QR code for the box at the bottom. Round die 608×597 dots, centre ≈ 304,298.
+  //   y 64–124 store (1–2 lines, font 3)   y 132 date (3)   y 164 times (font 2, small)
+  //   y 194 rule   y 206 KIND (font 5)   y 262 CONTAINER (font 4)   y 304 rule   y 316 "x of N" (font 4)
+  //   y 358 / 386 note (font 3)   QR (cell 4 ≈ 100 dots) under it, centred
+  const storeCmds = f.store.length === 1 && f.sub
+    ? [`BLOCK ${BX},64,${BW},32,"3",0,1,1,0,2,"${esc(f.store[0])}"`,
+       `BLOCK ${BX},98,${BW},28,"2",0,1,1,0,2,"${esc(f.sub)}"`]
+    : f.store.length === 1
+    ? [`BLOCK ${BX},86,${BW},36,"3",0,1,1,0,2,"${esc(f.store[0])}"`]
+    : [`BLOCK ${BX},66,${BW},30,"3",0,1,1,0,2,"${esc(f.store[0])}"`,
+       `BLOCK ${BX},98,${BW},30,"3",0,1,1,0,2,"${esc(f.store[1])}"`];
+  const noteY = 366;
+  const qrY = f.note.length ? noteY + f.note.length * 26 + 8 : 366;
   const cmds: string[] = [
     'SIZE 3.00,2.94',
     'GAP 0.19,0',
@@ -235,12 +264,16 @@ export function buildKindLabelTspl(lb: KioskLabel): Uint8Array {
     'SET TEAR ON',
     'CLS',
     ...storeCmds,
-    `BLOCK ${BX},180,${BW},30,"3",0,1,1,0,2,"${esc(f.date)}"`,
-    'BAR 154,222,300,4',
-    `BLOCK 24,238,560,70,"4",0,2,2,0,2,"${esc(f.kind)}"`,
-    `BLOCK ${BX},312,${BW},54,"3",0,2,2,0,2,"${esc(f.container)}"`,
-    'BAR 154,378,300,4',
-    `BLOCK ${BX},396,${BW},54,"3",0,2,2,0,2,"${esc(f.count)}"`,
+    `BLOCK ${BX},132,${BW},28,"3",0,1,1,0,2,"${esc(f.date)}"`,
+    ...(f.driver ? [`BLOCK 84,162,440,22,"2",0,1,1,0,2,"${esc(f.driver)}"`] : []),
+    ...(f.times ? [`BLOCK 84,${f.driver ? 184 : 166},440,22,"2",0,1,1,0,2,"${esc(f.times)}"`] : []),
+    'BAR 154,210,300,4',
+    `BLOCK 24,220,560,50,"5",0,1,1,0,2,"${esc(f.kind)}"`,
+    `BLOCK ${BX},276,${BW},34,"4",0,1,1,0,2,"${esc(f.container)}"`,
+    'BAR 154,316,300,4',
+    `BLOCK ${BX},326,${BW},34,"4",0,1,1,0,2,"${esc(f.count)}"`,
+    ...f.note.map((t, i) => `BLOCK 94,${noteY + i * 26},420,26,"3",0,1,1,0,2,"${esc(t)}"`),
+    ...(f.code ? [`QRCODE 254,${qrY},M,4,A,0,"${esc(f.code)}"`] : []),
     'PRINT 1,1',
   ];
   return new TextEncoder().encode(cmds.join('\r\n') + '\r\n');
@@ -338,7 +371,11 @@ export function buildLabelTspl(lb: KioskLabel): Uint8Array {
   const SUPPLIER_MAX_CHARS = 60;   // hard cap — anything past this gets '…'
   const BIG_FONT_MAX_CHARS = 22;   // >22 chars won't fit on one big (mult 2) line
   const SMALL_FONT_LINE_CHARS = 40; // per-line cap at mult 1 (label fits ~44 dots-wise; 40 keeps margin)
-  const supplierRaw = String(lb.supplierName ?? '').slice(0, SUPPLIER_MAX_CHARS);
+  // Nov 6 client: a caterer leads ("Gourmet Glatt - Bais Medrash Hall"; the store only when it fits).
+  const _cat = String(lb.caterer ?? '').replace(/\s+/g, ' ').trim();
+  const _sup = String(lb.supplierName ?? '');
+  const _withSup = _cat && _sup.trim() && _sup.trim().toLowerCase() !== _cat.toLowerCase() ? `${_cat} - ${_sup.trim()}` : _cat;
+  const supplierRaw = (_cat ? (_withSup.length <= SUPPLIER_MAX_CHARS ? _withSup : _cat) : _sup).slice(0, SUPPLIER_MAX_CHARS);
   // Decide font size FIRST from the raw length. Never render mult 2 for a
   // string that won't fit as one big line — otherwise it overruns the edge.
   const useBigFont = supplierRaw.length <= BIG_FONT_MAX_CHARS;

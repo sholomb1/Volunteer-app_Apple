@@ -119,12 +119,16 @@ const TONE: Record<string, string> = {
 };
 
 // Oct 14 client: per-pickup "Text the contact when a driver is on the way" (server: contact-notice.ts).
-export const CONTACT_NOTICE_TEXT = "Zeh L'Zeh: A driver accepted your pickup and will be there soon. If it's no longer needed, reply CANCEL. Thanks!";
-/** Grey preview under the form's checkbox: '(845) 422-0191 · "Zeh L'Zeh: A driver accepted …"'. */
-export function contactNoticePreview(phone: string | null | undefined): string {
+// Nov 8 client: the preview showed a sample street ("57 Regina Ct") — now the pickup's own street, like the real text.
+export const contactNoticeText = (address?: string | null) => {
+  const street = String(address ?? '').split(',')[0]?.trim() ?? '';
+  return `Zeh L'Zeh: A driver is on the way${street ? ` to ${street}` : ''}. If the address is wrong or anything is different, please call our dispatcher at (845) 363-5323 ext. 103.`;
+};
+/** Grey preview under the form's checkbox: '(845) 422-0191 · "Zeh L'Zeh: A driver is on the way to …"'. */
+export function contactNoticePreview(phone: string | null | undefined, address?: string | null): string {
   const d = String(phone ?? '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
   const shown = d.length === 10 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : (String(phone ?? '').trim() || 'Add a Contact Phone above to use this') /* Oct 14 client: was "No phone yet" */;
-  return `${shown} · "${CONTACT_NOTICE_TEXT}"`;
+  return `${shown} · "${contactNoticeText(address)}"`;
 }
 /** Oct 14 client: card / pickup page line while the contact is still to be told. */
 export function contactNoticeShown(p: any): boolean {

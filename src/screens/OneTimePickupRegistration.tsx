@@ -55,6 +55,7 @@ export function OneTimePickupRegistration() {
   const [extraContacts, setExtras] = useState<ExtraContact[]>([]); // Oct 12 client: "+ Add another contact"
   const [address, setAddress]     = useState('');
   const [pickupDetails, setPD]    = useState('');
+  const [caterer, setCaterer]     = useState(''); // Nov 6 client: "Caterer (if the food is from a caterer)"
   const [size, setSize]           = useState<'small' | 'large' | null>(null);
   // Oct 12 client: "Form submitted by" — required here (the API still takes it missing from old cached pages).
   const [subBy, setSubBy]         = useState<SubmittedByState>({ choice: '', name: '' });
@@ -114,6 +115,7 @@ export function OneTimePickupRegistration() {
           readyDate:          date,
           readyTime:          time,
           pickupDetails:      pickupDetails.trim(),
+          caterer:            caterer.trim() || undefined, // Nov 6 client
           pickupInstructions: pickupInstructions.trim(),
           supplierId:         storePicked ? supplierId : null,
           size,
@@ -190,6 +192,11 @@ export function OneTimePickupRegistration() {
             <textarea id="ot-food" rows={2} value={pickupDetails} onChange={(e) => setPD(e.target.value)}
                       placeholder='e.g. "8 trays of chicken and rice"'
                       className={cx(inputCls, 'min-h-[64px]')} />
+          </Field>
+          {/* Nov 6 client: which caterer — it prints on the food labels at the center. */}
+          <Field label="Caterer (if the food is from a caterer)" optional htmlFor="ot-caterer">
+            <input id="ot-caterer" value={caterer} onChange={(e) => setCaterer(e.target.value)} maxLength={120}
+                   placeholder='e.g. "Gourmet Glatt"' className={inputCls} autoComplete="off" />
           </Field>
           <Field label="Size" optional>
             <div className="flex gap-2">

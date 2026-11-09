@@ -8,11 +8,13 @@
  * API: GET /api/admin/pbx, PUT/DELETE /api/admin/pbx/connection, POST /api/admin/pbx/test,
  *      GET /api/admin/pbx/lists, PUT /api/admin/pbx/settings, POST /api/admin/pbx/subscribe.
  */
+import { dispatchLine } from './dispatch-line'; // Nov 4 client: "(ext. 103)"
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import { cx } from './design';
 import { refreshOfficePhone } from './office-phone';
+import { DispatchForwardCard, FwdKeyCard } from './dispatch-forward'; // Nov 2 client: dispatch forwarding
 
 type Lists = {
   me: { ext: string | null; name: string | null };
@@ -129,7 +131,7 @@ export function OfficePhonePanel() {
         </div>
         <p className="text-[12.5px] text-muted">
           Connect the office phone system so the office sees who is calling, missed calls and voicemails come in as alerts,
-          every call is written in the driver’s or store’s call log, and the 📞 Call buttons ring the dispatch phone.
+          every call is written in the driver’s or store’s call log, and the 📞 Call buttons ring the dispatch line, {dispatchLine(v.dispatchExt).full}.
           Until it is connected nothing changes: Call buttons open this device’s phone as before.
         </p>
         {v.connected && v.status.healthOk === false && v.status.healthProblem && (
@@ -167,7 +169,7 @@ export function OfficePhonePanel() {
           </button>
           {v.source === 'site' && (
             <button type="button" disabled={busy}
-                    onClick={() => { if (window.confirm('Disconnect the office phone? Pop-ups, missed-call alerts and dispatch-phone calling stop.')) disconnect.mutate(); }}
+                    onClick={() => { if (window.confirm(`Disconnect the office phone? Pop-ups, missed-call alerts and dispatch line (${dispatchLine(v.dispatchExt).short}) calling stop.`)) disconnect.mutate(); }}
                     className={cx(btn, 'bg-paper text-clay border-clay/40')}>Disconnect</button>
           )}
         </div>
@@ -177,8 +179,8 @@ export function OfficePhonePanel() {
       <section className={cx(box, !v.connected && 'opacity-60')}>
         <h3 className={h3}>Calls from the app</h3>
         <p className="text-[12.5px] text-muted">
-          One shared dispatch phone: whoever is dispatching uses it. When anyone in the office presses 📞 Call, the dispatch
-          phone rings first; pick it up and it calls the person, who sees the office number.
+          One shared dispatch line — {dispatchLine(v.dispatchExt).full}: whoever is dispatching uses it. When anyone in the office presses 📞 Call, the dispatch
+          line rings first; pick it up and it calls the person, who sees the office number.
         </p>
         <label className="block space-y-1">
           <span className="text-[12.5px] font-bold text-ink">Dispatch extension</span>
@@ -202,6 +204,9 @@ export function OfficePhonePanel() {
         {note('caller')}
       </section>
 
+      {v.connected && <FwdKeyCard />}{/* Nov 2 client: second key (forwarding) */}
+      {v.connected && <DispatchForwardCard setup />}{/* Nov 2 client; Nov 5 client: the admin forwarding controls live here now */}
+
       <section className={cx(box, !v.connected && 'opacity-60')}>
         <h3 className={h3}>Phone events into the app</h3>
         <ul className="text-[13px] space-y-0.5">
@@ -219,13 +224,13 @@ export function OfficePhonePanel() {
         <p className="text-[12px] text-clay font-bold">
           Only one site can get these events. Subscribing here moves them from any other site{v.sandbox ? ' — this is the TEST site, so do it on the live site only, unless Sholo says so.' : '.'}
         </p>
-        <button type="button" disabled={busy || !v.connected} onClick={() => subscribe.mutate()} className={cx(btn, 'bg-forest text-paper border-forest')}>
+        <button type="button" disabled={busy || !v.connected} onClick={() => { if (window.confirm('Subscribe the phone events again? Reliable will send calls to THIS site only.')) subscribe.mutate(); }} className={cx(btn, 'bg-forest text-paper border-forest')}>
           {subscribe.isPending ? 'Subscribing… (up to 40 s)' : v.hooks.some((h) => h.subscribed) ? 'Subscribe webhooks again' : 'Subscribe webhooks'}
         </button>
         {note('hooks')}
       </section>
 
-      {v.sandbox && <p className="text-[12px] text-muted">Test site: a 📞 Call through the dispatch phone always dials the sandbox phone, whatever number you pressed.</p>}
+      {v.sandbox && <p className="text-[12px] text-muted">Test site: a 📞 Call through the dispatch line ({dispatchLine(v.dispatchExt).short}) always dials the sandbox phone, whatever number you pressed.</p>}
     </div>
   );
 }

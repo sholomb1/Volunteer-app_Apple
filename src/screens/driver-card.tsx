@@ -73,7 +73,7 @@ export function fmtWhenLine(date: string | null | undefined, time: string | null
 // Oct 14 client: plain words, never the server's "already claimed by you".
 function takeError(e: any): string {
   const m = String(e?.message ?? '');
-  if (/already claimed by you|already signed up/i.test(m)) return 'This pickup is already yours. See Pickups → Mine.';
+  if (/already claimed by you|already signed up/i.test(m)) return 'This pickup is already yours. See Pickups → Active pickups.';
   if (/opens |isn't open yet/i.test(m)) return m; // Oct 14 client: "This pickup opens at 3:00 PM — we'll text you then."
   if (/already claimed|full|no longer|not open/i.test(m) || e?.status === 409) return 'Someone else just took it.';
   return driverError(e, 'Someone else just took it.');
@@ -87,7 +87,7 @@ export function useTakePickup(onDone?: (p: Takeable) => void) {
   const qc = useQueryClient();
   const m = useMutation({
     mutationFn: (p: Takeable) => ((p.slots_capacity ?? 1) > 1 ? volunteer.signup(Number(p.pickup_instance_id)) : volunteer.claim(Number(p.pickup_instance_id))),
-    onSuccess: (_r, p) => { qc.invalidateQueries(); uiNotify("It's yours! You can find it under Your pickups.", 'ok'); onDone?.(p); },
+    onSuccess: (_r, p) => { qc.invalidateQueries(); uiNotify("It's yours! You can find it under Pickups → Active pickups.", 'ok'); onDone?.(p); },
     onError: (e: any) => { qc.invalidateQueries({ queryKey: ['open'] }); qc.invalidateQueries({ queryKey: ['mine'] }); uiNotify(takeError(e), 'err'); },
   });
   async function take(p: Takeable) {
@@ -119,7 +119,8 @@ export function DriverCard({ p, mine, onOpen, onTake, busy }: {
   // Oct 9 client: one-tap finish on the driver's own pickup (today or earlier, already said yes to).
   const { finish, busy: finishing } = useFinishPickup();
   const mp = p as MyPickup;
-  const canFinish = !!mine && !finished && mp.assignment_status === 'accepted'
+  // Nov 3 Yakov: only a delivery to a family can be finished from the app; store pickups are done at the kiosk.
+  const canFinish = !!mine && !finished && mp.assignment_status === 'accepted' && !!(p as any).delivery_to_name
     && !!p.scheduled_date && String(p.scheduled_date).slice(0, 10) <= nyToday();
   return (
     <Card onClick={onOpen} className="!p-4">
@@ -169,7 +170,7 @@ export function DriverCard({ p, mine, onOpen, onTake, busy }: {
         <div className="mt-2" onClick={(e) => e.stopPropagation()}>
           <button onClick={() => void finish(mp)} disabled={finishing}
                   className="haptic w-full min-h-[44px] rounded-[11px] border-[1.5px] border-forest bg-paper text-forest font-bold text-[15px] disabled:opacity-50">
-            {finishing ? 'Saving…' : 'Done — dropped off'}
+            {finishing ? 'Saving…' : 'Done — delivered'}
           </button>
         </div>
       )}

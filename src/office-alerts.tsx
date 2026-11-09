@@ -15,11 +15,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bell, BellOff, X } from 'lucide-react';
-import { api, getUser } from './api';
+import { api, getUser, isDispatcherLogin } from './api';
 import { ensureWebPushSubscribed } from './web-push-client';
 import { cx } from './design';
 import { callNumber } from './office-phone'; // Oct 20 client: Call back through the dispatch phone
 import { EscalationAlertExtra } from './closeout'; // Oct 21 client: no-driver escalation pop-up extras
+import { openOfficeText } from './office-texts'; // Nov 3 client: office text alert → Reply
 
 export type OfficeAlert = {
   id: number; kind: string; createdAt: string;
@@ -28,6 +29,7 @@ export type OfficeAlert = {
   handled?: boolean; // Oct 11 client: no longer needed
   dismissed?: boolean; dismissedBy?: string | null; // Oct 12 client: the office dismissed it
   targetType?: string | null; targetId?: number | null; recordingUrl?: string | null; // Oct 20 client: office phone alerts
+  who?: string | null; // Nov 3 client: office text alerts — the person's name for the Reply pop-up
 };
 
 /** Oct 11 client: close this device's pop-ups (tag office_alert_<id>) for alerts that are handled. */
@@ -61,7 +63,7 @@ const kindIcon = (k: string) =>
   k === 'reply' ? '📩' : k === 'reply_waiting' ? '⏰' : k === 'gave_back' ? '↩️'
   : k === 'food_check' || k === 'food_check_info' ? '🥖' : k === 'store_cancel' ? '✋' : k === 'dropoff_no' ? '🏷️'
   : k === 'bug_report' ? '🐞' : k === 'bug_fixed' ? '✅' : k === 'checkup' ? '🩺' : k === 'numbers' ? '📊' : k === 'speed' ? '🐢'
-  : k === 'missed_call' ? '📵' : k === 'voicemail' ? '📼' : k === 'pbx' ? '☎️' : k === 'security' ? '🔑' : '🚗'; // Oct 20 client: office phone // Oct 13 client; Oct 14 client: problem report; Oct 16 client: your report was fixed
+  : k === 'office_text' ? '💬' : k === 'missed_call' || k === 'callback_due' ? '📵' : k === 'voicemail' ? '📼' : k === 'pbx' ? '☎️' : k === 'security' ? '🔑' : k === 'no_calls' ? '🚫' : k === 'store_cancels' ? '🏪' : k === 'not_signed_in' || k === 'next_not_signed_in' || k === 'no_next_dispatcher' ? '🕒' : '🚗'; // Nov 6 Yakov: + not_signed_in; Nov 6 client: + next_not_signed_in / no_next_dispatcher // Nov 5 client: + no_calls / store_cancels // Oct 20 client: office phone // Oct 13 client; Oct 14 client: problem report; Oct 16 client: your report was fixed
 
 // ---- Sound: two short beeps, made with the Web Audio API ----
 let audioCtx: AudioContext | null = null;
@@ -169,7 +171,9 @@ export function OfficeAlertsBell({ onOpenPickup, onOpenMessages }: {
     queryKey: ['office-alerts'],
     queryFn: () => api('/api/office-alerts'),
     refetchInterval: POLL_MS,
-    refetchIntervalInBackground: true,
+    // Nov 3 client: speed — in another browser tab it keeps checking only to beep; with the sound off it waits
+    // (it checks the moment the portal is back in view, see below).
+    refetchIntervalInBackground: !muted,
   });
   const rows = q.data?.data ?? [];
   const qc = useQueryClient();
@@ -266,7 +270,10 @@ export function OfficeAlertsBell({ onOpenPickup, onOpenMessages }: {
     else if (a.kind === 'bug_fixed') { /* Oct 16 client: just a notice — nothing to open */ }
     else if (a.kind === 'pbx') { /* Oct 20 client: office phone health — fixed in Settings → Office phone */ }
     else if (a.kind === 'security') { /* Oct 22 client: office login password reset asked for — just a notice */ }
-    else if ((a.kind === 'missed_call' || a.kind === 'voicemail' || a.kind === 'account_delete_request') && a.targetType && a.targetId) { // Oct 20 client: the caller's profile; Oct 25 client: + driver asked to delete their account
+    else if (a.kind === 'office_text' && a.phone) openOfficeText(a.phone, a.who ?? null); // Nov 3 client: Reply pop-up
+    else if (a.kind === 'next_not_signed_in') { /* Nov 6 client: to the dispatcher on shift — the 📞 Call button does it */ }
+    else if (a.kind === 'not_signed_in' || a.kind === 'no_next_dispatcher') window.dispatchEvent(new CustomEvent('zlz:open-dispatch-setup', { detail: { sub: 'schedule' } })); // Nov 6 Yakov: Dispatch → schedule
+    else if ((a.kind === 'missed_call' || a.kind === 'callback_due' || a.kind === 'voicemail' || a.kind === 'account_delete_request' || a.kind === 'no_calls' || a.kind === 'store_cancels') && a.targetType && a.targetId) { // Nov 5 client: + driver doesn't want calls (his card) / store cancels often (the store's card) // Oct 20 client: the caller's profile; Oct 25 client: + driver asked to delete their account
       const ev = a.targetType === 'volunteer' ? 'zlz:open-volunteer' : a.targetType === 'supplier' ? 'zlz:open-store' : 'zlz:open-pickup';
       window.dispatchEvent(new CustomEvent(ev, { detail: { id: Number(a.targetId), tab: 'overview' }, cancelable: true }));
     }
@@ -324,11 +331,15 @@ export function OfficeAlertsBell({ onOpenPickup, onOpenMessages }: {
                   </span>
                 </button>
                 {/* Oct 20 client: office phone — Call back / Listen */}
-                {(a.kind === 'missed_call' || a.kind === 'voicemail') && a.phone && !a.handled && (
+                {(a.kind === 'missed_call' || a.kind === 'callback_due' || a.kind === 'voicemail' || a.kind === 'not_signed_in' || a.kind === 'next_not_signed_in') && a.phone && !a.handled && ( // Nov 6 Yakov: + not_signed_in
                   <button onClick={() => callNumber(a.phone)} title="Call back" aria-label="Call back"
                           className="haptic shrink-0 px-2 text-[15px] hover:bg-cream/60">📞</button>
                 )}
-                {a.recordingUrl && (
+                {a.kind === 'office_text' && a.phone && !a.handled && ( // Nov 3 client
+                  <button onClick={() => go(a)} title="Reply" aria-label="Reply"
+                          className="haptic shrink-0 px-2 text-[15px] hover:bg-cream/60">💬</button>
+                )}
+                {a.recordingUrl && !isDispatcherLogin() && ( // Nov 4 Yakov: not in the Dispatcher view
                   <a href={a.recordingUrl} target="_blank" rel="noreferrer" title="Listen" aria-label="Listen to the voicemail"
                      className="haptic shrink-0 grid place-items-center px-2 text-[14px] hover:bg-cream/60">▶</a>
                 )}
@@ -366,15 +377,15 @@ export function OfficeAlertsBell({ onOpenPickup, onOpenMessages }: {
                   <div className="text-[13px] text-ink mt-1 whitespace-pre-wrap break-words">{a.body}</div>
                   <EscalationAlertExtra kind={a.kind} pickupId={a.pickupId} />{/* Oct 21 client */}
                   <div className="flex gap-2 mt-3">
-                    {a.kind !== 'bug_fixed' && a.kind !== 'pbx' && a.kind !== 'security' && <button onClick={() => go(a)}
+                    {a.kind !== 'bug_fixed' && a.kind !== 'pbx' && a.kind !== 'security' && a.kind !== 'next_not_signed_in' && <button onClick={() => go(a)}
                             className="haptic text-[12px] font-bold bg-sky text-paper px-3 py-1.5 rounded-[8px]">
-                      {a.kind === 'numbers' ? 'Open numbers →' : a.kind === 'closeout_reminder' ? 'Open close-out →' : a.kind === 'food_unhandled' ? 'Open Food to handle →' : a.kind === 'checkup' || a.kind === 'speed' ? 'Open check-up →' : a.kind === 'bug_report' ? 'Open problem reports →' : a.pickupId ? 'Open pickup →' : (a.kind === 'missed_call' || a.kind === 'voicemail' || a.kind === 'account_delete_request') && a.targetId ? 'Open profile →' : 'Open driver messages →'}{/* Oct 14 client */}
+                      {a.kind === 'office_text' ? '💬 Reply' : a.kind === 'numbers' ? 'Open numbers →' : a.kind === 'closeout_reminder' ? 'Open close-out →' : a.kind === 'food_unhandled' ? 'Open Food to handle →' : a.kind === 'checkup' || a.kind === 'speed' ? 'Open check-up →' : a.kind === 'bug_report' ? 'Open problem reports →' : a.kind === 'not_signed_in' || a.kind === 'no_next_dispatcher' ? 'Open schedule →' : a.pickupId ? 'Open pickup →' : (a.kind === 'missed_call' || a.kind === 'callback_due' || a.kind === 'voicemail' || a.kind === 'account_delete_request') && a.targetId ? 'Open profile →' : 'Open driver messages →'}{/* Oct 14 client */}
                     </button>}
-                    {(a.kind === 'missed_call' || a.kind === 'voicemail') && a.phone && ( // Oct 20 client: office phone
+                    {(a.kind === 'missed_call' || a.kind === 'callback_due' || a.kind === 'voicemail' || a.kind === 'not_signed_in' || a.kind === 'next_not_signed_in') && a.phone && ( // Oct 20 client: office phone; Nov 6 Yakov: + not_signed_in (📞 Call)
                       <button onClick={() => { callNumber(a.phone); setToasts((t) => t.filter((x) => x.id !== a.id)); }}
-                              className="haptic text-[12px] font-bold bg-forest text-paper px-3 py-1.5 rounded-[8px]">📞 Call back</button>
+                              className="haptic text-[12px] font-bold bg-forest text-paper px-3 py-1.5 rounded-[8px]">{a.kind === 'not_signed_in' || a.kind === 'next_not_signed_in' ? '📞 Call' : '📞 Call back'}</button>
                     )}
-                    {a.recordingUrl && (
+                    {a.recordingUrl && !isDispatcherLogin() && ( // Nov 4 Yakov: not in the Dispatcher view
                       <a href={a.recordingUrl} target="_blank" rel="noreferrer" className="haptic text-[12px] font-bold border border-line text-ink px-3 py-1.5 rounded-[8px]">▶ Listen</a>
                     )}
                     <button onClick={() => setToasts((t) => t.filter((x) => x.id !== a.id))}

@@ -8,7 +8,7 @@
  * under a setting.
  * API: GET /api/volunteers/:id/change-history (apps/api/src/routes/change-history.ts).
  */
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import { cx } from './design';
@@ -67,6 +67,7 @@ const WHERE_TONE: Record<string, string> = {
 
 export function ChangeHistoryTab({ volunteerId }: { volunteerId: number }) {
   const q = useChangeHistory(volunteerId);
+  const [all, setAll] = useState(false); // Nov 3 client: newest 5, then "Show more"
   if (q.isLoading) return <div className="text-[13px] text-muted">Loading…</div>;
   if (q.isError || !q.data) return <div className="text-[13px] text-clay">Couldn't load. <button onClick={() => q.refetch()} className="underline font-bold">Try again</button></div>;
   const rows = q.data.data;
@@ -78,7 +79,7 @@ export function ChangeHistoryTab({ volunteerId }: { volunteerId: number }) {
       </div>
       {rows.length === 0 && <div className="text-[13px] text-muted italic">No changes recorded yet.</div>}
       <div className="space-y-1.5 max-h-[460px] overflow-y-auto pr-1">
-        {rows.map((e) => (
+        {(all ? rows : rows.slice(0, 5)).map((e) => (
           <div key={e.id} data-change-row className={cx('rounded-[10px] border border-line bg-paper px-3 py-2 text-[12.5px]', e.old && 'bg-cream/50')}>
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <span className="font-bold text-ink">{nyWhen(e.at)}</span>
@@ -99,6 +100,11 @@ export function ChangeHistoryTab({ volunteerId }: { volunteerId: number }) {
           </div>
         ))}
       </div>
+      {rows.length > 5 && (
+        <button type="button" onClick={() => setAll(!all)} className="haptic text-[12.5px] font-bold text-forest hover:underline">
+          {all ? 'Show less' : `Show more (${rows.length})`}
+        </button>
+      )}
     </div>
   );
 }

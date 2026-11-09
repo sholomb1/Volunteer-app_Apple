@@ -11,13 +11,20 @@ import { streetKey, oneStoreAtAddress } from './store-by-address'; // Oct 30 cli
 import { uiConfirm } from './ui-dialogs';
 import { usePersonRoles, rolesOf, RoleTags, RoleFilter, HelpsWithRow, hasRole, ROLE_TAGS, type RoleKey, type PersonRolesData } from './person-roles'; // Oct 29 client: roles
 import { useFoodCheckSetting, FoodCheckBox, contactNoticePreview } from './food-check'; // Oct 13 client
+import { useSteadyStoreReminder, SteadyStoreReminderBox } from './store-reminder'; // Nov 5 client: reminder to the store, per steady
+import { SteadyOpenBox } from './steady-open'; // Nov 6 Yakov: usual driver off — open for others
 import { useCandleSetting, useCandlePreview, PickupTimeChoice, steadyTimeText } from './candle-time'; // Oct 23 client: time from candle lighting
 import { InviteStaffModal, AccessModal, ACCESS_SECTIONS, portalLoginStatus, SupplierAppAccessButton } from './staff-invite';
 import { AppVersionsCard } from './app-versions-card'; // Oct 21 client: Settings -> Phone app versions
 import { MessageTemplatesCard } from './message-templates-card';
 import { StorePostFormCard } from './store-post-form-card'; // Oct 14 client
 import { PrintLogCard } from './kiosk/print-log-card'; // Oct 31 client: label print log
+import { CenterPunchPanel } from './center-punch-office'; // Nov 4 Yakov: center help punch in / out
+import { openRingMeAt } from './office-phone'; // Nov 2 client: which phone rings for my Call buttons
+import { TextButton } from './office-texts';
+import { EmailButton } from './new-email'; // Nov 3 client
 import { GoogleSignInSettingsCard } from './google-signin'; // Oct 31 client: Sign in with Google
+import { AsanaSettingsPanel, AsanaPersonTab } from './asana-panel'; // Nov 3 client: Asana (volunteer coordinator)
 import { OfficePhonePanel } from './office-phone-panel'; // Oct 20 client: ☎️ Office phone (Reliable PBX)
 import { VoiceCallsPanel } from './voice-calls-panel'; // Oct 19 client: 📞 Phone calls (connect Twilio, settings, calls)
 import { DriverOverview } from './profiles';
@@ -49,6 +56,7 @@ import { PlaceNameInput, MissingLocationsModal, type PickedPlace } from './place
 import { TidyNamesModal } from './tidy-store-names'; // Oct 16 client: "Professional supplier names"
 import { SleepingStoresModal } from './sleeping-stores'; // Oct 16 client (idea 5): 😴 Sleeping stores
 import { FamilyPicker } from './family-picker';
+import { DispatcherPicker, shortName, type PickPerson } from './dispatcher-picker'; // Nov 6 client
 import { RunPickupForm, RunPlacesCard } from './runs'; // Oct 30 client: 🚚 Run to Lakewood / Fallsburg
 import { isDispatcherLogin } from './api'; // Oct 22 client: dispatcher view
 import { DriverMessagesTab } from './driver-messages-tab'; // Oct 22 client: dispatcher driver popup → Messages
@@ -61,6 +69,7 @@ import { StockStoreNamesPanel } from './stock-link'; // Oct 30 client: Ordering 
 import { SendDriverNumbersButton } from './driver-numbers'; // Oct 25 client: "📨 Send driver numbers"
 import { DriverAvatar, DriverPhotoRow, usePhotoMap } from './driver-photo'; // Oct 30 client: driver photos (office + dispatchers only)
 import { MakeNameTagsButton } from './name-tags'; // Oct 30 client: 🪪 printable name tags
+import { RecentCalls } from './on-call'; // Nov 3 client: the card's Notes tab shows the call log
 import { COLOR_CARD } from './pickup-color'; // Oct 23 client: steady calendar uses the Live Board colors
 import { tidyPlaceName } from './pickup-label';
 import { dayAt, displayPhone, msgWhen, personFull, shortAddress, shortAddressOf, timeAt, whenAt, whenText } from './display'; // Oct 23 client: same style everywhere
@@ -81,6 +90,7 @@ import { SubmittedByRow, type SubmittedByState, parseSubmittedBy, submittedByVal
 import { ExtraContactsEditor, readExtraContacts, extraContactsPayload, type ExtraContact } from './extra-contacts'; // Oct 12 client
 import { PhoneListEditor, phonesStateFrom, phonesPayload, phonesError, callNumberOf, phonesLine, fmtPhone, type PhonesState } from './phone-list'; // Oct 14 client: more than one number
 import { useMissingFields, FieldError, MISSING_RING } from './missing-fields'; // Oct 29 client: say exactly which fields are missing
+import { DispatcherSettingsBox, DispatcherTextsEditor } from './dispatcher-prefs'; // Nov 5 client: per-dispatcher settings
 
 // =============================== Field helpers ==============================
 
@@ -178,6 +188,7 @@ function SupplierViewModal({ s, onClose, onEdit }: { s: any; onClose: () => void
       {s.intakePayload && <IntakeInfoCard payload={s.intakePayload} receivedAt={s.intakeReceivedAt} kind="supplier" />}
       </>}
       <div className="mt-5 flex flex-wrap justify-end gap-2">
+        <EmailButton email={s.contactEmail} name={s.name} kind="store" />{/* Nov 3 client: email from the dispatch mailbox */}
         <SupplierAppAccessButton supplier={{ id: Number(s.id), name: s.name, contactPhone: s.contactPhone ?? null }} />
         <Button size="sm" variant="plain" onClick={onClose}>Close</Button>
         {onEdit && <Button size="sm" variant="forest" icon={<Pencil size={14} />} onClick={onEdit}>Edit</Button>}
@@ -806,13 +817,23 @@ export function VolunteersPanel({ rows, refetch, openId, onOpenConsumed }: { row
  * office/managers who just want to look at what someone answered.
  */
 // Oct 11 client: Messaging → Who gets texts opens a driver straight on Alerts & schedule.
-let nextVolunteerTab: 'overview' | 'alerts' | 'info' | 'history' | null = null;
-export function openVolunteerOnTab(t: 'overview' | 'alerts' | 'info' | 'history') { nextVolunteerTab = t; }
+// Nov 3 client: the card has 5 tabs now (Overview · Settings · History · About them · Notes). Old tab names
+// still work: alerts → Settings, application/info → About them, changes → History (Changes), asana → Notes.
+type OldVolTab = 'overview' | 'alerts' | 'application' | 'info' | 'history' | 'changes' | 'asana' | 'settings' | 'about' | 'notes';
+let nextVolunteerTab: OldVolTab | null = null;
+export function openVolunteerOnTab(t: OldVolTab) { nextVolunteerTab = t; }
+const VOL_TAB_OF: Record<OldVolTab, 'overview' | 'settings' | 'history' | 'about' | 'notes'> = {
+  overview: 'overview', alerts: 'settings', settings: 'settings', application: 'about', info: 'about', about: 'about',
+  history: 'history', changes: 'history', asana: 'notes', notes: 'notes' };
+const VOL_TAB_LABEL: Record<string, string> = { overview: 'Overview', settings: 'Settings', history: 'History', about: 'About them', notes: 'Notes', messages: 'Messages' };
 function VolunteerViewModal({ row, onClose }: { row: any; onClose: () => void }) {
   // Oct 5 client (idea 2): driver profile overview first.
   // Oct 22 client (dispatcher view): a dispatcher login gets ONLY Pickup history and Messages.
   const dispView = isDispatcherLogin();
-  const [tab, setTab] = useState<'overview' | 'alerts' | 'application' | 'info' | 'history' | 'changes' | 'messages'>(() => { const t = nextVolunteerTab ?? 'overview'; nextVolunteerTab = null; return dispView ? 'history' : t; });
+  const [histView, setHistView] = useState<'pickups' | 'changes'>(() => (nextVolunteerTab === 'changes' ? 'changes' : 'pickups'));
+  const [tab, setTab] = useState<'overview' | 'settings' | 'history' | 'about' | 'notes' | 'messages'>(() => { const t = VOL_TAB_OF[nextVolunteerTab ?? 'overview'] ?? 'overview'; nextVolunteerTab = null; return dispView ? 'history' : t; });
+  const [moreOpen, setMoreOpen] = useState(false); // Nov 3 client: "More ▾" (Ring me at… · Make name tag)
+  const [histAll, setHistAll] = useState(false); // Nov 3 client: newest 5 pickups, then "Show more"
   const [unitInput, setUnitInput] = useState<string>(row.unitNumber != null ? String(row.unitNumber) : '');
   const [unitSaving, setUnitSaving] = useState(false);
   const [unitMsg, setUnitMsg] = useState<string>('');
@@ -861,40 +882,86 @@ function VolunteerViewModal({ row, onClose }: { row: any; onClose: () => void })
     else if (s === 'missed') totals.missed++;
     else totals.assigned++;
   }
+  // Nov 3 client: Pickup history + Change history share one History tab — a small "Pickups / Changes" switch.
+  const histToggle = (
+    <div className="mb-3 inline-flex rounded-full border border-line bg-cream/60 p-0.5 text-[12px] font-bold">
+      {(['pickups', 'changes'] as const).map((v) => (
+        <button key={v} type="button" onClick={() => setHistView(v)}
+                className={cx('haptic rounded-full px-3 py-1', histView === v ? 'bg-forest text-paper' : 'text-muted hover:text-ink')}>
+          {v === 'pickups' ? 'Pickups' : 'Changes'}
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <Modal title={`${row.firstName ?? ''} ${row.lastName ?? ''}${row.unitNumber != null ? ` · #${row.unitNumber}` : ''}`.trim()} onClose={onClose} wide>
       {/* Oct 29 client: roles — 4 ticks (+ Lakewood / Fallsburg). Office changes them; dispatchers only see them. */}
       {/* Oct 30 client: the driver's photo (office changes / removes it; dispatchers only see it) + 🪪 name tag */}
       <DriverPhotoRow volunteerId={Number(row.id)} firstName={row.firstName} lastName={row.lastName}
-                      extra={isOfficeOnly() ? <MakeNameTagsButton ids={[Number(row.id)]} label="🪪 Make name tag" /> : undefined} />
+                      extra={<div className="flex flex-wrap items-center gap-2">
+                        {/* Nov 2 client: "I don't see the button to call someone" — rings the dispatch phone first (office-phone.tsx), else the device's phone. */}
+                        {row.phonePrimary && (
+                          <a href={`tel:${String(row.phonePrimary).replace(/[^\d+]/g, '')}`} data-driver-call
+                             className="haptic shrink-0 inline-flex items-center gap-1 rounded-[10px] bg-forest text-paper px-3 py-1.5 text-[13px] font-bold">📞 Call</a>
+                        )}
+                        {row.phonePrimary && <TextButton phone={row.phonePrimary} />}{/* Nov 2 client: text from the office number */}
+                        <EmailButton email={row.email} name={`${row.firstName ?? ''} ${row.lastName ?? ''}`.trim()} kind="driver" />{/* Nov 3 client: email from the dispatch mailbox */}
+                        {/* Nov 3 client: "too full" — Ring me at… and Make name tag moved into a small More ▾ menu. */}
+                        <div className="relative shrink-0">
+                          <button type="button" onClick={() => setMoreOpen((o) => !o)} aria-expanded={moreOpen}
+                                  className="haptic rounded-[10px] border border-line bg-paper px-3 py-1.5 text-[12.5px] font-bold text-ink hover:bg-sage">More ▾</button>
+                          {moreOpen && <div className="fixed inset-0 z-40" onClick={() => setMoreOpen(false)} />}
+                          {/* stays mounted (only hidden) so the name-tag sheet it opens stays open */}
+                          <div onClickCapture={() => setMoreOpen(false)}
+                               className={cx('absolute right-0 z-50 mt-1 flex w-max flex-col items-stretch gap-1 rounded-[10px] border border-line bg-paper p-1.5 shadow-card', !moreOpen && 'hidden')}>
+                            <button type="button" onClick={() => openRingMeAt()} className="haptic rounded-[8px] px-3 py-1.5 text-left text-[12.5px] font-bold text-ink hover:bg-sage">Ring me at…</button>
+                            {isOfficeOnly() && <MakeNameTagsButton ids={[Number(row.id)]} label="🪪 Make name tag"
+                                                                    className="haptic rounded-[8px] px-3 py-1.5 text-left text-[12.5px] font-bold text-ink hover:bg-sage" />}
+                          </div>
+                        </div>
+                      </div>} />
       <HelpsWithRow driver={{ id: Number(row.id), firstName: row.firstName, lastName: row.lastName, phonePrimary: row.phonePrimary, email: row.email }} />
-      <div className="flex gap-1.5 mb-3 border-b border-line pb-2">
-        {((dispView ? ['history', 'messages'] : ['overview', 'alerts', 'application', 'info', 'history', 'changes']) as Array<typeof tab>).map((t) => (
+      <div className="flex flex-wrap gap-1.5 mb-3 border-b border-line pb-2">
+        {/* Nov 3 client: 7 tabs → 5. Notes = Asana (admins) + calls; everyone in the office sees it. */}
+        {((dispView ? ['history', 'messages'] : ['overview', 'settings', 'history', 'about', 'notes']) as Array<typeof tab>).map((t) => (
           <button key={t} onClick={() => setTab(t)}
                   className={cx('haptic text-[12.5px] font-bold px-3 py-1.5 rounded-t-[8px]',
                                 tab === t ? 'text-forest border-b-2 border-forest bg-sage/40' : 'text-muted hover:text-ink')}>
-            {t === 'messages' ? 'Messages' : t === 'overview' ? 'Overview' : t === 'alerts' ? 'Alerts & schedule' : t === 'application' ? 'Application' : t === 'info' ? 'Sign-up info' : t === 'changes' ? 'Change history' : 'Pickup history'}
+            {dispView && t === 'history' ? 'Pickup history' : VOL_TAB_LABEL[t]}
           </button>
         ))}
       </div>
 
-      {tab === 'messages' ? (
+      {tab === 'notes' ? (
+        <div className="space-y-5">
+          {isOfficeOnly() && <AsanaPersonTab volunteerId={Number(row.id)} />}
+          {/* Oct 11 client: calls the office made to this driver (was on Alerts & schedule → On call). */}
+          <div className={cx(isOfficeOnly() && 'border-t border-line pt-4')}>
+            <RecentCalls volunteerId={Number(row.id)} name={row.firstName || 'the driver'} />
+          </div>
+        </div>
+      ) : tab === 'messages' ? (
         // Oct 22 client: texts + app chat + WhatsApp in one conversation, with a box to send.
         <DriverMessagesTab volunteerId={Number(row.id)} phone={row.phonePrimary} firstName={row.firstName} />
       ) : tab === 'overview' ? (
         <DriverOverview volunteerId={Number(row.id)} phone={row.phonePrimary} firstName={row.firstName} />
-      ) : tab === 'alerts' ? (
+      ) : tab === 'settings' ? (
         // Oct 9 client: everything about this volunteer's texts, reminders and schedules.
         <VolunteerAlertsTab volunteerId={Number(row.id)} />
-      ) : tab === 'application' ? (
-        // Oct 14 client: the same "My application" view + Edit answers as the driver app (same API).
-        <OfficeApplicationTab volunteerId={Number(row.id)} name={row.firstName || 'the driver'} />
-      ) : tab === 'changes' ? (
-        // Oct 16 client: every change to this driver — who, where, what (change-history.tsx).
-        <ChangeHistoryTab volunteerId={Number(row.id)} />
-      ) : tab === 'info' ? (
+      ) : tab === 'history' && !dispView && histView === 'changes' ? (
         <>
+          {histToggle}
+          {/* Oct 16 client: every change to this driver — who, where, what (change-history.tsx). */}
+          <ChangeHistoryTab volunteerId={Number(row.id)} />
+        </>
+      ) : tab === 'about' ? (
+        <>
+          {/* Nov 3 client: Application + Sign-up info in one tab, one under the other. */}
+          <h3 className="mb-2 text-[14px] font-extrabold text-ink">Application</h3>
+          {/* Oct 14 client: the same "My application" view + Edit answers as the driver app (same API). */}
+          <OfficeApplicationTab volunteerId={Number(row.id)} name={row.firstName || 'the driver'} />
+          <h3 className="mb-2 mt-6 border-t border-line pt-4 text-[14px] font-extrabold text-ink">Sign-up info</h3>
           <div className="space-y-2 text-[13px]">
             <div className="grid grid-cols-[140px_1fr] gap-3">
               <div className="text-[11.5px] font-bold text-muted">Phone</div>
@@ -957,6 +1024,7 @@ function VolunteerViewModal({ row, onClose }: { row: any; onClose: () => void })
         </>
       ) : (
         <>
+          {!dispView && histToggle}
           <div className="grid grid-cols-4 gap-2 mb-3">
             <div className="rounded-[10px] bg-sage border border-sage-line px-3 py-2 text-center">
               <div className="font-display font-bold text-[20px] text-forest leading-none">{totals.completed}</div>
@@ -980,7 +1048,7 @@ function VolunteerViewModal({ row, onClose }: { row: any; onClose: () => void })
             <div className="text-[13px] text-muted italic">No pickups on record.</div>
           )}
           <div className="space-y-1.5 max-h-[420px] overflow-y-auto">
-            {(history.data?.data ?? []).map((h: any) => (
+            {(history.data?.data ?? []).slice(0, dispView || histAll ? undefined : 5).map((h: any) => (
               <div key={h.id} className="rounded-[10px] border border-line bg-paper px-3 py-2 text-[12.5px] flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="font-bold truncate"><Name>{tidyPlaceName(h.suppliers || h.place) || 'One-time pickup'}</Name></div>
@@ -993,6 +1061,11 @@ function VolunteerViewModal({ row, onClose }: { row: any; onClose: () => void })
               </div>
             ))}
           </div>
+          {!dispView && (history.data?.data?.length ?? 0) > 5 && (
+            <button type="button" onClick={() => setHistAll(!histAll)} className="haptic mt-1.5 text-[12.5px] font-bold text-forest hover:underline">
+              {histAll ? 'Show less' : `Show more (${history.data!.data.length})`}
+            </button>
+          )}
         </>
       )}
 
@@ -1730,6 +1803,8 @@ export function SteadyForm({ row, applyFrom, onDone, onCancel, dropOff }: { row:
   const candleFriOnly = candle.value.on && days.length > 0 && days.every((d) => d === 'friday');
   const savePickupTime = candleFriOnly && candlePrev.data?.data.thisFriday ? candlePrev.data.data.thisFriday.time : pickupTime;
   const [supplierId, setSupplierId] = useState<string>(row?.supplier_id ? String(row.supplier_id) : '');
+  // Nov 5 client: "I want it in the steady profile. Each steady should have this." (off by default)
+  const storeReminder = useSteadyStoreReminder(row?.id ?? null, supplierId);
   // Fork M · client Aug 6 — reminder + unassigned auto-broadcast toggles.
   // Oct 22 client: "Only counts when they show up" (drop-off when they have food) — never texted, reminders off by default.
   const [dropOffOnly, setDropOffOnly] = useState<boolean>(row ? String(row.pickup_type ?? '') === 'dropoff' : !!dropOff);
@@ -1885,6 +1960,7 @@ export function SteadyForm({ row, applyFrom, onDone, onCancel, dropOff }: { row:
           adminCRUD.steadyRecommendedDrivers.replace(Number(savedId), recommendedIds),
           foodCheck.save(Number(savedId)), // Oct 13 client
           candle.save(Number(savedId)), // Oct 23 client (before apply-to-future below, which uses it)
+          storeReminder.save(Number(savedId)), // Nov 5 client
         ]);
       }
       // Oct 2 client fix (UI plan §3): push the edited template onto pickups
@@ -2181,6 +2257,18 @@ export function SteadyForm({ row, applyFrom, onDone, onCancel, dropOff }: { row:
         {!isDelivery && ( /* Oct 30 client: a delivery has no store to ask */
         <Field label="Ask the store first" full>
           <FoodCheckBox value={foodCheck.value} onChange={foodCheck.change} pickupTime={savePickupTime} />
+        </Field>
+        )}
+        {/* Nov 5 client: text the store a reminder before each pickup of this steady (moved here from the store profile). */}
+        {!isDelivery && !dropOffOnly && (
+        <Field label="Remind the store before pickup" full>
+          <SteadyStoreReminderBox value={storeReminder.value} onChange={storeReminder.change} info={storeReminder.info} pickupTime={savePickupTime} />
+        </Field>
+        )}
+        {/* Nov 6 Yakov: "pause his steady pickup — it should be open for others" (not his texts). */}
+        {row?.id && !dropOffOnly && (
+        <Field label="🚗 Usual driver off — open for others" full>
+          <SteadyOpenBox steadyId={Number(row.id)} />
         </Field>
         )}
         <Field label="Default driver by day (auto-assigned when generated)" full>
@@ -2662,6 +2750,7 @@ export function SettingsPanel() {
         <button onClick={() => setActive('kiosk')} className={cx('chip', active === 'kiosk' && 'on')}>Kiosk mode</button>
         <button onClick={() => setActive('voice')} className={cx('chip', active === 'voice' && 'on')}>📞 Phone calls</button>
         <button onClick={() => setActive('pbx')} className={cx('chip', active === 'pbx' && 'on')}>☎️ Office phone</button>{/* Oct 20 client */}
+        <button onClick={() => setActive('asana')} className={cx('chip', active === 'asana' && 'on')}>Asana</button>{/* Nov 3 client */}
         <button onClick={() => setActive('storeform')} className={cx('chip', active === 'storeform' && 'on')}>Store post form</button>{/* Oct 14 client */}
         <button onClick={() => setActive('stocknames')} className={cx('chip', active === 'stocknames' && 'on')}>Ordering portal store names</button>{/* Oct 30 client */}
       </div>
@@ -2687,6 +2776,8 @@ export function SettingsPanel() {
         <StockStoreNamesPanel />
       ) : active === 'pbx' ? (
         <OfficePhonePanel />
+      ) : active === 'asana' ? (
+        <AsanaSettingsPanel />
       ) : (
         <VoiceCallsPanel />
       )}
@@ -3386,6 +3477,11 @@ export function QuickPickupModal({ pickup, duplicateFrom, onClose, onDone, title
   // is never surfaced to drivers.
   const [donorName, setDonor]   = useState<string>(prefill ? (src.donor_name ?? '') : '');
   const [foodDescription, setFood] = useState<string>(prefill ? (src.food_description ?? '') : '');
+  // Nov 6 client: "which caterer the food is coming from" (optional; prints on the kiosk labels).
+  const initialCaterer = String(src?.caterer ?? '').trim();
+  const [caterer, setCaterer] = useState<string>(prefill ? initialCaterer : '');
+  const catererNames = useQuery({ queryKey: ['caterer-names'], staleTime: 5 * 60_000,
+    queryFn: () => api<{ data: string[] }>('/api/pickup-instances/caterer-names') });
   const [pickupAddress, setAddr] = useState<string>(prefill ? (src.pickup_address ?? src.supplier_address ?? '') : '');
   // Feature 3 (notes split): "Instructions for Volunteer" = driver-facing
   // pickup_instructions (fold in any legacy special_instructions, also
@@ -3741,6 +3837,8 @@ export function QuickPickupModal({ pickup, duplicateFrom, onClose, onDone, title
     specialInstructions: null,
     notes:               notes || null,
     foodDescription: foodDescription || null,
+    // Nov 6 client: edit sends it only when changed ('' = take it off).
+    caterer: editing ? (caterer.trim() !== initialCaterer ? caterer.trim() : undefined) : (caterer.trim() || undefined),
     size,
     mustPickupBy: offerHours && date && time
       ? new Date(new Date(`${date}T${time.slice(0, 5)}:00`).getTime() + Number(offerHours) * 3600e3).toISOString()
@@ -3822,6 +3920,7 @@ export function QuickPickupModal({ pickup, duplicateFrom, onClose, onDone, title
         ? await adminCRUD.patchPickup(pickup.id, payload())
         : await adminCRUD.createPickup(payload());
       if (!editing) saveLastSubmittedBy(subBy); // Oct 12 client: default for the next new pickup
+      if (caterer.trim()) void qc.invalidateQueries({ queryKey: ['caterer-names'] }); // Nov 6 client: a new name joins the suggestions
       // Oct 25 client: a repeat ("already added a moment ago") — nothing more to add to it.
       if (!editing && (res?.duplicate || res?.repeated)) return res;
       // Oct 11 client: "Save this address to <store>" (ticked) — after the pickup itself saved.
@@ -4126,6 +4225,15 @@ export function QuickPickupModal({ pickup, duplicateFrom, onClose, onDone, title
                     placeholder='e.g. "8 catering trays, mostly chicken & rice"' className={inputCls} />
         </Field>
 
+        {/* Nov 6 client: which caterer (mainly one-time / event pickups). Prints on the kiosk labels. */}
+        <Field label="Caterer (optional)" full hint="If the food is from a caterer. It prints on the food labels at the center.">
+          <input value={caterer} onChange={(e) => setCaterer(e.target.value)} maxLength={120} list="caterer-names"
+                 placeholder='e.g. "Gourmet Glatt"' className={inputCls} data-caterer autoComplete="off" />
+          <datalist id="caterer-names">
+            {(catererNames.data?.data ?? []).map((n) => <option key={n} value={n} />)}
+          </datalist>
+        </Field>
+
         {/* 6b. Aug 26 client: optional size marker — Small/Large. Both may
                 stay unchecked; not required. Click a selected chip to unset. */}
         <Field label="Size — optional" full>
@@ -4268,7 +4376,7 @@ export function QuickPickupModal({ pickup, duplicateFrom, onClose, onDone, title
                    className="accent-forest h-4 w-4" data-qa="contact-notice-box" />
             <span className="text-[13px] font-bold text-ink">Text the contact when a driver is on the way</span>
           </label>
-          <div className="mt-1 pl-6 text-[12px] text-muted" data-qa="contact-notice-preview">{contactNoticePreview(cnPhone)}</div>
+          <div className="mt-1 pl-6 text-[12px] text-muted" data-qa="contact-notice-preview">{contactNoticePreview(cnPhone, pickupAddress)}</div>
         </div>
       )}
 
@@ -4599,7 +4707,7 @@ export function SmsInboxPanel() {
   const inbox = useQuery({
     queryKey: ['sms-inbox'],
     queryFn: () => smsInbox.list(),
-    refetchInterval: 20_000,
+    refetchInterval: 30_000, // Nov 3 client: speed (was 20 s)
   });
 
   if (selected) {
@@ -4974,6 +5082,17 @@ export function CenterHelpStandalonePanel() {
           <CenterHelpPeoplePanel />
         </div>
       </details>
+      {/* Nov 4 Yakov: punch in / out at the kiosk — who's in now, today, hours of the last 2 months, fix a time. */}
+      <details className="rounded-[14px] border border-line bg-paper" open>
+        <summary className="cursor-pointer px-4 py-2.5 flex items-center gap-2 haptic hover:bg-cream/50 list-none">
+          <span className="font-display font-bold text-[14px] text-ink">Punch in / out (kiosk)</span>
+          <span className="text-[11.5px] text-muted">— who's in now, today, hours of the last 2 months</span>
+          <span className="ml-auto text-[11px] text-muted">click to collapse</span>
+        </summary>
+        <div className="px-4 pb-4 pt-2 border-t border-line/60">
+          <CenterPunchPanel />
+        </div>
+      </details>
       {/* Oct 16 client: "make the calendar view as well ... really the same as the dispatcher". */}
       <SearchBar value={sq} onChange={setSq} placeholder="Search center help — task, name, notes, open…" />
       <CenterHelpSchedule search={sq} />
@@ -5310,7 +5429,7 @@ function VolunteerPicker({ volunteers, value, onChange, placeholder = '— pick 
                       className={cx('w-full text-left px-3 py-2 text-[13px] hover:bg-cream/70',
                                     dim && 'text-muted opacity-60',
                                     Number(v.id) === Number(value) && 'bg-sage/40 font-bold')}>
-<bdi dir="auto">{nm}</bdi>{un}{ph}{dim && dimNote ? <span className="ml-1 text-[11px] italic">({dimNote})</span> : null}
+<bdi dir="auto">{nm}</bdi>{un}{ph}{dim && dimNote ? <span className="ml-1 text-[11px] italic">({dimNote})</span> : null}{v._onDeck ? <span className="ml-1.5 rounded-full bg-sage px-1.5 py-px text-[10.5px] font-bold text-forest">on deck</span> : null}{v._noLogin ? <span className="ml-1.5 text-[10.5px] text-muted">no dispatcher login yet</span> : null}
               </button>
             );
           })}
@@ -5322,12 +5441,23 @@ function VolunteerPicker({ volunteers, value, onChange, placeholder = '— pick 
 
 // Oct 14 client: the shift pickers list current dispatchers only (+ whoever is
 // already on the shift). Until the roster loads, show everyone.
-function onlyDispatchers(vols: any[], roster: Array<{ id: number }> | undefined, current: number | ''): any[] {
-  if (!roster) return vols;
-  const ids = new Set(roster.map((r) => Number(r.id)));
-  return vols.filter((v) => ids.has(Number(v.id)) || Number(v.id) === Number(current));
+// Nov 5 client: "offer dispatchers on deck first" — On Deck / Available (no shift now or in 24 h, like the Roster)
+// first, with a small "on deck" tag (_onDeck), then the rest. On deck = can really dispatch (canDispatch: a
+// dispatcher / office login); the ones with no dispatcher login yet come last (_noLogin).
+// Nov 6 client: the friendly dispatcher picker (dispatcher-picker.tsx) — avatars, "Moshe A.", tags, groups.
+function ShiftDispatcherPicker({ vols, roster, value, onChange }: { vols: any[]; value: number | ''; onChange: (id: number | '') => void;
+  roster: Array<{ id: number; firstName?: string; lastName?: string; phone?: string | null; currentShift?: unknown; nextShift?: unknown; canDispatch?: boolean }> | undefined }) {
+  const people = useMemo<PickPerson[]>(() => {
+    const fromVol = (v: any): PickPerson => ({ id: Number(v.id), name: shortName(v.firstName, v.lastName), search: `${v.firstName ?? ''} ${v.lastName ?? ''} ${String(v.phonePrimary ?? '').replace(/\D/g, '')}`, noCell: !v.phonePrimary });
+    if (!roster) return vols.map(fromVol); // until the roster loads, show everyone (as before)
+    const list: PickPerson[] = roster.map((r) => ({ id: Number(r.id), name: shortName(r.firstName, r.lastName), search: `${r.firstName ?? ''} ${r.lastName ?? ''} ${String(r.phone ?? '').replace(/\D/g, '')}`,
+      onDeck: r.canDispatch !== false && r.currentShift == null && !(r.nextShift && Date.parse(String((r.nextShift as any).startsAt ?? (r.nextShift as any).starts_at ?? '')) < Date.now() + 24 * 3600e3), onShiftNow: r.currentShift != null, noCell: !r.phone, noLogin: r.canDispatch === false }));
+    // whoever is already on the shift stays pickable
+    if (value !== '' && !list.some((p) => p.id === Number(value))) { const v = vols.find((x) => Number(x.id) === Number(value)); if (v) list.push(fromVol(v)); }
+    return list;
+  }, [vols, roster, value]);
+  return <DispatcherPicker people={people} value={value === '' ? null : Number(value)} onChange={(v) => onChange(typeof v === 'number' ? v : '')} ariaLabel="Dispatcher" testId="shift-dispatcher" />;
 }
-
 function EditShiftForm({ shift, onDone, onCancelForm, onDeleted }: {
   shift: any; onDone: () => void; onCancelForm: () => void; onDeleted: () => void;
 }) {
@@ -5373,11 +5503,8 @@ function EditShiftForm({ shift, onDone, onCancelForm, onDeleted }: {
         )}
         <div>
           <label className="block text-[11px] font-extrabold uppercase tracking-[.05em] text-muted mb-1">Volunteer</label>
-          <VolunteerPicker
-            volunteers={onlyDispatchers(vols.data?.data ?? [], roster.data?.data, volunteerId)}
-            value={volunteerId}
-            onChange={setVid}
-          />
+          <ShiftDispatcherPicker vols={vols.data?.data ?? []} roster={roster.data?.data} value={volunteerId} onChange={setVid} />
+
         </div>
         <div className="grid grid-cols-2 gap-2">
           <div>
@@ -5483,21 +5610,18 @@ function NewShiftForm({ prefillStart, onDone, onCancel }: { prefillStart?: strin
         <button type="button" onClick={() => setMode('steady')}
                 className={cx('haptic text-[12.5px] font-bold px-3 py-1.5 rounded-[8px]',
                               mode === 'steady' ? 'bg-forest text-paper' : 'text-muted hover:text-forest')}>
-          Steady (weekly)
+          Every week{/* Nov 6 Yakov: same words as the Assign popup (was "Steady (weekly)") */}
         </button>
         <button type="button" onClick={() => setMode('once')}
                 className={cx('haptic text-[12.5px] font-bold px-3 py-1.5 rounded-[8px]',
                               mode === 'once' ? 'bg-forest text-paper' : 'text-muted hover:text-forest')}>
-          One-time
+          Just this once
         </button>
       </div>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Volunteer / dispatcher" full>
-          <VolunteerPicker
-            volunteers={onlyDispatchers(volunteers.data?.data ?? [], roster.data?.data, volunteerId)}
-            value={volunteerId}
-            onChange={setVid}
-          />
+          <ShiftDispatcherPicker vols={volunteers.data?.data ?? []} roster={roster.data?.data} value={volunteerId} onChange={setVid} />
+
         </Field>
         {mode === 'steady' ? (
           <>
@@ -7907,7 +8031,7 @@ function SmsThread({ phone, onSent, includeShop = false }: { phone: string; onSe
   const detailQ = useQuery({
     queryKey: ['sms-thread', phone, includeShop ? 'all' : 'volunteer', showAll ? 'full' : 'recent', 'wa'],
     queryFn: () => smsThreads.get(phone, { includeShop, limit: showAll ? 5000 : undefined, withWa: true }),
-    refetchInterval: 15_000,
+    refetchInterval: 30_000, // Nov 3 client: speed (was 15 s)
   });
   const [body, setBody] = useState('');
   const qc = useQueryClient();
@@ -8126,8 +8250,8 @@ export function SmsDispatchersPanel() {
  * right now" is a one-tap add.
  *
  * WHAT: person-first roster split into two columns.
- *   • On Deck / Available — no current shift AND no upcoming shift (24h).
- *   • Assigned            — currentShift OR nextShift within 24h; shows the
+ *   • On Deck / Available — no shift now and none coming up (Nov 6 client).
+ *   • Assigned            — on shift now OR any shift coming up; shows the
  *                            shift window and any notes (the "trip /
  *                            responsibility" per client wording).
  * Actual shift-assignment happens in the existing Shifts UI — this panel
@@ -8297,6 +8421,7 @@ function DispatcherCard({
           )}
         </div>
       )}
+      <DispatcherSettingsBox volunteerId={row.id} first={row.firstName} />{/* Nov 5 client */}
     </div>
   );
 }
@@ -8325,7 +8450,11 @@ export function DispatchersRosterPanel() {
 
   const rows: DispatcherRosterRow[] = q.data?.data ?? [];
   const assigned = rows.filter((r) => r.currentShift != null || r.nextShift != null);
-  const onDeck   = rows.filter((r) => r.currentShift == null && r.nextShift == null);
+  // Nov 5 client: On Deck = only people who can really dispatch (a dispatcher / office login: canDispatch). The ones
+  // who only ticked "Dispatcher" under Helps with go in a small folded list (nobody's data is changed).
+  const free     = rows.filter((r) => r.currentShift == null && r.nextShift == null);
+  const onDeck   = free.filter((r) => r.canDispatch !== false);
+  const noLogin  = free.filter((r) => r.canDispatch === false);
 
   const remove = (id: number, name: string) => {
     void uiConfirm(`Remove ${name} from the dispatcher roster?\n\nAny scheduled shifts stay on the calendar — this only takes them off the list. If their own app login is a dispatcher login, it goes back to a driver login (same username and password).`).then((ok) => { if (ok) {
@@ -8353,6 +8482,7 @@ export function DispatchersRosterPanel() {
           + Add Dispatcher
         </button>
       </div>
+      <DispatcherTextsEditor />{/* Nov 5 client: the reminder / thank-you texts */}
 
       {q.isLoading && <div className="text-[13px] text-muted">Loading…</div>}
       {q.error != null && (
@@ -8380,7 +8510,7 @@ export function DispatchersRosterPanel() {
             </div>
             {assigned.length === 0 ? (
               <div className="text-[12.5px] text-muted italic px-1 py-2">
-                No one is on shift or scheduled in the next 24 hours.
+                No one has a shift scheduled yet.
               </div>
             ) : (
               <div className="space-y-2">
@@ -8399,7 +8529,7 @@ export function DispatchersRosterPanel() {
             </div>
             {onDeck.length === 0 ? (
               <div className="text-[12.5px] text-muted italic px-1 py-2">
-                Everyone on the roster is currently assigned.
+                No one else with a dispatcher login is free right now.
               </div>
             ) : (
               <div className="space-y-2">
@@ -8411,6 +8541,22 @@ export function DispatchersRosterPanel() {
             )}
           </section>
         </div>
+      )}
+      {!q.isLoading && noLogin.length > 0 && (
+        <details className="rounded-[12px] border border-line bg-cream/40" data-roster-no-login>
+          <summary className="cursor-pointer select-none px-3 py-2 text-[13px] font-bold text-muted">
+            Interested in dispatching — no dispatcher login yet ({noLogin.length})
+          </summary>
+          <div className="px-3 pb-3 space-y-2">
+            <div className="text-[12px] text-muted">They ticked "Dispatcher" but can't dispatch yet. Give them a login to put them On Deck.</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {noLogin.map((r) => (
+                <DispatcherCard key={r.id} row={r} onRemove={remove}
+                                busy={del.isPending && del.variables === r.id} />
+              ))}
+            </div>
+          </div>
+        </details>
       )}
 
       {showAdd && <AddDispatcherModal onClose={() => setShowAdd(false)} />}
@@ -8625,7 +8771,7 @@ export function WaThreadsPanel() {
   const q = useQuery({
     queryKey: ['wa-threads'],
     queryFn: () => waThreads.list(),
-    refetchInterval: 20_000,
+    refetchInterval: 30_000, // Nov 3 client: speed (was 20 s)
     refetchOnWindowFocus: true,
   });
   const rows = q.data?.data ?? [];
@@ -8714,7 +8860,7 @@ function WaThreadDetail({ phone }: { phone: string }) {
   const q = useQuery({
     queryKey: ['wa-thread', phone],
     queryFn:  () => waThreads.get(phone),
-    refetchInterval: 15_000,
+    refetchInterval: 30_000, // Nov 3 client: speed (was 15 s)
   });
   // Oct 23 client: late at night "Send now, or schedule it?" (late-night.tsx).
   const sendMut = useNightSend({

@@ -15,6 +15,7 @@ import { DateInput, cx } from './design';
 import { nyToday } from './time-format';
 import { uiConfirm, uiNotify } from './ui-dialogs';
 import { driverError } from './screens/driver-card';
+import { askAwaySteady } from './away-steady'; // Nov 6 client: away → give steady pickups to another driver?
 
 export const REACH_OPTIONS: Array<{ value: ReachChoice; icon: string; label: string; help: string; isNew?: boolean }> = [
   { value: 'text',     icon: '📱', label: 'Text messages',          help: 'Pickup texts to your phone.' },
@@ -139,7 +140,7 @@ export function quietShort(s: DriverSettings | undefined): string {
 }
 
 /** Pause: Away dates (today / a week) or the "until I turn it back on" switch (is_available). */
-export function usePause(s: DriverSettingsFull | DriverSettings | undefined, volunteerId?: number) {
+export function usePause(s: DriverSettingsFull | DriverSettings | undefined, volunteerId?: number, name?: string) {
   const qc = useQueryClient();
   const today = nyToday();
   const office = volunteerId != null;
@@ -152,7 +153,11 @@ export function usePause(s: DriverSettingsFull | DriverSettings | undefined, vol
   const put = (body: Record<string, unknown>) => api<{ data: DriverSettingsFull }>(settingsUrl(volunteerId), { method: 'PUT', body: JSON.stringify(body) });
   const setAway = useMutation({
     mutationFn: (r: { vacationFrom?: string | null; vacationUntil?: string | null; isAvailable?: boolean }) => put(r),
-    onSuccess: (r) => { qc.setQueryData(settingsKey(volunteerId), r); refresh(); },
+    onSuccess: (r, body) => {
+      qc.setQueryData(settingsKey(volunteerId), r); refresh();
+      // Nov 6 client: Away dates changed → a steady driver is asked about his steady pickups those days.
+      if (body.vacationFrom !== undefined || body.vacationUntil !== undefined) void askAwaySteady(qc, volunteerId, name);
+    },
     onError: fail,
   });
   // Oct 14 client: "Until turned back on" / Resume now go through the same settings call

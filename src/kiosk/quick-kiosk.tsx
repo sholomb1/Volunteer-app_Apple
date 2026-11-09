@@ -17,10 +17,12 @@
  * tablet gets the same layout, just bigger.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { kiosk, type KioskLabel, type QuickLookupData } from './kiosk-api';
+import { API_BASE } from '../api'; // Nov 8 client: fresh start after each use
+import { kiosk, type KioskLabel, type QuickLookupData, type CenterCard } from './kiosk-api';
+import { CenterChoice, CenterHelpScreen } from './center-help-card'; // Nov 4 Yakov: center help punch in / out
 import { printLabelsStepwise, buildLabelTspl, kioskLabelFace } from './label-print'; // Oct 31 client: + print log
 import { NameTagScanner } from './name-tag-scan';
-import { TapButton } from './tap-button';
+import { TapButton, lastTap } from './tap-button';
 import { LabelPage, LabelPreview } from './label-face';
 
 // ---------------- design stage ----------------
@@ -63,8 +65,8 @@ const KSTYLE: Record<Kind, { bg: string; fg: string; bd: string }> = {
 };
 const NOT_SURE_NOTE = "That's fine, our team will look into it.";
 
-type Line = { id: number; place: string; container: Container; count: number; kind: Kind | null; open: boolean };
-type Place = { key: string; pickupId: number | null; supplierId: number | null; otherName: string | null; label: string; sub: string; time: string };
+type Line = { id: number; place: string; container: Container; count: number; kind: Kind | null; open: boolean; note?: string; noteOpen?: boolean }; // Nov 8 client: + note
+type Place = { key: string; pickupId: number | null; supplierId: number | null; otherName: string | null; label: string; sub: string; time: string; caterer?: string | null }; // Nov 6 client: + caterer
 type Who = { volunteerId: number | null; name: string; firstName: string; unitNumber: number | null; guestPhone?: string };
 type VendorOption = { supplierId: number; supplierName: string; city: string };
 type NameCandidate = { volunteerId: number; name: string };
@@ -99,6 +101,8 @@ type Step =
   | { kind: 'names'; code: string; candidates: NameCandidate[] }
   | { kind: 'guest' }
   | { kind: 'pick' }
+  | { kind: 'choose' } // Nov 4 Yakov: "I'm dropping off food" / "I'm here to help in the center"
+  | { kind: 'center' } // Nov 4 Yakov: center help punch in / out
   | { kind: 'food' }
   | { kind: 'labels' }
   | { kind: 'printing' }
@@ -177,6 +181,7 @@ export function QuickKiosk({ secret }: { secret: string }) {
   const [fb, setFb] = useState('');
   const [scanning, setScanning] = useState(false);
   const [savedText, setSavedText] = useState('');
+  const [center, setCenter] = useState<CenterCard | null>(null); // Nov 4 Yakov
 
   const requestId = useRef<string | null>(null); // Oct 9 client: one id per drop-off → saved once
   const saving = useRef(false);
@@ -184,13 +189,29 @@ export function QuickKiosk({ secret }: { secret: string }) {
   const lineSeq = useRef(1);
   const linesBox = useRef<HTMLDivElement>(null);
 
+  // Nov 8 client: "maybe it should totally refresh after each time" — after someone used the kiosk, going back
+  // to the start reloads the whole page (fresh screen + newest version, no tablet restart needed). Only when our
+  // server answers within 3 s; otherwise (internet down) it just clears the screen, so it never lands on an error page.
+  const usedSinceLoad = useRef(false);
+  useEffect(() => { if (step.kind !== 'code') usedSinceLoad.current = true; }, [step.kind]);
+  async function freshStart() {
+    if (!usedSinceLoad.current) return resetAll();
+    resetAll();
+    try {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+      const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 3000);
+      const r = await fetch(`${API_BASE.replace(/\/$/, '')}/api/health`, { cache: 'no-store', signal: ctl.signal });
+      clearTimeout(t);
+      if (r.ok) window.location.reload();
+    } catch { /* offline / slow: stay on the cleared screen */ }
+  }
   function resetAll() {
     requestId.current = null; saving.current = false; stopPrint.current = true;
     setStep({ kind: 'code' }); setCode(''); setBusy(false); setErr(null); setWho(null);
     setRows([]); setStores([]); setSearch(''); setShowAll(false); setNewStore(null);
     setGuestName(''); setGuestPhone(''); setPlaces([]); setCur(null); setLines([]);
     setLabels([]); setDropoffId(null); dropoffRef.current = null; setPrinted(0); setPrintState('printing'); setFb(''); setSavedText('');
-    setScanning(false);
+    setScanning(false); setCenter(null);
   }
 
   // 60 s with no touch → back to the start. Not while printing (the thank-you follows by itself);
@@ -200,7 +221,7 @@ export function QuickKiosk({ secret }: { secret: string }) {
     if (step.kind === 'printing' || step.kind === 'thanks' || step.kind === 'sent') return;
     const ms = step.kind === 'feedback' && fb.trim() ? FEEDBACK_IDLE_MS : QUICK_IDLE_MS;
     let t: ReturnType<typeof setTimeout> | null = null;
-    const reset = () => { if (t) clearTimeout(t); t = setTimeout(resetAll, ms); };
+    const reset = () => { if (t) clearTimeout(t); t = setTimeout(() => void freshStart(), ms); };
     reset();
     const events = ['pointerdown', 'keydown', 'touchstart', 'wheel', 'input'];
     events.forEach((e) => window.addEventListener(e, reset, { passive: true }));
@@ -215,16 +236,18 @@ export function QuickKiosk({ secret }: { secret: string }) {
     const t = setInterval(() => setLeft((n) => n - 1), 1000);
     return () => clearInterval(t);
   }, [step.kind]);
-  useEffect(() => { if (step.kind === 'thanks' && left <= 0) resetAll(); }, [left, step.kind]);
+  useEffect(() => { if (step.kind === 'thanks' && left <= 0) void freshStart(); }, [left, step.kind]);
   // "Thanks, we got it." → start after 3 seconds.
   useEffect(() => {
     if (step.kind !== 'sent') return;
-    const t = setTimeout(resetAll, 3000);
+    const t = setTimeout(() => void freshStart(), 3000);
     return () => clearTimeout(t);
   }, [step.kind]);
 
   // ---------- sign in ----------
   function loadPicks(d: QuickLookupData) {
+    // Nov 8 client: a new sign-in always starts empty — nothing from the person before (store, food lines, note).
+    setPlaces([]); setCur(null); setLines([]); setLabels([]); setDropoffId(null); dropoffRef.current = null; requestId.current = null;
     // Hide pickups more than 2 hours away; newest first.
     const nowNY = new Date().toLocaleString('sv-SE', { timeZone: 'America/New_York' }).slice(0, 16).replace(' ', 'T');
     const soon = new Date(Date.parse(nowNY + ':00Z') + 2 * 3600e3).toISOString().slice(0, 16);
@@ -235,10 +258,15 @@ export function QuickKiosk({ secret }: { secret: string }) {
     setRows(ps.map((p) => ({
       key: `p:${p.pickupId}`, pickupId: p.pickupId, supplierId: p.supplierId, otherName: null, label: p.label,
       sub: [quickDay(p.date), quickTime(p.time)].filter(Boolean).join(' '), time: quickTime(p.time),
+      caterer: p.caterer ?? null,
     })));
     setStores(d.allSuppliers ?? []);
     setShowAll(false); setSearch(''); setNewStore(null);
     setWho({ volunteerId: d.volunteerId, name: d.name, firstName: d.firstName || d.name.split(' ')[0], unitNumber: d.unitNumber ?? null });
+    // Nov 4 Yakov: a center helper gets the punch in / out card; with pickups today, first the choice.
+    setCenter(d.center ?? null);
+    // Nov 8 client: always the store screen first; Center help is on it (big with a shift today / punched in, else small).
+    pickOpenedAt.current = Date.now(); // set now, not after the screen draws (a leftover tap arrives in between)
     setStep({ kind: 'pick' });
   }
 
@@ -302,7 +330,24 @@ export function QuickKiosk({ secret }: { secret: string }) {
 
   // ---------- stores + food ----------
   const usedPlaces = useMemo(() => new Set(lines.map((l) => l.place)), [lines]);
+  // Nov 8 client: "why is it choosing the store before I choose?" — the tap on the screen before
+  // ("Yes, that's me") also landed on the store list that opened under the finger (381 Viola, 13 times
+  // in one day). Taps in the first 0.8 s after the store screen opens are ignored.
+  const pickOpenedAt = useRef(0);
+  useEffect(() => { if (step.kind === 'pick' || step.kind === 'choose') pickOpenedAt.current = Date.now(); }, [step.kind]);
+  // Nov 8 client: tap the store chip on the food screen → the store list; the food already counted moves to the new store.
+  const changing = useRef<string | null>(null);
+  function changeStore() { if (!cur) return; changing.current = cur; setSearch(''); setShowAll(true); setNewStore(null); setErr(null); setStep({ kind: 'pick' }); }
   function choose(p: Place) {
+    if (Date.now() - pickOpenedAt.current < 800 || Date.now() - lastTap.at < 900) return; // Nov 8 client: counted from the tap itself too
+    const from = changing.current; changing.current = null;
+    if (from && from !== p.key) {
+      setLines((ls) => ls.map((l) => (l.place === from ? { ...l, place: p.key } : l)));
+      setPlaces((ps) => { const rest = ps.filter((x) => x.key !== from && x.key !== p.key); const i = ps.findIndex((x) => x.key === from); rest.splice(Math.max(0, Math.min(i, rest.length)), 0, p); return rest; });
+      setCur(p.key); setSearch(''); setShowAll(false); setNewStore(null); setErr(null);
+      setStep({ kind: 'food' });
+      return;
+    }
     setPlaces((ps) => (ps.some((x) => x.key === p.key) ? ps : [...ps, p]));
     setCur(p.key);
     setSearch(''); setShowAll(false); setNewStore(null); setErr(null);
@@ -324,6 +369,9 @@ export function QuickKiosk({ secret }: { secret: string }) {
     setLines((ls) => ls.flatMap((l) => (l.id !== id ? [l] : l.count + d <= 0 ? [] : [{ ...l, count: Math.min(300, l.count + d) }])));
   }
   function setKind(id: number, k: Kind) { setLines((ls) => ls.map((l) => (l.id === id ? { ...l, kind: k, open: false } : l))); }
+  // Nov 8 client: "Add note" on a line — printed on that line's labels.
+  function setNote(id: number, note: string) { setLines((ls) => ls.map((l) => (l.id === id ? { ...l, note: note.slice(0, 48) } : l))); }
+  function noteOpen(id: number, v: boolean) { setLines((ls) => ls.map((l) => (l.id === id ? { ...l, noteOpen: v, note: v ? l.note : (l.note ?? '').trim() } : l))); }
   function reopen(id: number) { setLines((ls) => ls.map((l) => (l.id === id ? { ...l, open: true } : { ...l, open: l.kind ? false : l.open }))); }
 
   const live = lines.filter((l) => l.count > 0);
@@ -356,7 +404,7 @@ export function QuickKiosk({ secret }: { secret: string }) {
         items: ordered.map((l) => {
           const p = places.find((x) => x.key === l.place)!;
           return { pickupId: p.pickupId, supplierId: p.supplierId, otherName: p.otherName, count: l.count,
-                   container: l.container, kind: l.kind ? KNAME[l.kind].toLowerCase() : null };
+                   container: l.container, kind: l.kind ? KNAME[l.kind].toLowerCase() : null, note: l.note?.trim() || null };
         }),
       });
       setDropoffId(r.data.dropoffId); dropoffRef.current = r.data.dropoffId;
@@ -390,7 +438,8 @@ export function QuickKiosk({ secret }: { secret: string }) {
     try {
       const faces = sent.slice(0, 60).map((lb) => {
         const f = kioskLabelFace(lb);
-        return { store: f.store, date: f.date, kind: f.kind, container: f.container, count: f.count };
+        return { store: f.store, date: f.date, kind: f.kind, container: f.container, count: f.count, ...(f.note.length ? { note: f.note.join(' ') } : {}),
+                 ...(f.caterer ? { caterer: true, sub: f.sub } : {}) }; // Nov 6 client: the log shows it was a caterer label
       });
       const commands = sent[0] ? new TextDecoder().decode(buildLabelTspl(sent[0])).slice(0, 4000) : null;
       void kiosk.printLog(secret, {
@@ -421,7 +470,7 @@ export function QuickKiosk({ secret }: { secret: string }) {
       <div className="flex items-center gap-[14px]">{right}</div>
     </div>
   );
-  const startOver = <button type="button" onClick={resetAll} className={LINK}>Start over</button>;
+  const startOver = <button type="button" onClick={() => void freshStart()} className={LINK}>Start over</button>;
   const errBox = (cls = '') => err && <div className={`text-clay text-[22px] font-bold text-center bg-clay/10 rounded-[16px] py-3 px-5 ${cls}`}>{err}</div>;
 
   let body: React.ReactNode;
@@ -522,20 +571,47 @@ export function QuickKiosk({ secret }: { secret: string }) {
         </div>
       </>
     );
-  } else if (step.kind === 'pick') {
+  } else if (step.kind === 'choose' && center) {
+    body = (
+      <>
+        {topbar(startOver, <WhoChip who={who} />)}
+        <CenterChoice name={whoText(who)} card={center} P={P} onFood={() => setStep({ kind: 'pick' })} onCenter={() => setStep({ kind: 'center' })} />
+      </>
+    );
+  } else if (step.kind === 'center' && center && who?.volunteerId) {
+    body = (
+      <CenterHelpScreen secret={secret} volunteerId={who.volunteerId} firstName={who.firstName} card={center} P={P}
+                        onCard={setCenter} onFood={() => setStep({ kind: 'pick' })} onFinish={() => void freshStart()} onFeedback={() => { setErr(null); setStep({ kind: 'feedback' }); }}
+                        topbar={topbar(startOver, <WhoChip who={who} />)} />
+    );
+  } else if (step.kind === 'pick' || step.kind === 'choose' || step.kind === 'center') {
     const q = search.trim().toLowerCase();
-    const matches = stores.filter((s) => !q || s.supplierName.toLowerCase().includes(q) || s.city.toLowerCase().includes(q)).slice(0, 40);
+    // Nov 8 client: the complete list stays (owner) — only the stray-tap guard in choose().
+    const matches = stores.filter((s) => !q || s.supplierName.toLowerCase().includes(q) || s.city.toLowerCase().includes(q)).slice(0, q ? 40 : 1000);
     const mine = rows.filter((r) => !usedPlaces.has(r.key));
     const listOpen = showAll || mine.length === 0;
     const hasFood = live.length > 0;
+    const centerBig = !!center && !!who?.volunteerId && (!!center.open || center.shifts.some((x) => x.today));
     body = (
       <>
         {topbar(hasFood
-          ? <button type="button" onClick={() => { setStep({ kind: 'food' }); setCur(cur && places.some((p) => p.key === cur) ? cur : places[places.length - 1]?.key ?? null); }} className={LINK}>‹ Back</button>
+          ? <button type="button" onClick={() => { changing.current = null; setStep({ kind: 'food' }); setCur(cur && places.some((p) => p.key === cur) ? cur : places[places.length - 1]?.key ?? null); }} className={LINK}>‹ Back</button>
           : startOver, <WhoChip who={who} />)}
         <div className={`flex-1 min-h-0 overflow-y-auto pb-8 ${P ? 'px-10 pt-6' : 'w-[940px] mx-auto pt-1'}`}>
           <div className={`${H1} text-[48px]`}>{hasFood ? 'Which other store?' : 'Where is this food from?'}</div>
           <div className="text-[24px] text-muted mt-[10px]">{mine.length ? 'Your pickups for today are first. Tap one.' : 'Find the store.'}</div>
+          {centerBig && !hasFood && (
+            <TapButton onTap={() => setStep({ kind: 'center' })} ariaLabel="Center help"
+                       className={`w-full flex items-center gap-[26px] bg-sage border-[3px] border-forest rounded-[26px] ${P ? 'px-7 py-7 mt-5' : 'px-8 py-[26px] mt-[18px]'} text-left shadow-[0_4px_0_#CFE0CC]`}
+                       downClass="scale-[.99]">
+              <span className="w-[78px] h-[78px] rounded-[20px] bg-paper grid place-items-center flex-none text-[44px]">🧹</span>
+              <span className="min-w-0">
+                <span className={`block font-extrabold text-ink ${P ? 'text-[36px]' : 'text-[38px]'}`}>Center help</span>
+                <span className="block text-[21px] text-forest font-bold mt-1">{center?.open ? 'You are punched in · tap to punch out' : 'You have a shift today · tap to punch in'}</span>
+              </span>
+              <span className="ml-auto text-[46px] font-extrabold text-forest">›</span>
+            </TapButton>
+          )}
           {mine.map((r) => (
             <button type="button" key={r.key} onClick={() => choose(r)}
                     className={`w-full flex items-center gap-[26px] bg-paper border-[3px] border-sage-line rounded-[26px] ${P ? 'px-7 py-7 mt-5' : 'px-8 py-[26px] mt-[18px]'} text-left shadow-[0_4px_0_#E0D8C6] active:bg-sage`}>
@@ -543,6 +619,7 @@ export function QuickKiosk({ secret }: { secret: string }) {
               <span className="min-w-0">
                 <span className={`block font-extrabold text-ink truncate ${P ? 'text-[36px]' : 'text-[38px]'}`}>{r.label}</span>
                 <span className="block text-[21px] text-muted mt-1"><b className="text-forest">Your pickup</b>{r.sub ? ` · ${r.sub}` : ''}</span>
+                {r.caterer && <span className="block text-[21px] text-ink font-bold mt-0.5 truncate">🍽 Caterer: {r.caterer}</span>/* Nov 6 client */}
               </span>
               <span className="ml-auto text-[46px] font-extrabold text-forest">›</span>
             </button>
@@ -588,6 +665,9 @@ export function QuickKiosk({ secret }: { secret: string }) {
             </div>
           )}
           {errBox('mt-5')}
+          {center && !centerBig && !hasFood && who?.volunteerId && (
+            <button type="button" onClick={() => setStep({ kind: 'center' })} className="w-full mt-10 text-center text-[19px] text-muted underline underline-offset-4">Signing in for center help? Tap here</button>
+          )}
         </div>
       </>
     );
@@ -660,6 +740,20 @@ export function QuickKiosk({ secret }: { secret: string }) {
                 </div>
               )}
               {!open && l.kind === 'notsure' && <div className="text-[19px] text-muted mt-[6px] mb-[2px] ml-[62px]">{NOT_SURE_NOTE}</div>}
+              {/* Nov 8 client: Add note → printed on this line's labels */}
+              {l.noteOpen ? (
+                <div className="flex items-center gap-2 mt-3">
+                  <input value={l.note ?? ''} onChange={(e) => setNote(l.id, e.target.value)} autoFocus maxLength={48} placeholder="e.g. Keep refrigerated, or Use by Friday"
+                         className="flex-1 min-w-0 rounded-[14px] border-[3px] border-line-2 bg-paper px-4 h-[60px] text-[24px] outline-none focus:border-forest" />
+                  <button type="button" onClick={() => noteOpen(l.id, false)} className="h-[60px] px-6 rounded-[14px] bg-forest text-paper text-[22px] font-extrabold">Done</button>
+                </div>
+              ) : l.note?.trim() ? (
+                <button type="button" onClick={() => noteOpen(l.id, true)} className="mt-2 ml-[62px] text-left text-[20px] text-ink">
+                  📝 <b>{l.note.trim()}</b> <span className="underline underline-offset-2 font-bold text-forest">Change</span>
+                </button>
+              ) : (
+                <button type="button" onClick={() => noteOpen(l.id, true)} className="mt-2 ml-[62px] text-[20px] font-bold text-forest underline underline-offset-2">📝 Add note</button>
+              )}
             </div>
           );
         })}
@@ -682,7 +776,7 @@ export function QuickKiosk({ secret }: { secret: string }) {
       <>
         {topbar(<button type="button" onClick={leaveFood} className={LINK}>‹ Back</button>,
           <>
-            {curPlace && <Chip><StoreIcon size={26} /><span className="truncate">{curPlace.label}{curPlace.time ? ` · ${curPlace.time}` : ''}</span></Chip>}
+            {curPlace && <button type="button" onClick={changeStore} aria-label="Change the store"><Chip><StoreIcon size={26} /><span className="truncate">{curPlace.caterer ? `🍽 ${curPlace.caterer} · ` : ''}{curPlace.label}{curPlace.time ? ` · ${curPlace.time}` : ''}</span><span className="text-forest underline underline-offset-2 flex-none">Change</span></Chip></button>/* Nov 8 client */}
             <WhoChip who={who} />
           </>)}
         {P ? (
@@ -713,7 +807,7 @@ export function QuickKiosk({ secret }: { secret: string }) {
           <div className="mt-[18px] text-[17px] uppercase tracking-[.14em] font-extrabold text-muted">One label</div>
           <div className={P ? 'mt-4' : 'mt-3'}>
             {first && fp && (
-              <LabelPreview size={P ? 470 : 330} label={{ supplierName: fp.label, date: labelDate(), category: KNAME[first.kind ?? 'notsure'], unit: first.container, index: 1, total }} />
+              <LabelPreview size={P ? 470 : 330} label={{ supplierName: fp.label, caterer: fp.caterer ?? null, date: labelDate(), category: KNAME[first.kind ?? 'notsure'], unit: first.container, index: 1, total, note: first.note?.trim() || null /* Nov 8 client */, description: who?.name ?? null, dropTime: new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' }), code: 'ZLZ-S0-L0-1' /* sample: the real code comes when it is saved */ }} />
             )}
           </div>
           {errBox(P ? 'mt-6' : 'mt-4')}
@@ -778,7 +872,7 @@ export function QuickKiosk({ secret }: { secret: string }) {
             <div className="text-[32px] font-extrabold text-ink">Any feedback, or any problem we should know about?</div>
             <div className={`flex gap-[18px] justify-center mt-[22px] ${P ? 'flex-col items-stretch' : ''}`}>
               <TapButton onTap={() => { setErr(null); setStep({ kind: 'feedback' }); }} className={`${BTN_PRIMARY} ${P ? 'h-[104px]' : 'w-[330px] h-[96px]'} text-[30px]`} downClass="scale-[.99]">Yes, tell us</TapButton>
-              <TapButton onTap={resetAll} className={`${BTN_OUTLINE} ${P ? 'h-[104px]' : 'w-[240px] h-[96px]'} text-[26px]`} downClass="!bg-sage">No thanks</TapButton>
+              <TapButton onTap={() => void freshStart()} className={`${BTN_OUTLINE} ${P ? 'h-[104px]' : 'w-[240px] h-[96px]'} text-[26px]`} downClass="!bg-sage">No thanks</TapButton>
             </div>
           </div>
         </div>
@@ -802,7 +896,7 @@ export function QuickKiosk({ secret }: { secret: string }) {
             <button type="button" onClick={() => void sendFeedback()} disabled={busy || !fb.trim()} className={`${BTN_PRIMARY} w-[420px] h-[96px] text-[30px]`}>
               {busy ? 'Sending…' : 'Send'}
             </button>
-            <button type="button" onClick={resetAll} className={`${BTN_QUIET} h-[96px] text-[20px]`}>Cancel</button>
+            <button type="button" onClick={() => void freshStart()} className={`${BTN_QUIET} h-[96px] text-[20px]`}>Cancel</button>
           </div>
         </div>
       </>

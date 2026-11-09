@@ -69,6 +69,29 @@ export function askCancelShift(sh: { starts_at: string; recurring_shift_id?: num
   });
 }
 
+/** Nov 6 Yakov: Release on an "every week" dispatcher shift asks "Just this week" or "Every week from now on". */
+export function askReleaseScope(who: string, when: string, day: string): Promise<'week' | 'future' | null> {
+  return new Promise((resolve) => {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const root = createRoot(el);
+    const done = (v: 'week' | 'future' | null) => { root.unmount(); el.remove(); resolve(v); };
+    const b = 'haptic block w-full rounded-[10px] px-3 py-2.5 text-[13.5px] font-bold text-left';
+    root.render(
+      <div className="fixed inset-0 z-[3000] bg-ink/50 flex items-end md:items-center justify-center md:px-4"
+           onKeyDown={(e) => { if (e.key === 'Escape') done(null); }}>
+        <div role="dialog" aria-label={`Release ${who}?`} data-release-scope className="bg-paper rounded-t-[18px] md:rounded-[16px] border border-line shadow-lift w-full md:max-w-sm p-4 space-y-2">
+          <div className="font-display font-semibold text-[17px]">Release {who}?</div>
+          <div className="text-[12.5px] text-muted">{when}. This shift repeats every week. Past weeks don&apos;t change.</div>
+          <button autoFocus onClick={() => done('week')} className={cx(b, 'border border-clay/40 text-clay hover:bg-clay/10')} data-release-week>Just this week ({day})</button>
+          <button onClick={() => done('future')} className={cx(b, 'bg-clay text-paper')} data-release-future>Every week from now on</button>
+          <button onClick={() => done(null)} className={cx(b, 'text-muted text-center hover:bg-cream')}>Go back</button>
+        </div>
+      </div>,
+    );
+  });
+}
+
 /** Office only (admin / coordinator / staff) — not dispatchers or viewers. */
 export function isShiftsOffice(): boolean {
   return ['admin', 'coordinator', 'staff'].includes(String(getUser()?.role ?? ''));

@@ -26,7 +26,8 @@ export type PickupLabelInput = {
 const clean = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
 // Placeholder words some lists send instead of a name.
 const JUNK = /^(one-time pickup|pickup|unknown|n\/a|-|—)$/i;
-const named = (s: unknown) => { const t = clean(s); return t && !JUNK.test(t) ? t : ''; };
+// Nov 2 client: a "name" with no letters (like "000") is not a name — fall through to the address.
+const named = (s: unknown) => { const t = clean(s); return t && !JUNK.test(t) && /\p{L}/u.test(t) ? t : ''; };
 
 /**
  * Oct 22 client ("need all this stuff to be neater"): a tidy name for lists.

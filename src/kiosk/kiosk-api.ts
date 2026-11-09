@@ -102,6 +102,11 @@ export type KioskLine = {
 
 export type KioskLabel = {
   supplierName: string;
+  caterer?: string | null; // Nov 6 client: the pickup's caterer (top line of the label)
+  note?: string | null; // Nov 8 client: the line's note ("Add note"), printed at the bottom
+  acceptedTime?: string | null; // Nov 8 client: small "Accepted 1:52 PM" (his pickup only)
+  dropTime?: string | null;     // Nov 8 client: small "Drop-off 2:35 PM"
+  code?: string | null;         // Nov 8 client: QR code — store + line + box (ZLZ-S22-L5123-3)
   date: string;
   description: string;
   category: string;
@@ -114,11 +119,24 @@ export type KioskLabel = {
 export type QuickLookupData = {
   needsPick?: boolean; candidates?: { volunteerId: number; name: string }[];
   volunteerId: number; name: string; firstName: string; unitNumber?: number | null;
-  pickups: { pickupId: number; supplierId: number | null; label: string; date: string; time: string | null }[];
+  pickups: { pickupId: number; supplierId: number | null; label: string; date: string; time: string | null; caterer?: string | null }[]; // Nov 6 client: + caterer
   allSuppliers: { supplierId: number; supplierName: string; city: string }[];
+  center?: CenterCard | null; // Nov 4 Yakov: center help card (null = not a center helper)
+};
+
+// Nov 4 Yakov: center help punch in / out on the quick kiosk (center-help-card.tsx).
+export type CenterCard = {
+  onList: boolean;
+  open: { inAt: string; groupSize: number; shiftEndsAt: string | null } | null;
+  shifts: { startsAt: string; endsAt: string; task: string; today: boolean }[];
+  recent: { inAt: string; outAt: string | null; minutes: number; groupSize: number; noPunchOut: boolean; fixed: boolean }[];
 };
 
 export const kiosk = {
+  // Nov 4 Yakov: center help punch in / punch out.
+  centerPunch: (secret: string, body: { volunteerId: number; action: 'in' | 'out'; groupSize?: number }) =>
+    ksh<{ data: { did: 'in' | 'out' | 'already-in' | 'not-in'; at: string | null; minutes?: number; groupSize?: number; center: CenterCard | null } }>(
+      secret, '/center/punch', { method: 'POST', body: JSON.stringify(body) }),
   // Oct 6 client: quick drop-off (code → stores → item count → labels).
   // Oct 30 client: "📷 Scan my name tag" on the quick kiosk — same reply as quickLookup.
   quickLookupQr: (secret: string, qrToken: string) =>
@@ -142,7 +160,7 @@ export const kiosk = {
   printLog: (secret: string, body: {
     dropoffId?: number | null; transport: 'tcp' | 'relay' | 'browser' | 'none'; ok: boolean; printed: number; total: number;
     stopped?: boolean; error?: string | null; layout?: string;
-    faces?: Array<{ store: string[]; date: string; kind: string; container: string; count: string }>; commands?: string | null;
+    faces?: Array<{ store: string[]; date: string; kind: string; container: string; count: string; caterer?: boolean; sub?: string }>; commands?: string | null;
   }) => ksh<{ data: { ok: true } }>(secret, '/print-log', { method: 'POST', body: JSON.stringify(body) }),
   signin: (secret: string, body: {
     code?: string;

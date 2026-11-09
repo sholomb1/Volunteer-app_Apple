@@ -422,6 +422,7 @@ export function RecentCalls({ volunteerId, name }: { volunteerId: number; name: 
   const [adding, setAdding] = useState(false);
   const q = useQuery({ queryKey: ['call-log', volunteerId], queryFn: () => api<{ data: CallRow[] }>(`/api/volunteers/${volunteerId}/call-log?limit=10`) });
   const rows = q.data?.data ?? [];
+  const [all, setAll] = useState(false); // Nov 3 client: newest 5, then "Show more"
   return (
     <div>
       <div className="flex items-center justify-between gap-2">
@@ -434,9 +435,14 @@ export function RecentCalls({ volunteerId, name }: { volunteerId: number; name: 
         : rows.length === 0 ? <div className="mt-1 text-[13px] italic text-muted">No calls logged yet.</div>
         : (
           <ul className="mt-1 divide-y divide-line">
-            {rows.map((c) => <li key={c.id} className="py-1.5 text-[13px] text-ink">{callLine(c)}</li>)}
+            {(all ? rows : rows.slice(0, 5)).map((c) => <li key={c.id} className="py-1.5 text-[13px] text-ink">{callLine(c)}</li>)}
           </ul>
         )}
+      {rows.length > 5 && (
+        <button type="button" onClick={() => setAll(!all)} className="haptic mt-1 text-[12.5px] font-bold text-forest hover:underline">
+          {all ? 'Show less' : `Show more (${rows.length})`}
+        </button>
+      )}
     </div>
   );
 }

@@ -6,16 +6,17 @@
  * Oct 14 client: how we reach you (Text / WhatsApp / Both / App only), quiet
  * times, away, call hours and text commands moved to Settings; the sign-up
  * answers are under My application. Both are linked at the top.
+ * Nov 3 Yakov: the Settings and My application rows at the top are gone (Settings is in
+ * the ☰ menu).
  */
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, ChevronRight, FileText, Save, Settings as SettingsIcon } from 'lucide-react';
+import { ArrowLeft, Save } from 'lucide-react';
 import { volunteerSelf, account } from '../api';
 import { FadeUp, setUnsavedGuard, confirmLeaveIfUnsaved } from '../design';
 import { LocationShareCard, LoadError, NOT_LINKED_TEXT, isNotLinked } from './VolunteerHome';
 import { driverError } from './driver-card';
-import { alertsOf, alertsShort, noAlerts, useDriverSettings } from '../driver-settings'; // Oct 28 client: ticks
 import { PhoneListEditor, phonesStateFrom, phonesPayload, phonesError, callNumberOf, type PhonesState } from '../phone-list'; // Oct 14 client: more than one number
 import { MyPhotoSection } from '../driver-photo'; // Oct 30 client: "Add photo" (camera or gallery)
 
@@ -30,8 +31,6 @@ export function VolunteerProfile() {
   const q = useQuery({ queryKey: ['volunteer-self'], queryFn: volunteerSelf.get,
     retry: (n, e) => !isNotLinked(e) && n < 2 });
   const profile = q.data?.data;
-  const settings = useDriverSettings();
-  const st = settings.data?.data;
 
   const [firstName, setFirst] = useState('');
   const [lastName, setLast] = useState('');
@@ -95,10 +94,6 @@ export function VolunteerProfile() {
     onSuccess: (_r, snap: string) => { setBaseline(snap); setDone(true); setTimeout(() => setDone(false), 3500); },
   });
 
-  const go = async (to: string) => { if (await confirmLeaveIfUnsaved()) nav(to); };
-  const reachLine = !st ? 'How we reach you, pause, quiet hours, call hours'
-    : noAlerts(alertsOf(st)) ? 'Pickups by: nothing · pause, quiet hours, call hours'
-    : `Pickups by: ${alertsShort(alertsOf(st))} · pause, quiet hours, call hours`;
 
   return (
     <div className="min-h-screen pb-[80px]">
@@ -112,11 +107,7 @@ export function VolunteerProfile() {
         <div className="font-display font-semibold text-[20px]">My profile</div>
       </div>
       <main className="px-5">
-        {/* Oct 14 client: Settings + My application */}
-        <div className="rounded-[16px] border border-line bg-paper divide-y divide-line overflow-hidden">
-          <LinkRow icon={<SettingsIcon size={19} />} label="Settings" sub={reachLine} onClick={() => void go('/settings')} />
-          <LinkRow icon={<FileText size={19} />} label="My application" sub="See or update your sign-up answers" onClick={() => void go('/application')} />
-        </div>
+        {/* Nov 3 Yakov: no Settings / My application rows here. */}
         <LocationShareCard />
         {q.isLoading ? <p className="text-muted text-center py-10">Loading…</p> :
          q.isError && !profile ? <LoadError onRetry={() => q.refetch()} busy={q.isFetching} error={q.error} what="your profile" /> :
@@ -182,19 +173,6 @@ export function VolunteerProfile() {
         </FadeUp>}
       </main>
     </div>
-  );
-}
-
-function LinkRow({ icon, label, sub, onClick }: { icon: React.ReactNode; label: string; sub: string; onClick: () => void }) {
-  return (
-    <button onClick={onClick} className="haptic w-full min-h-[60px] flex items-center gap-3 px-4 py-3 text-left">
-      <span className="grid h-9 w-9 place-items-center rounded-full bg-sage text-forest shrink-0">{icon}</span>
-      <span className="flex-1 min-w-0">
-        <span className="block text-[16px] font-bold text-ink">{label}</span>
-        <span className="block text-[14px] text-muted leading-snug">{sub}</span>
-      </span>
-      <ChevronRight size={18} className="text-muted shrink-0" />
-    </button>
   );
 }
 

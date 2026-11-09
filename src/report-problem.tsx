@@ -22,7 +22,7 @@ import { createPortal } from 'react-dom';
 import { api, API_BASE, getToken, getUser } from './api';
 import { cx } from './design';
 import { msgWhen } from './display';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNightSend, ScheduledTexts, personalSched, refreshScheduled } from './late-night'; // Oct 23 client: late-night prompt
 
 const OPEN_EVENT = 'zlz:report-problem';
@@ -674,18 +674,20 @@ export function ReporterBox({ taskId, rev, onSent, copyAlways, className }: { ta
 
 /** Oct 16 client: open problem reports + comments — the count on the "Bug reports" tab (admins). */
 export function BugReportsBadge() {
-  const [count, setCount] = useState(0);
+  // Nov 3 client: speed — asks for the number only (was the whole list), and not while the portal is in a hidden browser tab.
+  const q = useQuery({
+    queryKey: ['bug-reports-open-count'],
+    queryFn: () => api<{ data: { count: number } }>('/api/help/bug-reports?status=open&kind=all&count=1'),
+    refetchInterval: 60_000, retry: false,
+  });
+  const { refetch } = q;
   useEffect(() => {
-    let alive = true;
-    const load = () => api<{ data: unknown[] }>('/api/help/bug-reports?status=open&kind=all')
-      .then((r) => { if (alive) setCount(Array.isArray(r?.data) ? r.data.length : 0); }).catch(() => { /* no access */ });
-    void load();
-    const t = window.setInterval(load, 60_000);
-    const h = () => { void load(); };
+    const h = () => { void refetch(); };
     window.addEventListener('zlz:report-sent', h);
     window.addEventListener('zlz:bug-reports-changed', h);
-    return () => { alive = false; window.clearInterval(t); window.removeEventListener('zlz:report-sent', h); window.removeEventListener('zlz:bug-reports-changed', h); };
-  }, []);
+    return () => { window.removeEventListener('zlz:report-sent', h); window.removeEventListener('zlz:bug-reports-changed', h); };
+  }, [refetch]);
+  const count = Number(q.data?.data?.count ?? 0) || 0;
   if (!count) return null;
   return <span data-bug-reports-count className="inline-grid place-items-center min-w-[20px] h-[20px] px-1.5 rounded-full bg-red-500 text-paper text-[11px] font-extrabold">{count > 99 ? '99+' : count}</span>;
 }

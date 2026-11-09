@@ -7,6 +7,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, API_BASE, getUser } from './api';
 import { cx } from './design';
 import { QuickPickupModal } from './portal-sections'; // Nov 1 client: make a pickup from a donation email
+import { OfficeTextsPanel } from './office-texts'; // Nov 3 client: Food Donations → Texts tab
+import { openNewEmail, canSendEmail, EmailTemplatesButton, EmailTemplatesEditor, emailFill, fillEmail, withTemplate } from './new-email'; // Nov 3 client: ✉️ New email from the dispatch mailbox (+ templates)
+import { useMySignature, SignatureEditor, EditSignatureLink, swapSignature, withoutSignature } from './my-signature'; // Nov 3 client
 
 type Status = 'new' | 'contacted' | 'pickup_created' | 'closed';
 type Row = {
@@ -35,18 +38,84 @@ const VIEWS: { key: string; label: string }[] = [
   { key: 'pickup_created', label: 'Pickup created' },
   { key: 'closed', label: 'Closed' },
   { key: 'all', label: 'All' },
+  { key: 'sent', label: 'Sent' }, // Nov 3 client: emails sent from the app, and who sent them
 ];
 const when = (iso: string) => new Date(iso).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' });
 const fileUrl = (u: string) => API_BASE.replace(/\/$/, '') + u;
 const clock = (iso: string) => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' });
 const ADMIN_ROLES = ['admin', 'staff', 'coordinator']; // = ADMIN_ONLY_ROLES on the server
 
+// Nov 3 client: Food Donations = Email + Texts. The Texts tab is the office-number texts (same list as
+// Dispatchers → Texts: conversations, reply, make a pickup). For now ALL office texts show here.
 export function DonationsPanel({ canEdit }: { canEdit: boolean }) {
+  const [tab, setTab] = useState<'email' | 'texts'>('email');
+  return (
+    <div className="max-w-3xl space-y-4">
+      <div className="inline-flex rounded-[12px] border border-line overflow-hidden" role="tablist" data-fd-tabs>
+        {([['email', '✉️ Email'], ['texts', '💬 Texts — (845) 363-5323']] as const).map(([k, label]) => (
+          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
+                  className={cx('px-4 py-2 text-[13.5px] font-bold haptic', tab === k ? 'bg-forest text-paper' : 'bg-paper text-ink')}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {tab === 'email' ? <EmailTab canEdit={canEdit} /> : <OfficeTextsPanel />}
+    </div>
+  );
+}
+
+type SentRow = { id: number; at: string; is_reply: boolean; to_email: string | null; to_name: string | null; subject: string | null;
+  text: string | null; status: 'sent' | 'held' | 'failed'; error: string | null; by_name: string | null };
+
+// Nov 3 client: every email sent from the app (new emails + replies) and who sent it.
+function SentList() {
+  const q = useQuery({ queryKey: ['food-donations-sent'], queryFn: () => api<{ data: SentRow[] }>('/api/food-donations/sent') });
+  const [openId, setOpenId] = useState<number | null>(null);
+  const rows = q.data?.data ?? [];
+  return (
+    <section className="rounded-[14px] border border-line bg-paper" data-fd-sent>
+      {q.isLoading ? <p className="px-4 py-6 text-[13px] text-muted">Loading…</p>
+        : q.isError ? <p className="px-4 py-6 text-[13px] text-clay">Couldn’t load sent emails. Try again in a moment.</p>
+        : rows.length === 0 ? <p className="px-4 py-6 text-[13px] text-muted">Nothing sent from the app yet.</p>
+        : (
+          <ul>
+            {rows.map((r, i) => (
+              <li key={r.id} className={cx(i > 0 && 'border-t border-line')}>
+                <button type="button" className="w-full text-left px-4 py-3" onClick={() => setOpenId(openId === r.id ? null : r.id)}>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-bold text-[14px] text-ink truncate">To {r.to_name || r.to_email || 'unknown'}</span>
+                    <span className={cx('shrink-0 px-2 py-0.5 rounded-full text-[11.5px] font-bold border',
+                      r.status === 'sent' ? 'bg-forest/10 text-forest border-forest/30' : r.status === 'held' ? 'bg-paper text-muted border-line' : 'bg-clay/10 text-clay border-clay/30')}>
+                      {r.status === 'sent' ? 'Sent' : r.status === 'held' ? 'Not sent (test site)' : 'Didn’t send'}
+                    </span>
+                  </div>
+                  <div className="text-[13.5px] text-ink truncate">{r.is_reply ? '↩︎ ' : ''}{r.subject || '(no subject)'}</div>
+                  <div className="text-[12px] text-muted truncate">
+                    {when(r.at)}{r.by_name ? ` · by ${r.by_name}` : ''}{r.to_name && r.to_email ? ` · ${r.to_email}` : ''}
+                  </div>
+                </button>
+                {openId === r.id && (
+                  <div className="px-4 pb-4 space-y-2">
+                    {r.status === 'failed' && r.error && <p className="text-[12.5px] text-clay font-bold">{r.error}</p>}
+                    <p className="whitespace-pre-wrap break-words text-[14px] text-ink rounded-[10px] border border-line bg-ink/5 p-3 max-h-80 overflow-auto">{r.text}</p>
+                    {r.to_email && <button type="button" onClick={() => openNewEmail({ email: r.to_email, name: r.to_name })}
+                                           className="text-[13px] font-bold text-forest hover:underline">✉️ Write again</button>}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+    </section>
+  );
+}
+
+function EmailTab({ canEdit }: { canEdit: boolean }) {
   const [view, setView] = useState('open');
   const [openId, setOpenId] = useState<number | null>(null);
   const q = useQuery({
-    queryKey: ['food-donations', view],
-    queryFn: () => api<{ data: ListData }>(`/api/food-donations?view=${view}`),
+    queryKey: ['food-donations', view === 'sent' ? 'open' : view],
+    queryFn: () => api<{ data: ListData }>(`/api/food-donations?view=${view === 'sent' ? 'open' : view}`),
     refetchInterval: 60_000,
   });
   const d = q.data?.data;
@@ -55,7 +124,7 @@ export function DonationsPanel({ canEdit }: { canEdit: boolean }) {
   const [showConn, setShowConn] = useState(false);
 
   return (
-    <div className="max-w-3xl space-y-4">
+    <div className="space-y-4">
       {(d || isAdmin) && (
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-[12.5px] text-muted">
@@ -65,6 +134,13 @@ export function DonationsPanel({ canEdit }: { canEdit: boolean }) {
                 {d.lastError ? <span className="text-clay font-bold"> · ✗</span> : d.lastOk ? <span className="text-forest font-bold"> · ✓</span> : null}</>
             )}
           </span>
+          <span className="flex flex-wrap gap-2">
+          {canEdit && canSendEmail() && d?.connected && (
+            <button type="button" onClick={() => openNewEmail()} data-new-email-btn
+                    className="px-3 py-1.5 rounded-full text-[12.5px] font-bold border haptic bg-forest text-paper border-forest">
+              ✉️ New email
+            </button>
+          )}
           {isAdmin && (
             <button type="button" onClick={() => setShowConn((v) => !v)}
                     className={cx('px-3 py-1.5 rounded-full text-[12.5px] font-bold border haptic',
@@ -72,6 +148,7 @@ export function DonationsPanel({ canEdit }: { canEdit: boolean }) {
               ⚙️ Email connection
             </button>
           )}
+          </span>
         </div>
       )}
       {showConn && isAdmin && <ConnectionBox onClose={() => setShowConn(false)} />}
@@ -97,6 +174,7 @@ export function DonationsPanel({ canEdit }: { canEdit: boolean }) {
           </button>
         ))}
       </div>
+      {view === 'sent' ? <SentList /> : (
       <section className="rounded-[14px] border border-line bg-paper">
         {q.isLoading ? (
           <p className="px-4 py-6 text-[13px] text-muted">Loading…</p>
@@ -126,6 +204,7 @@ export function DonationsPanel({ canEdit }: { canEdit: boolean }) {
           </ul>
         )}
       </section>
+      )}
     </div>
   );
 }
@@ -270,6 +349,8 @@ function DonationDetail({ id, canEdit }: { id: number; canEdit: boolean }) {
   const [replyText, setReplyText] = useState('');
   const [replyMsg, setReplyMsg] = useState<string | null>(null);
   const [makePickup, setMakePickup] = useState(false);
+  const [replyEdit, setReplyEdit] = useState<'sig' | 'tpl' | null>(null); // Nov 3 client
+  const { sig: mySig } = useMySignature(); // Nov 3 client
   const send = useMutation({
     mutationFn: (text: string) => api<{ data: { status: string; error: string | null } }>(`/api/food-donations/${id}/reply`, { method: 'POST', body: JSON.stringify({ text }) }),
     onSuccess: (r) => {
@@ -367,11 +448,27 @@ function DonationDetail({ id, canEdit }: { id: number; canEdit: boolean }) {
           )}
           {d.from_email && (
             <div className="space-y-2">
-              <textarea value={replyText} onChange={(e) => { setReplyText(e.target.value); setReplyMsg(null); }} rows={3}
+              {/* Nov 3 client: 📝 Templates + My signature (put in the box when you start writing; change or delete it) */}
+              {replyEdit === 'tpl' ? <EmailTemplatesEditor onClose={() => setReplyEdit(null)} /> : (
+                <EmailTemplatesButton onEdit={() => setReplyEdit('tpl')} onPick={(t) => {
+                  setReplyText((cur) => withTemplate(cur, fillEmail(t.text, emailFill(d.from_name, null, sug?.storeName ?? null)), mySig.email));
+                  setReplyMsg(null);
+                }} />
+              )}
+              <textarea value={replyText} onChange={(e) => { setReplyText(e.target.value); setReplyMsg(null); }} rows={replyText ? 7 : 3} data-reply-box
+                        onFocus={(e) => { if (!replyText && mySig.email) { const el = e.currentTarget; setReplyText(`\n\n${mySig.email}`); setTimeout(() => el.setSelectionRange(0, 0), 0); } }}
                         placeholder={`Reply to ${d.from_name || d.from_email}… (sent from the dispatch email)`}
                         className="w-full rounded-[10px] border border-line bg-paper p-2 text-[13.5px] text-ink" />
+              {replyEdit === 'sig' ? (
+                <SignatureEditor onClose={() => setReplyEdit(null)} onSaved={(o, n) => setReplyText((t) => swapSignature(t, o.email, n.email))} />
+              ) : (
+                <div className="flex flex-wrap items-center gap-x-2 text-[12px] text-muted">
+                  {replyText.includes(mySig.email) && mySig.email && <span>Your signature is at the bottom. Change it or delete it if you like.</span>}
+                  <EditSignatureLink onClick={() => setReplyEdit('sig')} />
+                </div>
+              )}
               <div className="flex flex-wrap items-center gap-3">
-                <button type="button" disabled={send.isPending || !replyText.trim()} onClick={() => send.mutate(replyText.trim())}
+                <button type="button" disabled={send.isPending || !withoutSignature(replyText, mySig.email)} onClick={() => send.mutate(replyText.trim())}
                         className="px-4 py-1.5 rounded-full text-[12.5px] font-bold bg-forest text-paper border border-forest haptic disabled:opacity-50">
                   {send.isPending ? 'Sending…' : '✉️ Send reply'}
                 </button>

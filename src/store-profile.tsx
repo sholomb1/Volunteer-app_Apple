@@ -254,6 +254,7 @@ export function StoreProfileOverview({ supplierId }: { supplierId: number }) {
           {d.phoneSharedWithDriver && <div className="mt-1 text-[11px] text-muted">This phone is also {d.phoneSharedWithDriver}'s (driver) — their driver texts are left out.</div>}
         </>}
         <StoreTextSwitches supplierId={supplierId} />
+        {/* Nov 5 client: the reminder before pickup moved to each steady pickup (steady form). */}
       </div>
 
       <div>

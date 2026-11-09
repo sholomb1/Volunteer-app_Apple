@@ -14,7 +14,6 @@ import { SupplierProfile } from './screens/SupplierProfile';
 import { VolunteerProfile } from './screens/VolunteerProfile';
 import { PickupsFeed } from './screens/PickupsFeed';
 import { PickupDetail } from './screens/PickupDetail';
-import { TripCapture } from './screens/TripCapture';
 import { Chat } from './screens/Chat';
 import { Activity } from './screens/Activity';
 import { DriverSettings } from './screens/DriverSettings'; // Oct 14 client
@@ -25,7 +24,7 @@ import { FilterBlockedBanner } from './filter-banner'; // Oct 11 client: interne
 import { fetchRemoteAppVersion, storeUpdateDue, noteNewerVersion, decideUpdatePopup, getLaterUntil, snoozeUpdatePopup } from './app-version-check'; // Oct 14 client
 import { UpdatePopup } from './update-popup'; // Oct 14 client: update pop-up
 import { isPhoneLink } from './phone-sign-in'; // Oct 28 client: phone-code sign-in email link
-import { useViewMode, useDriverLink, canSwitchViews, DispatcherViewBar } from './view-switch'; // Oct 29 client: one login per person
+import { useViewMode, useDriverLink, canOpenDriverView, DriverViewBar } from './view-switch'; // Oct 29 client: one login per person; Nov 5 client: View switch + driver preview
 
 // Oct 11 client: speed — loaded only when opened (was one 1.6 MB bundle).
 const AcceptInvite              = lazyNamed(() => import('./staff-invite'), 'AcceptInvite');
@@ -337,7 +336,8 @@ function AuthedApp() {
   // ("Driver view"); the choice is kept on this device. Default: the office view.
   const driverId = useDriverLink(user);
   const view = useViewMode(user?.id ?? null);
-  const driverView = !!user && view === 'driver' && canSwitchViews({ role: user.role, driverProfileId: driverId });
+  // Nov 5 client: every office / dispatcher login can open the driver app; with no driver profile it is a preview.
+  const driverView = !!user && view === 'driver' && canOpenDriverView(user);
 
   if (!user) return <Login onAuthed={setUser} />;
 
@@ -383,7 +383,7 @@ function AuthedApp() {
   if (phoneLink) return <Navigate to="/settings" replace />; // Oct 28 client: email link while signed in
   return (
     <PhoneFrame>
-      {driverView && <DispatcherViewBar user={user} />}{/* Oct 29 client: back to the office view */}
+      {driverView && <DriverViewBar user={user} preview={!(Number(driverId ?? 0) > 0)} />}{/* Oct 29 client: back to the office view; Nov 5 client: yellow bar */}
       <div className="flex-1 min-h-0 overflow-y-auto">
         <Routes>
           <Route path="/"                 element={<VolunteerHome user={user} />} />
@@ -396,7 +396,8 @@ function AuthedApp() {
           {/* Oct 31 client: Food to handle is office-only for now — not in the driver app. */}
           <Route path="/application"      element={<MyApplication />} />{/* Oct 14 client */}
           <Route path="/pickup/:mode/:id" element={<PickupDetail />} />
-          <Route path="/trip/:id"         element={<TripCapture />} />
+          {/* Nov 3 Yakov: no "How far did you drive?" page (miles are automatic); old links go Home. */}
+          <Route path="/trip/:id"         element={<Navigate to="/" replace />} />
           <Route path="*"                 element={<Navigate to="/" replace />} />
         </Routes>
       </div>

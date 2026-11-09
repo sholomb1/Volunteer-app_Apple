@@ -10,51 +10,108 @@
  * Role-gated to admin/coordinator. Mobile route /portal redirects to the
  * Volunteer home so this stays desktop-only as designed.
  */
+import { StoreCleanupButton } from '../store-cleanup'; // Nov 8 client: Clean up stores
 import { DriverRepliesPanel, ExpiredReviewSection, NotCheckedInSection, CodeWordsPanel } from '../profiles'; // Oct 11 client: + Code words
 import { uiConfirm, uiNotify } from '../ui-dialogs';
+import { useLeaveGuard } from '../next-dispatcher'; // Nov 6 client
 import { cancelledLine } from '../cancelled-by'; // Oct 14 client: who cancelled
-import { useMemo, useState, Suspense, Fragment } from 'react';
+import { useMemo, useState, Suspense, Fragment, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type * as LT from 'leaflet'; // Oct 16 client: speed — leaflet itself loads only when the Coverage map opens (see CoordMap)
 import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { LayoutGrid, Calendar, Users, Store, BarChart3, LogOut, MessageSquare, ClipboardList, Settings, ShieldCheck, X, MapPin, Loader2 } from 'lucide-react';
-import { adminCRUD, adminSmsPause, api, apiAssetUrl, getToken, setAuth, setSmsOverrideFor, smsOverrideUntil, broadcast, canSeeTab, dispatcherHiddenTab, isDispatcherLogin, canWrite, canOfficeOnly, dispatcherShifts, dm, getUser, location as locationApi, smsThreads, sse, uncoveredAlerts, upcomingSms, type DispShiftSlot, type DispWeeklyRow, type SignupRow } from '../api';
+import { adminCRUD, adminSmsPause, api, apiAssetUrl, getToken, setAuth, setSmsOverrideFor, smsOverrideUntil, broadcast, canSeeTab, dispatcherHiddenTab, isDispatcherLogin, canWrite, canOfficeOnly, dispatcherShifts, dm, getUser, getRealUser, location as locationApi, smsThreads, sse, uncoveredAlerts, upcomingSms, type DispShiftSlot, type DispWeeklyRow, type SignupRow } from '../api';
 import { sendPickupNowConfirmed } from '../pickup-send-now';
 import { smsReasonText, textedText } from '../sms-reason';
 import { OnCallNowButton } from '../on-call'; // Oct 21 client (Cleaner Live Board): 📞 button in the header (was the On call now card)
 import { pickupColor, COLOR_CARD, finishedPill, type PickupColor } from '../pickup-color'; // Oct 21 client (Cleaner Live Board): one color per card
-import { pickupPlace, tidyAddress, driverShort } from '../pickup-label'; // Oct 22 client: "need all this stuff to be neater"
+import { pickupPlace, tidyAddress, driverShort } from '../pickup-label';
+import { DispatchScreen, type DispatchPanel } from '../dispatch-hub'; // Nov 2 client: Dispatchers hub; Nov 5 client: one simple Dispatch screen
+import { AdminPhonesGuide } from '../dispatch-guide'; // Nov 5 client: Admin → Dispatch setup → Forwarding & phone
+import { VoicemailPanel } from '../dispatch-voicemail'; // Nov 5 client: Admin → Dispatch setup → Voicemail
+import { WhoGetsCallsPanel } from '../dispatch-schedule'; // Nov 5 client: Admin → Dispatch setup → Who gets calls
+import { DispatcherList, shortName, type PickPerson } from '../dispatcher-picker'; // Nov 6 client: the friendly dispatcher picker
+import { askReleaseScope } from '../shifts-tools'; // Nov 6 Yakov: Release "Just this week / Every week from now on"
+import { NewEmailPopup } from '../new-email'; // Nov 3 client: send a new email from the dispatch mailbox
+import { OfficeTextPopup } from '../office-texts';
+import { PickupTextLink } from '../pickup-text'; // Nov 4 client: Text driver / Text store on the card
+import { TodoBadge } from '../dispatch-todo'; // Nov 3 client: Dispatch menu badge + To do tab // Nov 2 client: office texts // Oct 22 client: "need all this stuff to be neater"
 import { DriverCallButtons } from '../call-driver'; // Oct 16 client (idea 8): one-tap call the driver, logged
 import { OnlyNeedsButton, showOnlyNeeds, driversOnOf, CancelDriverWarning } from '../drivers-needed'; // Oct 23 client: "✓ Only needs N driver(s)"
 import { cx, SearchBar, DateInput, DisplayToggles, Tip } from '../design';
+import { SteadyOpenNote } from '../steady-open'; // Nov 6 Yakov: usual driver off — open for others
 import { ChatThread } from '../chat-thread';
-import { SuppliersPanel, VolunteersPanel, SteadyPickupsPanel, AppUsagePanel, KioskActivityPanel, SettingsPanel, NeighborhoodsPanel, CoveragePanel, QuickPickupModal, ChangePasswordPanel, BroadcastPanel, SmsComposerPanel, SmsGroupsPanel, SmsThreadsPanel, SmsDispatchersPanel, DispatchersPanel, DispatchersRosterPanel, SupplierForm, SteadyForm, ShiftsPanel, CenterHelpStandalonePanel, UpcomingSmsPanel, WhatsappAdminPanel, WaThreadsPanel, JewishCalendarPanel } from '../portal-sections';
-import { openVolunteerOnTab } from '../portal-sections'; // Oct 11 client
-import { WhoGetsTextsPanel } from '../who-gets-texts'; // Oct 11 client: Messaging → Who gets texts
-import { HowTextingWorksPanel } from '../texting-rules'; // Oct 14 client: Messaging → How texting works
 import { PickupTextLines, useMinuteNow, fmtSendTime, markSending, clearSending, afterSendAnswer, useSendingSince } from '../text-recipients'; // Oct 21 client: + minute clock, send time. Oct 11 client: who got the pickup text; Oct 12: next text + times sent on the card
-import { EmailsPanel } from '../emails-panel';
-import { DonationsPanel } from '../donations-panel';
 // Tabbed wrapper components consolidating the "Chat" and "Admin" sub-items
 // (batch abc820 Aug 11 · nav consolidation). Defined below in this file.
-import { ProspectsPanel } from '../prospects-and-confirmation'; // Oct 21 client: Needs confirmation box left the Live Board (orange cards)
-import { RecruitingPanel } from '../crm-sections';
-import { TasksPanel } from '../tasks-panel';
 import { ProblemReportsList, BugReportsBadge } from '../report-problem'; // Oct 16 client: Bug reports tab
-import { MyShiftPanel } from '../my-shift-panel';
-import { DispatcherAttendancePanel } from '../dispatcher-attendance';
 import { lazyNamed } from '../lazy-load';
 // Oct 11 client: speed — Reports (charts) loads when opened.
 const ReportsPanel = lazyNamed(() => import('../reports-panel'), 'ReportsPanel');
+// Nov 3 client: speed — each panel's code downloads only when its tab opens (Live Board stays in the first download).
+let psMod: typeof import('../portal-sections') | null = null;
+const loadPS = () => import('../portal-sections').then((m) => (psMod = m));
+const SuppliersPanel = lazyNamed(loadPS, 'SuppliersPanel');
+const VolunteersPanel = lazyNamed(loadPS, 'VolunteersPanel');
+const SteadyPickupsPanel = lazyNamed(loadPS, 'SteadyPickupsPanel');
+const AppUsagePanel = lazyNamed(loadPS, 'AppUsagePanel');
+const KioskActivityPanel = lazyNamed(loadPS, 'KioskActivityPanel');
+const SettingsPanel = lazyNamed(loadPS, 'SettingsPanel');
+const NeighborhoodsPanel = lazyNamed(loadPS, 'NeighborhoodsPanel');
+const CoveragePanel = lazyNamed(loadPS, 'CoveragePanel');
+const QuickPickupModal = lazyNamed(loadPS, 'QuickPickupModal');
+const ChangePasswordPanel = lazyNamed(loadPS, 'ChangePasswordPanel');
+const BroadcastPanel = lazyNamed(loadPS, 'BroadcastPanel');
+const SmsComposerPanel = lazyNamed(loadPS, 'SmsComposerPanel');
+const SmsGroupsPanel = lazyNamed(loadPS, 'SmsGroupsPanel');
+const SmsThreadsPanel = lazyNamed(loadPS, 'SmsThreadsPanel');
+const SmsDispatchersPanel = lazyNamed(loadPS, 'SmsDispatchersPanel');
+const DispatchersPanel = lazyNamed(loadPS, 'DispatchersPanel');
+const DispatchersRosterPanel = lazyNamed(loadPS, 'DispatchersRosterPanel');
+const SupplierForm = lazyNamed(loadPS, 'SupplierForm');
+const SteadyForm = lazyNamed(loadPS, 'SteadyForm');
+const ShiftsPanel = lazyNamed(loadPS, 'ShiftsPanel');
+const CenterHelpStandalonePanel = lazyNamed(loadPS, 'CenterHelpStandalonePanel');
+const UpcomingSmsPanel = lazyNamed(loadPS, 'UpcomingSmsPanel');
+const WhatsappAdminPanel = lazyNamed(loadPS, 'WhatsappAdminPanel');
+const WaThreadsPanel = lazyNamed(loadPS, 'WaThreadsPanel');
+const JewishCalendarPanel = lazyNamed(loadPS, 'JewishCalendarPanel');
+// Oct 11 client: which tab the driver pop-up opens on (set before the Drivers panel mounts).
+function openVolunteerOnTab(t: 'overview' | 'alerts' | 'info' | 'history' | 'asana') {
+  if (psMod) psMod.openVolunteerOnTab(t); else void loadPS().then((m) => m.openVolunteerOnTab(t));
+}
+const WhoGetsTextsPanel = lazyNamed(() => import('../who-gets-texts'), 'WhoGetsTextsPanel'); // Oct 11 client: Messaging → Who gets texts
+const HowTextingWorksPanel = lazyNamed(() => import('../texting-rules'), 'HowTextingWorksPanel'); // Oct 14 client
+const EmailsPanel = lazyNamed(() => import('../emails-panel'), 'EmailsPanel');
+const DonationsPanel = lazyNamed(() => import('../donations-panel'), 'DonationsPanel');
+const ProspectsPanel = lazyNamed(() => import('../prospects-and-confirmation'), 'ProspectsPanel'); // Oct 21 client
+const RecruitingPanel = lazyNamed(() => import('../crm-sections'), 'RecruitingPanel');
+const TasksPanel = lazyNamed(() => import('../tasks-panel'), 'TasksPanel');
+const MyShiftPanel = lazyNamed(() => import('../my-shift-panel'), 'MyShiftPanel');
+const DispatcherAttendancePanel = lazyNamed(() => import('../dispatcher-attendance'), 'DispatcherAttendancePanel');
+const CalendarPanel = lazyNamed(() => import('./CalendarPanel'), 'CalendarPanel');
+const OfficePhonePanel = lazyNamed(() => import('../office-phone-panel'), 'OfficePhonePanel');
+const DispatchReportsPanel = lazyNamed(() => import('../dispatch-reports'), 'DispatchReportsPanel'); // Nov 3 client: dispatcher reports (admins)
+const NumbersPage = lazyNamed(() => import('../numbers-page'), 'NumbersPage'); // Oct 21 client
+const CheckupPage = lazyNamed(() => import('../checkup-page'), 'CheckupPage'); // Oct 16 client
+// Nov 3 client: speed — hovering / focusing a menu button starts that tab's download.
+const TAB_CODE: Record<string, { preload: () => unknown }> = {
+  suppliers: SuppliersPanel, volunteers: VolunteersPanel, steady: SteadyPickupsPanel, shifts: ShiftsPanel, 'center-help': CenterHelpStandalonePanel,
+  'app-usage': AppUsagePanel, 'kiosk-activity': KioskActivityPanel, settings: SettingsPanel, neighborhoods: NeighborhoodsPanel, coverage: CoveragePanel,
+  'change-password': ChangePasswordPanel, 'holiday-sms': JewishCalendarPanel, 'sms-combo': SmsComposerPanel, 'dispatchers-combo': DispatchersPanel,
+  'driver-messages': SmsThreadsPanel, 'driver-replies': SmsThreadsPanel, calendar: CalendarPanel, 'who-gets-texts': WhoGetsTextsPanel,
+  'texting-rules': HowTextingWorksPanel, emails: EmailsPanel, donations: DonationsPanel, prospects: ProspectsPanel, recruiting: RecruitingPanel,
+  tasks: TasksPanel, 'my-shift': MyShiftPanel, numbers: NumbersPage, checkup: CheckupPage, reports: ReportsPanel, 'whats-new': { preload: () => import('../whats-new') },
+};
+function preloadTab(t: string) { TAB_CODE[t]?.preload(); }
 import { readCoordNav, writeCoordNav, patchCoordNav } from '../nav-state';
-import { CalendarPanel } from './CalendarPanel';
 import { AdminPickupDetail, RepostButton } from './AdminPickupDetail';
 import { StorePhotoThumb } from '../store-photo'; // Oct 14 client
 import { Plus, KeyRound, UserPlus2, Inbox } from 'lucide-react'; // Inbox: Food Donations nav (Oct 18: admins see it again)
 import { nyToday, fmtDateTimeEastern, fmtDay, repostedLabel, isPastDueNy } from '../time-format';
 import { RunTag, runPlaceOf } from '../runs'; // Oct 30 client: 🚚 Run to Lakewood / Fallsburg
-import { WhatsNewPanel } from '../whats-new';
+const WhatsNewPanel = lazyNamed(() => import('../whats-new'), 'WhatsNewPanel'); // Nov 3 client: speed
 import { StoreTextLines } from '../food-check'; // Oct 13 client: food check / donor told / CANCEL on the card
 import { SignupsPanel, SignupsBadge } from '../signups-panel'; // Oct 11 client: New sign-ups inbox
 import { OfficeAlertsBell, PhoneAlertsButton } from '../office-alerts'; // Oct 11 client: dispatcher alerts
@@ -62,25 +119,25 @@ import { OfficePhone } from '../office-phone'; // Oct 20 client: office phone (R
 import { HelpMenu } from '../help-guide'; // Oct 14 client: Help (?) — welcome tour + guide
 import { ReportProblemLink } from '../report-problem'; // Oct 14 client: Report a problem
 import { submittedByLabel } from '../submitted-by'; // Oct 14 client: who filled out the form
-import { NumbersPage } from '../numbers-page'; // Oct 21 client: Reports → Numbers (daily / weekly numbers)
 import { FoodHandlePanel } from '../food-handle'; // Oct 30 client: Food to handle
-import { CheckupPage } from '../checkup-page'; // Oct 16 client: Reports → Check-up (weekly check-up + speed)
 import { CloseOutPanel, NoDriverLateBadge } from '../closeout'; // Oct 21 client: Pickups → Close out; Live Board "No driver 1h late"
 import { startScreenTimer } from '../speed-report'; // Oct 16 client: slow screens (> 3 s) reported to the server
 import { STATUS, dayText, displayPhone, msgWhen, personFull, shortAddress, shortAddressOf, statusKeyOf, stripUnit, todayYmd, whenAt, whenText, type StatusKey } from '../display'; // Oct 23 client: same style everywhere
 import { Name, StatusPill } from '../display-ui';
-import { DriverViewSwitch } from '../view-switch'; // Oct 29 client: one login per person
+import { MyDispatchSettings } from '../dispatcher-prefs'; // Nov 5 client: a dispatcher's own reminder / thank-you
+import { ViewSwitch, DispatcherPreviewBanner } from '../view-switch'; // Oct 29 client: one login per person; Nov 4 Yakov: Dispatcher view; Nov 5 client: one "View: Office ▾" switch
+import { SendSignupLinkButton } from '../signup-link'; // Nov 4 Yakov: send the sign-up link
 import { useCoverage, COVER_HEX, COVER_WORD, COVERAGE_FOCUS_EVENT, COVERAGE_OPEN_EVENT, emitCoverage, nextPickupText } from '../coverage-panel'; // Oct 30 client: Coverage map
 import type { CoverageStore } from '../api';
 
-type TabKey = 'my-shift' | 'holiday-sms' | 'tasks' | 'calendar' | 'live' | 'pickups' | 'volunteers' | 'suppliers' | 'reports' | 'chat-stores' | 'chat-volunteers' | 'sms-combo' | 'dispatchers-combo' | 'steady' | 'shifts' | 'center-help' | 'settings' | 'neighborhoods' | 'coverage' | 'change-password' | 'recruiting' | 'prospects' | 'app-usage' | 'kiosk-activity' | 'driver-replies' | 'emails' | 'donations' | 'driver-messages' | 'whats-new' | 'signups' | 'who-gets-texts' | 'texting-rules' | 'bug-reports' | 'checkup' | 'numbers' | 'food-handle'; // Oct 30 client: + Food to handle; Oct 21 client: + Numbers; Oct 16 client: + Check-up; Oct 16 client: + Bug reports; Oct 11 client: + New sign-ups, + Who gets texts; Oct 14 client: + How texting works
+type TabKey = 'my-shift' | 'holiday-sms' | 'tasks' | 'calendar' | 'live' | 'pickups' | 'volunteers' | 'suppliers' | 'reports' | 'chat-stores' | 'chat-volunteers' | 'sms-combo' | 'dispatchers-combo' | 'steady' | 'shifts' | 'center-help' | 'settings' | 'neighborhoods' | 'coverage' | 'change-password' | 'recruiting' | 'prospects' | 'app-usage' | 'kiosk-activity' | 'driver-replies' | 'emails' | 'donations' | 'driver-messages' | 'whats-new' | 'signups' | 'who-gets-texts' | 'texting-rules' | 'bug-reports' | 'checkup' | 'numbers' | 'food-handle' | 'dispatch-setup' | 'dispatch-reports'; // Nov 5 client: + Admin → Dispatch setup, Reports → Dispatchers; Oct 30 client: + Food to handle; Oct 21 client: + Numbers; Oct 16 client: + Check-up; Oct 16 client: + Bug reports; Oct 11 client: + New sign-ups, + Who gets texts; Oct 14 client: + How texting works
 // Oct 9 client: one "Driver messages" inbox — Texts / App chat / Replies to pickup texts.
 // Oct 11 client: + Code words (every word drivers can text, and who used it).
 type DmSub = 'texts' | 'chat' | 'replies' | 'words' | 'whatsapp';
 const DM_SUBS: DmSub[] = ['texts', 'chat', 'replies', 'words', 'whatsapp']; // Oct 22 client: + WhatsApp (dispatcher view)
 // The Driver messages page uses the same access as the pages it replaced.
 // Oct 11 client: New sign-ups uses the same access as Drivers.
-const tabPerm = (k: string) => (k === 'checkup' || k === 'numbers' ? 'reports' : k === 'bug-reports' ? 'tasks' : (k === 'driver-messages' || k === 'who-gets-texts' || k === 'texting-rules') ? 'driver-replies' : k === 'signups' ? 'volunteers' : k); // Oct 16 client: Bug reports = Tasks access
+const tabPerm = (k: string) => (k === 'dispatch-setup' ? 'dispatchers-combo' : k === 'checkup' || k === 'numbers' || k === 'dispatch-reports' ? 'reports' : k === 'bug-reports' ? 'tasks' : (k === 'driver-messages' || k === 'who-gets-texts' || k === 'texting-rules') ? 'driver-replies' : k === 'signups' ? 'volunteers' : k); // Oct 16 client: Bug reports = Tasks access; Nov 5 client: Dispatch setup = Dispatch access, Dispatchers = Reports access
 
 // Oct 11 client: hidden = never shown in any menu (old links still work and redirect).
 const NAV_ITEMS: { key: TabKey; label: string; icon: any; section?: 'top' | 'chat' | 'admin'; hidden?: boolean }[] = [
@@ -103,13 +160,14 @@ const NAV_ITEMS: { key: TabKey; label: string; icon: any; section?: 'top' | 'cha
   { key: 'shifts',         label: 'Dispatching Shifts', icon: Calendar,  section: 'top' },
   { key: 'center-help',    label: 'Center Help',    icon: Calendar,      section: 'top' },
   { key: 'coverage',       label: 'Coverage map',   icon: ShieldCheck,   section: 'top' }, // Oct 9 client: one name
-  { key: 'my-shift',       label: 'My Shift',       icon: Calendar,      section: 'top' }, // Oct 2: dispatchers only
+  { key: 'my-shift',       label: 'My Dispatch',    icon: Calendar,      section: 'top' }, // Oct 2: dispatchers only; Nov 2 client: their dispatch home (calls + forwarding)
   { key: 'tasks',          label: 'Tasks & follow-ups', icon: ClipboardList, section: 'top' }, // Oct 2: Task Management (UI plan §6)
   { key: 'bug-reports',    label: 'Bug reports',    icon: ClipboardList, section: 'top' }, // Oct 16 client: problem reports + comments
   { key: 'recruiting',     label: 'Recruiting',     icon: UserPlus2,     section: 'top' },
   { key: 'reports',        label: 'Reports',        icon: BarChart3,     section: 'top' },
   { key: 'numbers',        label: 'Numbers',        icon: BarChart3,     section: 'top' }, // Oct 21 client: daily / weekly numbers (admins)
   { key: 'checkup',        label: 'Check-up',       icon: ShieldCheck,   section: 'top' }, // Oct 16 client: weekly check-up + speed (admins)
+  { key: 'dispatch-reports', label: 'Dispatchers',  icon: BarChart3,     section: 'top' }, // Nov 5 client: was Dispatch → Reports (admins)
   // Chat section — consolidated from 6+ items to 3.
   { key: 'chat-stores',    label: 'Chat: Stores',      icon: MessageSquare, section: 'chat' },
   { key: 'driver-messages',label: 'Driver messages',   icon: MessageSquare, section: 'chat' }, // Oct 9 client
@@ -121,7 +179,8 @@ const NAV_ITEMS: { key: TabKey; label: string; icon: any; section?: 'top' | 'cha
   { key: 'sms-combo',      label: 'SMS Composer & Broadcast', icon: MessageSquare, section: 'chat' },
   { key: 'emails',         label: 'Emails',            icon: MessageSquare, section: 'chat' }, // Oct 7 client
   // Admin section — Dispatchers combines "Manage dispatchers" + "Driver-reply SMS".
-  { key: 'dispatchers-combo', label: 'Dispatchers',   icon: ShieldCheck,   section: 'admin' },
+  { key: 'dispatchers-combo', label: 'Dispatch',      icon: ShieldCheck,   section: 'admin' }, // Nov 3 client: own menu item
+  { key: 'dispatch-setup', label: 'Dispatch settings', icon: ShieldCheck, section: 'admin' }, // Nov 5 client: logins, phone system, voicemail (schedule, shifts, roster: Dispatch → 📅 Schedule)
   // Aug 23 client fix 4: Office Sign-In removed from nav. Legacy tool the
   // client no longer uses; Kiosk Activity replaces it.
   { key: 'kiosk-activity', label: 'Kiosk Activity', icon: ClipboardList, section: 'admin' },
@@ -147,20 +206,23 @@ const NAV_GROUPS: { key: string; label: string; icon: any; tabs: TabKey[] }[] = 
   { key: 'volunteers', label: 'Drivers',         icon: Users,         tabs: ['volunteers', 'signups'] }, // Oct 11 client: + New sign-ups tab
   { key: 'suppliers',  label: 'Suppliers',       icon: Store,         tabs: ['suppliers'] },
   { key: 'map',        label: 'Coverage map',    icon: MapPin,        tabs: ['coverage'] },
-  { key: 'myshift',    label: 'My Shift',        icon: Calendar,      tabs: ['my-shift'] },
+  { key: 'myshift',    label: 'My Dispatch',     icon: Calendar,      tabs: ['my-shift'] }, // Nov 2 client
   { key: 'tasks',      label: 'Tasks & follow-ups', icon: ClipboardList, tabs: ['tasks', 'bug-reports', 'recruiting', 'prospects'] }, // Oct 16 client: + Bug reports
-  { key: 'reports',    label: 'Reports',         icon: BarChart3,     tabs: ['reports', 'numbers', 'checkup'] }, // Oct 21 client: + Numbers; // Oct 16 client: + Check-up
+  { key: 'reports',    label: 'Reports',         icon: BarChart3,     tabs: ['reports', 'numbers', 'checkup', 'dispatch-reports'] }, // Nov 5 client: + Dispatchers // Oct 21 client: + Numbers; // Oct 16 client: + Check-up
   // Oct 9 client: Driver replies + Chat: Drivers + SMS threads are one item with tabs inside.
   // Oct 11 client: back to ONE "Messaging" item (as before Oct 9); Driver messages is its first tab.
   { key: 'messaging',  label: 'Messaging',       icon: MessageSquare, tabs: ['driver-messages', 'who-gets-texts', 'texting-rules', 'chat-stores', 'sms-combo', 'emails'] }, // Oct 11 client: + Who gets texts; Oct 14 client: + How texting works
   // Oct 9 client: Change password lives only here (was also under Admin).
+  // Nov 3 client: Dispatch is its own menu item (was Admin → People → Dispatchers), lower down as asked.
+  { key: 'dispatch',   label: 'Dispatch',        icon: ShieldCheck,   tabs: ['dispatchers-combo'] },
   { key: 'password',   label: 'Change password', icon: KeyRound,      tabs: ['change-password'] },
-  { key: 'admin',      label: 'Admin',           icon: Settings,      tabs: ['dispatchers-combo', 'shifts', 'center-help', 'holiday-sms', 'kiosk-activity', 'app-usage', 'whats-new', 'settings', 'neighborhoods'] },
+  { key: 'admin',      label: 'Admin',           icon: Settings,      tabs: ['shifts', 'center-help', 'dispatch-setup', 'holiday-sms', 'kiosk-activity', 'app-usage', 'whats-new', 'settings', 'neighborhoods'] }, // Nov 5 client: + Dispatch setup
 ];
 const groupOfTab = (t: TabKey) => NAV_GROUPS.find((g) => g.tabs.includes(t));
 // Oct 5 client (declutter #5): Admin's 9 tabs shown as 3 groups.
 const ADMIN_SUBGROUPS: { label: string; tabs: TabKey[] }[] = [
-  { label: 'People',   tabs: ['dispatchers-combo', 'shifts', 'center-help'] },
+  { label: 'People',   tabs: ['shifts', 'center-help'] },
+  { label: 'Dispatch settings', tabs: ['dispatch-setup'] }, // Nov 5 client
   { label: 'Activity', tabs: ['kiosk-activity', 'app-usage', 'whats-new'] },
   { label: 'Settings', tabs: ['holiday-sms', 'settings', 'neighborhoods'] },
 ];
@@ -212,9 +274,10 @@ export function CoordinatorPortal() {
   const visibleNav = NAV_ITEMS.filter((it) => canSeeTab(user?.role, tabPerm(it.key))
     && !dispatcherHiddenTab(user?.role, it.key) // Oct 22 client: dispatcher view (no Suppliers, New sign-ups, Who gets texts…)
     && (it.key !== 'bug-reports' || ['admin', 'staff', 'coordinator'].includes(String(user?.role ?? '')))
+    && (it.key !== 'dispatch-reports' || canOfficeOnly(user?.role)) // Nov 5 client: admins / office only (as Dispatch → Reports was)
     && (it.key !== 'numbers' || ['admin', 'staff', 'coordinator'].includes(String(user?.role ?? ''))) // Oct 21 client: Numbers: admins only
     && (it.key !== 'checkup' || ['admin', 'staff', 'coordinator'].includes(String(user?.role ?? ''))) // Oct 16 client: same as Problem reports; Check-up: admins only
-    && it.key !== 'donations'); // Oct 26 client: "Remove till we ready" — Food Donations hidden from the menu for everyone (Oct 18: admins only) // Oct 18 client: Food Donations for admins (connect the email) until it's opened to dispatchers
+    && (it.key !== 'donations' || String(user?.role ?? '').toLowerCase() !== 'dispatcher')); // Nov 3 client: "they should not be hidden" — back for office logins (not dispatchers). Was: Oct 26 client: "Remove till we ready" — Food Donations hidden from the menu for everyone (Oct 18: admins only) // Oct 18 client: Food Donations for admins (connect the email) until it's opened to dispatchers
   const visibleTabs = new Set<TabKey>(visibleNav.map((it) => it.key));
   const isDispatcherRole = String(user?.role ?? '').toLowerCase() === 'dispatcher'
     || (Array.isArray(user?.accessSections) && user!.accessSections!.length > 0 && !user!.accessSections!.includes('admin'));
@@ -230,7 +293,11 @@ export function CoordinatorPortal() {
   const [tab, setTab] = useState<TabKey>(() => {
     const n = readCoordNav();
     const legacy = n.tab === 'calendar' || n.tab === 'steady';
-    const wanted = legacy ? 'pickups'
+    // Nov 5 client: old Dispatch links — Roster / Shifts / Logins / Phone open Admin → Dispatch setup, Reports open Reports → Dispatchers.
+    // Nov 5 client: old #coord/dispatch-setup/who|roster|shifts links open Dispatch → 📅 Schedule.
+    const oldDisp = n.tab === 'dispatchers-combo' ? oldDispatchLink(n.sub)
+      : n.tab === 'dispatch-setup' && n.sub && SCHED_SUBS.has(n.sub) ? 'dispatchers-combo' : null;
+    const wanted = legacy ? 'pickups' : oldDisp ? oldDisp
       : (n.tab && VALID_TABS.has(n.tab as TabKey)) ? (n.tab as TabKey) : 'live';
     // Sep 4: if the deep-link points at a tab this role can't see, fall
     // back to a tab this role CAN see. Sep 10: dispatchers can't see
@@ -246,6 +313,13 @@ export function CoordinatorPortal() {
   const [showQuickAdd, setShowQuickAdd] = useState(false);
   const [editingPickup, setEditingPickup] = useState<PiRow | null>(null);
   const [duplicatingPickup, setDuplicatingPickup] = useState<PiRow | null>(null);
+  // Nov 3 client: "Make a pickup" from an office text — the new-pickup form, filled in (office-texts.tsx).
+  const [prefillPickup, setPrefillPickup] = useState<{ title: string; prefill: any } | null>(null);
+  useEffect(() => {
+    const h = (e: Event) => { const d = (e as CustomEvent).detail; if (d?.prefill) setPrefillPickup({ title: String(d.title ?? 'New pickup'), prefill: d.prefill }); };
+    window.addEventListener('zlz:new-pickup-prefill', h);
+    return () => window.removeEventListener('zlz:new-pickup-prefill', h);
+  }, []);
   // Oct 2 client fix (UI plan §3): editing a recurring occurrence asks
   // "this occurrence / this and all future / complete schedule".
   const [recurringEditFor, setRecurringEditFor] = useState<PiRow | null>(null);
@@ -268,14 +342,16 @@ export function CoordinatorPortal() {
   const [showScheduleDownload, setShowScheduleDownload] = useState(false);
   // When a search result is picked, we jump to the matching tab AND stash the id
   // so the tab's panel can open that entity's edit modal on mount.
-  const [openPersonId, setOpenPersonId] = useState<number | null>(null);
+  // Nov 3 client: #coord/volunteers/<id> opens that driver's card (links in Asana tasks).
+  const [openPersonId, setOpenPersonId] = useState<number | null>(() => { const n = readCoordNav(); const id = n.tab === 'volunteers' && /^\d{1,9}$/.test(n.sub ?? '') ? Number(n.sub) : null; if (id) openVolunteerOnTab('overview'); return id; }); // the profile, not the edit form
   // Oct 12 client: a name in the who-got-the-text popup opens that driver's Alerts & schedule tab.
   useEffect(() => {
     const h = (e: Event) => {
       const id = Number((e as CustomEvent).detail?.id);
       if (!Number.isInteger(id) || id <= 0) return;
       e.preventDefault();
-      openVolunteerOnTab((e as CustomEvent).detail?.tab === 'overview' ? 'overview' : 'alerts'); setModalPickupId(null); setTab('volunteers' as TabKey); setOpenPersonId(id); // Oct 20 client: + overview (caller pop-up)
+      { const want = (e as CustomEvent).detail?.tab; openVolunteerOnTab(want === 'overview' || want === 'asana' ? want : 'alerts'); } // Nov 3 client: + asana (Asana follow-ups list)
+      setModalPickupId(null); setTab('volunteers' as TabKey); setOpenPersonId(id); // Oct 20 client: + overview (caller pop-up)
     };
     window.addEventListener('zlz:open-volunteer', h);
     return () => window.removeEventListener('zlz:open-volunteer', h);
@@ -294,7 +370,7 @@ export function CoordinatorPortal() {
   }, []);
   // Oct 30 client: the 5 PM "food not handled" bell alert opens Food to handle.
   useEffect(() => {
-    const h = () => { setModalPickupId(null); setTab('food-handle' as TabKey); };
+    const h = () => { if (isDispatcherLogin()) return; setModalPickupId(null); setTab('food-handle' as TabKey); }; // Nov 4 Yakov: not in the dispatcher menu
     window.addEventListener('zlz:open-food-handle', h);
     return () => window.removeEventListener('zlz:open-food-handle', h);
   }, []);
@@ -318,6 +394,23 @@ export function CoordinatorPortal() {
   }, []);
   // Oct 16 client: speed watch — time each screen; one that takes over 3 s to show is reported (speed-report.ts).
   useEffect(() => { startScreenTimer(TAB_TITLE[tab] ?? tab); }, [tab]);
+  // Nov 5 client: an old #coord/dispatchers-combo/reports link — show the new address (Dispatch setup writes its own).
+  useEffect(() => { const n = readCoordNav(); if (n.tab === 'dispatchers-combo' && tab === 'dispatch-reports') writeCoordNav({ tab }); }, []);
+  // Nov 5 client: "Admin → Dispatch setup → Forwarding & phone" link on the green card (Dispatch → Now).
+  useEffect(() => {
+    const h = (e: Event) => {
+      const sub = (e as CustomEvent).detail?.sub;
+      // Nov 5 client: who gets calls / shifts / roster now live on Dispatch → 📅 Schedule
+      if (typeof sub === 'string' && SCHED_SUBS.has(sub)) {
+        if (isDispatcherLogin() || !canSeeTab(getUser()?.role, 'dispatchers-combo')) return;
+        setModalPickupId(null); writeCoordNav({ tab: 'dispatchers-combo', sub: 'schedule' }); setTab('dispatchers-combo' as TabKey);
+        window.dispatchEvent(new CustomEvent('zlz:open-dispatch-schedule')); // Dispatch already open → switch its view
+        return;
+      }
+      if (!canOfficeOnly(getUser()?.role) || isDispatcherLogin()) return; setModalPickupId(null); writeCoordNav({ tab: 'dispatch-setup', sub: typeof sub === 'string' ? sub : undefined }); setTab('dispatch-setup' as TabKey); };
+    window.addEventListener('zlz:open-dispatch-setup', h);
+    return () => window.removeEventListener('zlz:open-dispatch-setup', h);
+  }, []);
   useEffect(() => { if (modalPickupId != null) startScreenTimer('Pickup page'); }, [modalPickupId]);
   // batch abc820 · Pickups tab tabstrip (Needs attention / Upcoming /
   // Completed / History) replaces the old office-status chip filter + date
@@ -331,7 +424,7 @@ export function CoordinatorPortal() {
   const [, setAccessRev] = useState(0);
   useEffect(() => {
     api<{ user: any }>('/api/auth/me').then((r) => {
-      const cur = getUser();
+      const cur = getRealUser(); // Nov 4: never save the dispatcher preview
       if (!cur || !r?.user) return;
       const next = r.user.accessSections ?? null;
       if (JSON.stringify(cur.accessSections ?? null) !== JSON.stringify(next)) {
@@ -348,6 +441,14 @@ export function CoordinatorPortal() {
     return n.tab === 'driver-messages' && DM_SUBS.includes(n.sub as DmSub) ? (n.sub as DmSub) : 'texts';
   });
   const openDriverMessages = (s: DmSub) => { setDmSub(s); setTab('driver-messages'); };
+  // Nov 3 client: the To do list's Open buttons (dispatch-todo.tsx).
+  useEffect(() => {
+    const dm = () => { setModalPickupId(null); setDmSub('texts' as DmSub); setTab('driver-messages'); };
+    const don = () => { setModalPickupId(null); setTab('donations' as TabKey); };
+    window.addEventListener('zlz:open-driver-messages', dm);
+    window.addEventListener('zlz:open-donations', don);
+    return () => { window.removeEventListener('zlz:open-driver-messages', dm); window.removeEventListener('zlz:open-donations', don); };
+  }, []);
   const [pickupsSubTab, setPickupsSubTab] = useState<PickupsSubTab>(() => {
     const n = readCoordNav();
     if (n.tab === 'calendar') return 'calendar';
@@ -388,12 +489,13 @@ export function CoordinatorPortal() {
     if (g) setLastInGroup((m) => (m[g.key] === tab ? m : { ...m, [g.key]: tab }));
   }, [tab]);
   const openGroup = (g: { key: string; tabs: TabKey[] }) => setTab(lastInGroup[g.key] && g.tabs.includes(lastInGroup[g.key]!) ? lastInGroup[g.key]! : g.tabs[0]!);
+  const preloadGroup = (g: { key: string; tabs: TabKey[] }) => preloadTab(lastInGroup[g.key] && g.tabs.includes(lastInGroup[g.key]!) ? lastInGroup[g.key]! : g.tabs[0]!); // Nov 3 client: speed
   const currentGroup = visibleGroups.find((g) => g.tabs.includes(tab));
   const prevTabRef = useRef<TabKey>(tab);
   useEffect(() => {
     if (prevTabRef.current !== tab) {
       prevTabRef.current = tab;
-      writeCoordNav({ tab, sub: tab === 'pickups' ? pickupsSubTab : tab === 'driver-messages' ? dmSub : undefined });
+      writeCoordNav({ tab, sub: tab === 'pickups' ? pickupsSubTab : tab === 'driver-messages' ? dmSub : (tab === 'dispatch-setup' || tab === 'dispatchers-combo' || tab === 'my-shift') && readCoordNav().tab === tab ? readCoordNav().sub : undefined }); // Nov 5 client: Dispatch settings keeps its own tab; Dispatch / My Dispatch keep 📅 Schedule
     } else if (tab === 'pickups') {
       patchCoordNav({ sub: pickupsSubTab });
     } else if (tab === 'driver-messages') {
@@ -811,10 +913,12 @@ export function CoordinatorPortal() {
   // Oct 5: header count buttons removed; counts kept for future use.
   void overdueCount; void unassignedThisWeek;
 
-  async function signOut() {
-    if (!(await uiConfirm('Sign out?'))) return;
+  // Nov 6 client: the dispatcher on shift signs out while the next one hasn't signed in → "Call him before you go?"
+  const leave = useLeaveGuard('Sign out anyway');
+  function signOut() {
     // Oct 2 client: tell the server so the session (and a current shift) is closed.
-    api('/api/auth/logout', { method: 'POST' }).catch(() => {}).finally(() => { localStorage.clear(); window.location.reload(); });
+    const go = () => { api('/api/auth/logout', { method: 'POST' }).catch(() => {}).finally(() => { localStorage.clear(); window.location.reload(); }); };
+    leave.guard(go, () => { void uiConfirm('Sign out?').then((ok) => { if (ok) go(); }); });
   }
 
   // Oct 11 client: the old "New SMS reply" toaster is now part of the dispatcher alerts
@@ -823,6 +927,7 @@ export function CoordinatorPortal() {
 
   return (
     <div className="min-h-screen bg-cream flex">
+      {leave.dialog}
       {/* LEFT NAV */}
       <aside className="zlz-keep-light w-[280px] bg-forest-deep text-[#cfe0c8] flex-col shrink-0 hidden lg:flex lg:sticky lg:top-0 lg:self-start lg:h-screen">
         {/* Oct 5 client: real Zeh L'Zeh logo. */}
@@ -833,13 +938,13 @@ export function CoordinatorPortal() {
         </div>
         <nav className="px-3 mt-2 flex-1 overflow-y-auto">
           {visibleGroups.map((g) => (
-            <button key={g.key} onClick={() => openGroup(g)}
+            <button key={g.key} onClick={() => openGroup(g)} onMouseEnter={() => preloadGroup(g)} onFocus={() => preloadGroup(g)}
                     className={cx('w-full flex items-center gap-3 px-3 py-3 rounded-[10px] text-[15px] font-bold haptic relative',
                                   g.tabs.includes(tab) ? 'bg-paper/15 text-paper' : 'text-[#cfe0c8] hover:bg-paper/5')}>
               <g.icon size={20} />
               {g.label}
               {g.key === 'messaging' && <DriverMessagesBadge />}
-              {g.key === 'volunteers' && <SignupsBadge />}{/* Oct 11 client: new sign-ups waiting */}
+              {g.key === 'volunteers' && <SignupsBadge />}{/* Oct 11 client: new sign-ups waiting */}{g.key === 'dispatch' && <TodoBadge />}
             </button>
           ))}
 
@@ -888,7 +993,7 @@ export function CoordinatorPortal() {
                                       g.tabs.includes(tab) ? 'bg-paper/15 text-paper' : 'text-[#cfe0c8]')}>
                   <g.icon size={18} /> {g.label}
                   {g.key === 'messaging' && <DriverMessagesBadge />}
-                  {g.key === 'volunteers' && <SignupsBadge />}{/* Oct 11 client: new sign-ups waiting */}
+                  {g.key === 'volunteers' && <SignupsBadge />}{/* Oct 11 client: new sign-ups waiting */}{g.key === 'dispatch' && <TodoBadge />}
                 </button>
               ))}
               {/* Oct 14 client: Report a problem */}
@@ -900,6 +1005,7 @@ export function CoordinatorPortal() {
             </div>
           )}
         </nav>
+        <DispatcherPreviewBanner />{/* Nov 4 Yakov: "You're seeing the dispatcher view — Back to office view" */}
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 px-4 sm:px-6 py-4 border-b border-line bg-paper">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 min-w-0">
@@ -958,10 +1064,11 @@ export function CoordinatorPortal() {
             )}
             {/* Oct 5 client: "Remove" — Go on duty button taken out of the header. */}
             {false && <DutyToggle />}
-            <DriverViewSwitch />{/* Oct 29 client: one login per person - only shows for a login that also drives */}
+            {tab === 'volunteers' && writeOk && <SendSignupLinkButton />}{/* Nov 4 Yakov: send the volunteer sign-up link */}
+            <ViewSwitch />{/* Nov 5 client: View: Office / Dispatcher / Driver (dispatchers: Dispatcher / Driver) */}
             {/* Oct 11 client: dispatcher alerts — bell, pop-ups with sound, phone alerts. */}
             <OfficeAlertsBell onOpenPickup={(id) => setModalPickupId(id)} onOpenMessages={() => openDriverMessages('texts')} />
-            <OfficePhone />{/* Oct 20 client: office phone — caller pop-ups (bottom-right) + desk-phone calling */}
+            <OfficeTextPopup />{/* Nov 3: 💬 Text opens here as a pop-up */}<NewEmailPopup />{/* Nov 3 client: ✉️ New email / ✉️ Email */}<OfficePhone />{/* Oct 20 client: office phone — caller pop-ups (bottom-right) + desk-phone calling */}
             {/* Oct 14 client: Help (?) — welcome tour, guide, Report a problem */}
             <HelpMenu tabs={visibleGroups.flatMap((g) => g.tabs)} writeOk={writeOk}
                       pageLabel={`${TAB_TITLE[tab] ?? tab}${tab === 'pickups' ? ` (${pickupsSubTab})` : tab === 'driver-messages' ? ` (${dmSub})` : ''}`}
@@ -1001,7 +1108,7 @@ export function CoordinatorPortal() {
                   if (shown.length === 0) return null;
                   const on = shown.includes(tab);
                   return (
-                    <button key={g.label} onClick={() => { if (!on) setTab(shown[0]!); }}
+                    <button key={g.label} onClick={() => { if (!on) setTab(shown[0]!); }} onMouseEnter={() => preloadTab(shown[0]!)}
                             className={cx('haptic rounded-full px-3.5 py-1.5 text-[13px] font-bold',
                                           on ? 'bg-forest text-paper' : 'bg-paper border border-line text-muted hover:text-ink')}>
                       {g.label}
@@ -1015,7 +1122,7 @@ export function CoordinatorPortal() {
                 {(currentGroup.key === 'admin'
                     ? (ADMIN_SUBGROUPS.find((g) => g.tabs.includes(tab))?.tabs ?? []).filter((t) => currentGroup.tabs.includes(t))
                     : currentGroup.tabs).map((t) => (
-                  <button key={t} onClick={() => setTab(t)}
+                  <button key={t} onClick={() => setTab(t)} onMouseEnter={() => preloadTab(t)} onFocus={() => preloadTab(t)}
                           className={cx('haptic px-3 py-2 text-[13px] font-bold border-b-2 -mb-px whitespace-nowrap inline-flex items-center gap-1.5',
                                         tab === t ? 'border-forest text-forest' : 'border-transparent text-muted hover:text-ink')}>
                     {NAV_ITEMS.find((it) => it.key === t)?.label ?? t}
@@ -1061,13 +1168,17 @@ export function CoordinatorPortal() {
             {tab === 'live' && <ExpiredReviewSection />}
             {/* Oct 8 client: drivers happy to be called right now. Oct 21 client: now the 📞 button in the header.
                 Oct 22 client: the "usually … at this hour" line moved up under the header. */}
+            <Suspense fallback={<div className="text-[13px] text-muted">Loading…</div>}>{/* Nov 3 client: speed — panels load when opened */}
             {tab === 'calendar' ? (
               <CalendarPanel onOpenScheduleDownload={() => setShowScheduleDownload(true)}
                              onNavigateTab={(t, id) => { setTab(t as TabKey); if (id != null) setOpenPersonId(id); }}
                              onOpenPickup={(id) => setModalPickupId(id)} />
             ) : tab === 'suppliers' ? (
-              <SuppliersPanel rows={suppliers.data?.data ?? []} refetch={() => suppliers.refetch()}
-                              openId={openPersonId} onOpenConsumed={() => setOpenPersonId(null)} />
+              <>
+                <StoreCleanupButton onChanged={() => suppliers.refetch()} />{/* Nov 8 client */}
+                <SuppliersPanel rows={suppliers.data?.data ?? []} refetch={() => suppliers.refetch()}
+                                openId={openPersonId} onOpenConsumed={() => setOpenPersonId(null)} />
+              </>
             ) : tab === 'volunteers' ? (
               <VolunteersPanel rows={volunteers.data?.data ?? []} refetch={() => volunteers.refetch()}
                                openId={openPersonId} onOpenConsumed={() => setOpenPersonId(null)} />
@@ -1096,7 +1207,7 @@ export function CoordinatorPortal() {
             ) : tab === 'change-password' ? (
               <ChangePasswordPanel />
             ) : tab === 'my-shift' ? (
-              <div className="space-y-4"><PhoneAlertsButton />{/* Oct 11 client */}<MyShiftPanel /></div>
+              <MyDispatchPanel />/* Nov 5 client: Today (as before) + read-only 📅 Schedule */
             ) : tab === 'holiday-sms' ? (
               <div className="space-y-3"><SmsPauseBanner /><JewishCalendarPanel /></div>
             ) : tab === 'tasks' ? (
@@ -1136,6 +1247,10 @@ export function CoordinatorPortal() {
               <SmsComboPanel />
             ) : tab === 'dispatchers-combo' ? (
               <DispatchersComboPanel />
+            ) : tab === 'dispatch-setup' ? (
+              <DispatchSetupPanel />
+            ) : tab === 'dispatch-reports' ? (
+              <DispatchReportsPanel /> // Nov 5 client: Reports → Dispatchers (was Dispatch → Reports)
             ) : tab === 'prospects' ? (
               <ProspectsPanel />
             ) : pickups.isLoading ? (
@@ -1239,6 +1354,7 @@ export function CoordinatorPortal() {
                 ))}
               </>
             )}
+            </Suspense>
           </div>
         </div>
       </main>
@@ -1252,6 +1368,7 @@ export function CoordinatorPortal() {
         />
       )}
 
+      <Suspense fallback={<div className="fixed bottom-4 right-4 z-[2100] rounded-[10px] bg-paper border border-line px-3 py-2 text-[13px] text-muted shadow-lift">Loading…</div>}>{/* Nov 3 client: speed — forms load when opened */}
       {showQuickAdd && (
         <QuickPickupModal
           onClose={() => setShowQuickAdd(false)}
@@ -1284,6 +1401,12 @@ export function CoordinatorPortal() {
           onDone={() => { setDuplicatingPickup(null); qc.invalidateQueries({ queryKey: ['admin-pickups'] }); qc.invalidateQueries({ queryKey: ['admin-pickups-range'] }); }}
         />
       )}
+      {prefillPickup && ( // Nov 3 client: from an office text
+        <QuickPickupModal title={prefillPickup.title} duplicateFrom={prefillPickup.prefill}
+          onClose={() => setPrefillPickup(null)}
+          onDone={() => { setPrefillPickup(null); qc.invalidateQueries({ queryKey: ['admin-pickups'] }); qc.invalidateQueries({ queryKey: ['admin-pickups-range'] }); }}
+        />
+      )}
       {editingPickup && (
         <QuickPickupModal
           pickup={editingPickup}
@@ -1306,6 +1429,7 @@ export function CoordinatorPortal() {
           onCancel={() => setShowNewSteady(false)}
           onDone={() => { setShowNewSteady(false); qc.invalidateQueries({ queryKey: ['admin-steady'] }); qc.invalidateQueries({ queryKey: ['admin-pickups'] }); }} />
       )}
+      </Suspense>
 
       {showScheduleDownload && (
         <ScheduleDownloadModal onClose={() => setShowScheduleDownload(false)} />
@@ -1831,9 +1955,11 @@ const TAB_TITLE: Record<string, string> = {
   checkup: 'Check-up', // Oct 16 client
   numbers: 'Numbers', // Oct 21 client
   'holiday-sms': 'Holiday & SMS Controls',
-  'my-shift': 'My Shift',
+  'my-shift': 'My Dispatch',
   'sms-combo': 'SMS Composer & Broadcast',
-  'dispatchers-combo': 'Dispatchers',
+  'dispatchers-combo': 'Dispatch',
+  'dispatch-setup': 'Dispatch settings', // Nov 5 client
+  'dispatch-reports': 'Dispatcher reports', // Nov 5 client
   prospects: 'Prospects',
 };
 // Tier-2 fix #2: `live` subtitle was baked at module init, so the weekday /
@@ -1864,7 +1990,9 @@ const TAB_SUB: Record<string, string> & { live: string } = {
   'holiday-sms': 'Pause all texts (automatic and manual) · Shabbos / Yom Tov blackout windows',
   'my-shift': 'Your dispatching shifts — sign in when your shift starts',
   'sms-combo': 'Compose · groups · broadcast · WhatsApp',
-  'dispatchers-combo': 'Roster (On Deck / Assigned) · SMS access · staff roles',
+  'dispatchers-combo': 'Today: calls and texts · then who gets calls and the shifts', // Nov 6 client: one page; bigger settings in Admin → Dispatch settings
+  'dispatch-setup': 'Logins & attendance, the phone system and voicemail', // Nov 5 client: schedule, shifts, roster are on Dispatch → 📅 Schedule
+  'dispatch-reports': 'Calls answered, missed and called back, per dispatcher, and the busiest times',
   settings: 'Admin · option lookups',
   prospects: 'Potential stores · pipeline · convert to supplier',
 };
@@ -2029,7 +2157,7 @@ function CoordMap({ rows, showVolunteers, onOpen }: { rows: PiRow[]; suppliers?:
         ? [st.lat + 0.00018, st.lng] // just above the store square
         : _uniquePinFor('pickup:' + (p.suppliers ?? String(p.id)));
       const when = whenText(String(p.scheduled_date ?? '').slice(0, 10), String(p.scheduled_time ?? '').slice(0, 5));
-      const tip = `<b>${esc(p.suppliers || 'Pickup')}</b><br>${esc(when)} · ${need > 0 ? `needs ${plural(need, 'driver')}` : 'has a driver'}`;
+      const tip = `<b>${esc(pickupPlace(p as any) ?? 'One-time pickup')}</b><br>${esc(when)} · ${need > 0 ? `needs ${plural(need, 'driver')}` : 'has a driver'}`;
       L.marker([lat, lng], { icon: L.divIcon({ html, className: '', iconSize: [30, 36], iconAnchor: [15, 36] }) })
         .bindTooltip(tip, { direction: 'top', offset: [0, -30] })
         .on('click', () => onOpen(p.id))
@@ -2533,6 +2661,8 @@ function CoordRow({ p, onAssign, onOpen, onEdit, onDuplicate, allowDriverCancel,
                 : p.steady_pickup_id != null
                 ? <span className="font-extrabold tracking-wider bg-sky-soft text-sky-deep px-1.5 py-0.5 rounded-full">STEADY</span>
                 : <span className="font-extrabold tracking-wider bg-amber-soft text-[#9a7415] px-1.5 py-0.5 rounded-full">ONE-TIME</span>}
+              {/* Nov 6 Yakov: set on the steady — the usual driver is off these days, open for others. */}
+              {p.steady_pickup_id != null && <SteadyOpenNote steadyId={p.steady_pickup_id} date={p.scheduled_date} />}
               {/* Oct 13 client: food a store sent through its app — clear at a glance. */}
               {(p as any).posted_via_supplier && <span className="font-extrabold tracking-wider bg-[#EFE4F6] text-[#6B3B8C] px-1.5 py-0.5 rounded-full" title="The store sent this through its app">📱 STORE APP</span>}
               {/* Oct 14 client: who filled out the form (Store app already has its own badge). */}
@@ -2569,6 +2699,7 @@ function CoordRow({ p, onAssign, onOpen, onEdit, onDuplicate, allowDriverCancel,
             <div className="font-display font-bold text-[16px] text-ink leading-tight truncate"><Name>{primaryLabel}</Name></div>
             {showAddress && <div className="text-[12px] text-muted truncate" title={p.pickup_address || undefined}>📍 {displayAddress}</div>}
             {contactLine && <div className="text-[12px] text-muted truncate">☎ {p.contact_name && <><Name>{p.contact_name}</Name> · </>}{displayPhone(p.contact_phone)}</div>}
+            {(p as any).caterer && <div data-caterer className="text-[12px] text-ink truncate">🍽 Caterer: <b>{(p as any).caterer}</b></div>/* Nov 6 client */}
             {/* Oct 14 client: 📷 thumbnail of the store's photo next to the food line (tap = large). */}
             {(p as any).store_photo_url ? (
               <div className="flex items-center gap-2 min-w-0 my-0.5">
@@ -2612,6 +2743,13 @@ function CoordRow({ p, onAssign, onOpen, onEdit, onDuplicate, allowDriverCancel,
             )}
             {/* Oct 13 client: "Asked store 2:00 PM · waiting" / "Store said YES" / "Donor told 3:12 PM" / CANCEL tag. */}
             <StoreTextLines p={p} />
+            {/* Nov 4 client: "on the left side, like text to driver or text to store" — a ready message, sent by hand. */}
+            {/* the driver already has "💬 Text <name>" next to his name */}
+            {!_cancelled && !!(p as any).suppliers && (
+              <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1" onClick={(e) => e.stopPropagation()}>
+                {!!(p as any).suppliers && <PickupTextLink pickupId={Number(p.id)} to="store" label="💬 Text store" className="haptic text-[12.5px] font-bold text-forest underline underline-offset-2" />}
+              </div>
+            )}
           </div>
 
           {/* RIGHT — actions, fixed order */}
@@ -2634,6 +2772,8 @@ function CoordRow({ p, onAssign, onOpen, onEdit, onDuplicate, allowDriverCancel,
             {onEdit && (
               <button onClick={onEdit} className={cx(btn, 'border-line text-ink hover:bg-cream', moreActs ? '' : 'hidden sm:block')} title="Edit, reschedule, reassign">Edit</button>
             )}
+            {/* Nov 3 client: text a whole pickup — driver / store / both, a ready message, sent by hand */}
+            {/* Nov 4 client: "Take out the button Text" on the Live Board card (it stays on the pickup page). */}
             {/* Oct 9 client: expired with no driver — repost it right from the card. */}
             {office === 'expired' && (
               <RepostButton pickupId={Number(p.id)} className={cx(btn, 'border-forest/50 text-forest hover:bg-sage/60')} />
@@ -2642,8 +2782,8 @@ function CoordRow({ p, onAssign, onOpen, onEdit, onDuplicate, allowDriverCancel,
             {needDrivers > 0 && (
               <button onClick={() => setShowSendChoice(true)} disabled={sendNowMut.isPending || !!sendingNow}
                       className={cx(btn, 'border-sky/40 text-sky hover:bg-sky/10', (sendNowMut.isPending || !!sendingNow) && 'bg-sky/15 animate-pulse')}
-                      title={sendingNow ? 'Sending now — wait for the text to go out' : 'Text drivers about this pickup, or about every open pickup'}>
-                {sendNowMut.isPending || sendingNow ? 'Sending…' : 'Send SMS'}
+                      title={sendingNow ? 'Sending now — wait for the text to go out' : 'Text the drivers in the pickup group about this pickup, or about every open pickup'}>
+                {sendNowMut.isPending || sendingNow ? 'Sending…' : '📣 Text drivers'}{/* Nov 4 client: was "Send SMS" — texts the pickup group */}
               </button>
             )}
             {!_resolved && (
@@ -2816,7 +2956,7 @@ function NeedMoreDriversModal({ p, onAddSpecific, onOpened, onClose }: {
     <div className="fixed inset-0 z-[2100] bg-ink/50 flex items-start justify-center pt-16 px-4">
       <div onClick={(e) => e.stopPropagation()} className="relative z-[2101] bg-paper rounded-[18px] shadow-lift border border-line w-full max-w-sm p-5 space-y-3">
         <div className="font-display font-semibold text-[16px]">Need more drivers</div>
-        <div className="text-[12.5px] text-muted">{p.suppliers || p.steady_name || 'Pickup'} · now needs {current} {current === 1 ? 'driver' : 'drivers'}</div>
+        <div className="text-[12.5px] text-muted">{pickupPlace(p as any) ?? 'One-time pickup'} · now needs {current} {current === 1 ? 'driver' : 'drivers'}</div>
         <button onClick={onAddSpecific}
                 className="haptic w-full text-left rounded-[12px] border border-line px-4 py-3 hover:bg-cream/60">
           <div className="text-[13px] font-extrabold text-forest">Add a specific driver now</div>
@@ -2993,6 +3133,7 @@ function DismissPickupModal({ p, onClose }: { p: any; onClose: () => void }) {
  *  - Suppliers:  donor list
  *  - Chats:      whomever's in that conversation list
  */
+const SIDEBAR_LIST_OFF = true; // Nov 2 client
 function SidebarContextList({
   tab, suppliers, suppliersLoading, volunteers, volunteersLoading, livePickups,
 }: {
@@ -3012,6 +3153,9 @@ function SidebarContextList({
     'chat-stores', 'chat-volunteers', 'reports',
   ];
   if (!LIST_TABS.includes(tab)) return null;
+  // Nov 2 client: "I don't need this things flying around in the bottom … same as when I click on volunteers" —
+  // the side list (Active pickups / Drivers / Donors) is off. The pages themselves show everything.
+  if (SIDEBAR_LIST_OFF) return null;
 
   const head =
     tab === 'pickups'         ? 'Active pickups' :
@@ -3053,7 +3197,7 @@ function PickupSidebar({ pickups, loading }: { pickups: PiRow[]; loading: boolea
     return (
       <div key={p.id} className="flex items-center gap-2 px-3 py-1.5 text-[12.5px]">
         <span className="h-2.5 w-2.5 rounded-sm shrink-0 ring-1 ring-white/20" style={{ background: color }} />
-        <span className="truncate flex-1 text-paper">{p.suppliers || 'Pickup'}</span>
+        <span className="truncate flex-1 text-paper">{pickupPlace(p as any) ?? 'One-time pickup'}</span>
         <span className="text-[10.5px] text-[#7fa078] font-bold tabular-nums">{fmtTime(p.scheduled_time?.slice(0,5) ?? '')}</span>
       </div>
     );
@@ -3127,7 +3271,7 @@ function SmsUnreadBadge() {
 // unread texts + unread app chat messages.
 function DriverMessagesBadge() {
   const sms = useQuery({ queryKey: ['sms-unread-count'], queryFn: () => smsThreads.unreadCount(), refetchInterval: 30_000, refetchOnWindowFocus: true });
-  const chat = useQuery<{ data: { total: number; byPeer: Array<{ peerUserId: number; unread: number }> } }>({ queryKey: ['dm-unread'], queryFn: () => dm.unread(), refetchInterval: 20_000 });
+  const chat = useQuery<{ data: { total: number; byPeer: Array<{ peerUserId: number; unread: number }> } }>({ queryKey: ['dm-unread'], queryFn: () => dm.unread(), refetchInterval: 60_000 }); // Nov 3 client: speed (was 20 s)
   const total = Number(sms.data?.data?.total ?? 0) + Number(chat.data?.data?.total ?? 0);
   if (!total) return null;
   return <span className="ml-auto inline-grid place-items-center min-w-[20px] h-[20px] px-1.5 rounded-full bg-red-500 text-paper text-[11px] font-extrabold">{total > 99 ? '99+' : total}</span>;
@@ -3170,7 +3314,7 @@ function UnreadBadge({ kind, peerUserId }: { kind?: 'stores' | 'volunteers'; pee
   const unread = useQuery<{ data: { total: number; byPeer: Array<{ peerUserId: number; unread: number }> } }>({
     queryKey: ['dm-unread'],
     queryFn:  () => dm.unread(),
-    refetchInterval: 20_000,
+    refetchInterval: 60_000, // Nov 3 client: speed (was 20 s)
   });
   // Peer-specific badge (one row in the chat list).
   if (peerUserId != null) {
@@ -3195,7 +3339,7 @@ function ChatList({ kind }: { kind: 'stores' | 'volunteers' }) {
     queryFn:  () => (kind === 'stores' ? dm.suppliers() : dm.volunteers()) as Promise<{ data: any[] }>,
   });
   // Last-message preview per peer for the chat list (replaces "Tap to open chat").
-  const threadsQ = useQuery({ queryKey: ['dm-threads'], queryFn: dm.threads, refetchInterval: 20_000 });
+  const threadsQ = useQuery({ queryKey: ['dm-threads'], queryFn: dm.threads, refetchInterval: 30_000 }); // Nov 3 client: speed (was 20 s)
   const threadByPeer = (threadsQ.data?.data?.threads ?? []).reduce(
     (acc: Record<number, { lastBody: string; lastAt: string; lastFromMe: boolean; unread: number }>, t) => {
       acc[Number(t.peerUserId)] = t; return acc;
@@ -3954,7 +4098,7 @@ function SmsPausedGlobalBanner({ onOpen }: { onOpen: () => void }) {
   const q = useQuery({
     queryKey: ['admin-sms-pause'],
     queryFn: () => adminSmsPause.status(),
-    refetchInterval: 20_000,
+    refetchInterval: 60_000, // Nov 3 client: speed (was 20 s; Pause / Resume here refreshes it at once)
     retry: false,
   });
   if (!q.data?.paused) return null;
@@ -3992,7 +4136,7 @@ function SendingModeLine() {
 
 function SmsPauseBanner() {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ['admin-sms-pause'], queryFn: () => adminSmsPause.status(), refetchInterval: 20_000 });
+  const q = useQuery({ queryKey: ['admin-sms-pause'], queryFn: () => adminSmsPause.status(), refetchInterval: 60_000 }); // Nov 3 client: speed (was 20 s)
   const [until, setUntil] = useState<'none' | '1h' | '3h' | 'morning' | 'custom'>('none');
   // Oct 5 client: "allow custom date time as well".
   const [customAt, setCustomAt] = useState('');
@@ -4084,24 +4228,30 @@ function SmsPauseBanner() {
  */
 // Oct 5 client (declutter): 6 tabs → 3. Old links (calendar, template,
 // alerts, staff, attendance) still open the right tab.
-type DispSubTab = 'roster' | 'shifts' | 'logins';
-const DISP_OLD_SUB: Record<string, DispSubTab> = {
-  roster: 'roster', alerts: 'roster', calendar: 'shifts', template: 'shifts', shifts: 'shifts',
-  staff: 'logins', attendance: 'logins', logins: 'logins',
-};
-function DispatchersComboPanel() {
-  // Refresh-persistence: restore the Dispatchers sub-tab from the URL hash.
-  const [sub, setSub] = useState<DispSubTab>(() => {
-    const n = readCoordNav();
-    return (n.tab === 'dispatchers-combo' && n.sub && DISP_OLD_SUB[n.sub as string]) ? DISP_OLD_SUB[n.sub as string]! : 'roster';
-  });
-  useEffect(() => { patchCoordNav({ sub }); }, [sub]);
-  const tabs: { key: DispSubTab; label: string }[] = [
-    { key: 'roster', label: 'Roster' },
-    { key: 'shifts', label: 'Shifts' },
-    { key: 'logins', label: 'Logins & attendance' },
-  ];
-  const Section = ({ title, hint, children }: { title: string; hint?: string; children: any }) => (
+// Nov 5 client: "We need to simplify this … This should be just the basic, very, very basic clear dispatching."
+// Dispatch = To do · Now · Calls · Texts only. Roster / Shifts / Logins / Phone settings → Admin → Dispatch setup;
+// Reports → Reports → Dispatchers. Old links (#coord/dispatchers-combo/roster …) open the new places.
+// Nov 5 client (owner approved going further): Dispatch is ONE simple screen, no tabs (dispatch-hub.tsx DispatchScreen).
+// Old links: #coord/dispatchers-combo/now|todo → the screen; /calls → Calls history; /texts → Texts.
+const DISP_OLD_PANEL: Record<string, DispatchPanel> = { now: null, todo: null, calls: 'calls', texts: 'texts' };
+// Nov 5 client: "put by the dispatch tab these things … this just has dispatcher calendars".
+// Nov 6 client: ONE Dispatch page, no Today / 📅 Schedule switch: Today on top, the schedule part right under it.
+// Old links (#coord/dispatchers-combo/schedule, …/today, …/who, roster, shifts, my-shift/schedule) open this one page
+// (roster / shifts / template also open their fold and scroll to it).
+const SCHED_SUBS = new Set(['schedule', 'who', 'forwarding', 'roster', 'calendar', 'template', 'shifts']);
+/** Nov 6 client: which fold an old link opens */
+const SUB_FOLD: Record<string, string> = { roster: 'roster', calendar: 'calendar', shifts: 'calendar', template: 'template' };
+// Admin → Dispatch settings keeps only the bigger settings. Not 'calls': #coord/dispatchers-combo/calls = Calls history.
+// Nov 6 client: + "Driver replies & alerts" (Who gets driver replies + the 90-minute alert, moved off the Dispatch page).
+type SetupSubTab = 'logins' | 'phone' | 'voicemail' | 'replies';
+const SETUP_OLD_SUB: Record<string, SetupSubTab> = { staff: 'logins', attendance: 'logins', logins: 'logins', phone: 'phone', voicemail: 'voicemail', replies: 'replies', alerts: 'replies' };
+/** Nov 5 client: where an old Dispatch link (#coord/dispatchers-combo/<sub>) goes now; null = it stays on Dispatch. */
+function oldDispatchLink(sub?: string): TabKey | null {
+  if (sub === 'reports') return 'dispatch-reports';
+  return sub && SETUP_OLD_SUB[sub] ? 'dispatch-setup' : null;
+}
+function DispSection({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
+  return (
     <div className="pt-4 border-t border-line">
       <div className="mb-2">
         <h3 className="font-display font-bold text-[15px] text-ink">{title}</h3>
@@ -4110,51 +4260,162 @@ function DispatchersComboPanel() {
       {children}
     </div>
   );
+}
+const foldKey = (id: string) => `zlz.dispFold.${id}`;
+function setFoldOpen(id: string, open: boolean) { try { localStorage.setItem(foldKey(id), open ? '1' : '0'); } catch { /* private mode */ } }
+/** Nov 6 client: the long bottom of the Dispatch page, folded by default; remembers which folds are open. */
+function DispFold({ id, title, hint, children }: { id: string; title: string; hint?: string; children: ReactNode }) {
+  const [open, setOpen] = useState(() => { try { return localStorage.getItem(foldKey(id)) === '1'; } catch { return false; } });
+  const toggle = () => setOpen((o) => { setFoldOpen(id, !o); return !o; });
   return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-1.5 border-b border-line">
-        {tabs.map((t) => (
-          <button key={t.key} onClick={() => setSub(t.key)}
-                  className={cx('px-3 py-2 text-[13px] font-bold border-b-2 -mb-px transition haptic',
-                    sub === t.key
-                      ? 'border-forest text-forest'
-                      : 'border-transparent text-muted hover:text-ink')}>
-            {t.label}
-          </button>
-        ))}
-      </div>
-      {sub === 'roster' && (
-        <div className="space-y-6">
-          <DispatchersRosterPanel />
-          <Section title="Who gets driver replies" hint="These phones get driver text replies and can answer with *NN <message>.">
-            <SmsDispatchersPanel />
-          </Section>
-          <Section title="Who gets the 90-minute alert" hint="Texted when a pickup is 90 minutes away and still has no driver.">
-            <UncoveredAlertsPanel />
-          </Section>
-        </div>
-      )}
-      {sub === 'shifts' && (
-        <div className="space-y-6">
+    <section className="rounded-[14px] border border-line bg-paper" data-disp-fold={id}>
+      <button type="button" onClick={toggle} aria-expanded={open} className="haptic w-full flex flex-wrap items-baseline gap-x-2.5 px-4 py-3 text-left">
+        <span className="font-display font-semibold text-[16px] text-ink"><span className="inline-block w-4 text-muted">{open ? '▾' : '▸'}</span>{title}</span>
+        {hint && <span className="text-[12px] text-muted">{hint}</span>}
+      </button>
+      {open && <div className="px-4 pb-4 space-y-4">{children}</div>}
+    </section>
+  );
+}
+/** Nov 6 client: the schedule part of the one Dispatch page (office): who gets calls, then the folds. */
+function DispatchSchedulePage() {
+  const office = canOfficeOnly(getUser()?.role); // Who gets calls: office logins (as before)
+  return (
+    <div className="space-y-4" data-dispatch-schedule>
+      {office && <WhoGetsCallsPanel />}
+      <div className="space-y-2.5 pt-2">
+        <DispFold id="calendar" title="Shift calendar" hint="Who is on dispatch each week. When the Calendar is Active, calls follow these shifts.">
           <DispatcherWeeklyCalendar />
-          <Section title="Weekly shift template" hint="The repeating weekly plan the calendar is built from.">
-            <DispatcherShiftTemplate />
-          </Section>
-        </div>
-      )}
-      {sub === 'logins' && (
-        <div className="space-y-6">
-          <DispatcherAttendancePanel />
-          <Section title="Staff logins & roles">
-            <DispatchersPanel />
-          </Section>
-        </div>
-      )}
+        </DispFold>
+        <DispFold id="template" title="Weekly shift template" hint="The repeating weekly plan the calendar is built from.">
+          <DispatcherShiftTemplate />
+        </DispFold>
+        <DispFold id="roster" title="Roster: who can dispatch">
+          <DispatchersRosterPanel />
+        </DispFold>
+      </div>
     </div>
   );
 }
-
-// Sep 4 client feature: manage the 90-min uncovered pickup alert group.
+/** Nov 6 client: an old link to a part of the schedule — open its fold (before it renders) and scroll to it once loaded. */
+function useScrollToOldSub(sub: string | undefined) {
+  const [fold] = useState(() => { const f = sub ? SUB_FOLD[sub] : undefined; if (f) setFoldOpen(f, true); return f; });
+  useEffect(() => {
+    if (!sub || !SCHED_SUBS.has(sub)) return;
+    const t = window.setTimeout(() => {
+      document.querySelector(fold ? `[data-disp-fold="${fold}"]` : '[data-who-gets-calls]')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }, 900);
+    return () => window.clearTimeout(t);
+  }, []);
+}
+/** Nov 5 client: the dispatcher's My Dispatch. Nov 6 client: ONE page — Today, then the view-only schedule part
+ *  (who gets calls now, the next 7 days, I'm dispatching now; no override or settings). Old #coord/my-shift/schedule lands here. */
+function MyDispatchPanel() {
+  const [sub] = useState(() => { const n = readCoordNav(); return n.tab === 'my-shift' ? (n.sub as string | undefined) : undefined; });
+  useEffect(() => { if (sub) writeCoordNav({ tab: 'my-shift' }); }, []);
+  useScrollToOldSub(sub);
+  return (
+    <div className="space-y-4"><DispatchScreen below={<WhoGetsCallsPanel readOnly />} />{/* Nov 2 client: dispatcher view; Nov 6 client: one page */}
+      {/* Nov 5 client: "Today is still too much going on" — the rest is folded */}
+      <details className="rounded-[14px] border border-line bg-paper" data-today-more>
+        <summary className="cursor-pointer select-none px-4 py-2.5 text-[13.5px] font-bold text-muted">⚙️ My shifts, phone alerts and settings</summary>
+        <div className="px-4 pb-4 space-y-4"><PhoneAlertsButton />{/* Oct 11 client */}<MyDispatchSettings />{/* Nov 5 client */}<MyShiftPanel /></div>
+      </details>
+    </div>
+  );
+}
+function DispTabs<K extends string>({ tabs, sub, onSub }: { tabs: { key: K; label: string }[]; sub: K; onSub: (k: K) => void }) {
+  return (
+    <div className="flex items-center gap-1.5 border-b border-line overflow-x-auto">
+      {tabs.map((t) => (
+        <button key={t.key} onClick={() => onSub(t.key)} data-testid={`disp-tab-${t.key}`}
+                className={cx('px-3 py-2 text-[13px] font-bold border-b-2 -mb-px transition haptic whitespace-nowrap',
+                  sub === t.key
+                    ? 'border-forest text-forest'
+                    : 'border-transparent text-muted hover:text-ink')}>
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+function DispatchersComboPanel() {
+  // Refresh-persistence: Calls history / Texts stay open after a reload (#coord/dispatchers-combo/calls).
+  // Nov 6 client: one page — old …/schedule, …/today, …/who, roster, shifts links land here (and scroll to the part).
+  const [init] = useState<{ sub?: string; panel: DispatchPanel }>(() => {
+    const n = readCoordNav();
+    const sub = n.tab === 'dispatchers-combo' || n.tab === 'dispatch-setup' ? (n.sub as string | undefined) : undefined;
+    return { sub, panel: n.tab === 'dispatchers-combo' && sub ? (DISP_OLD_PANEL[sub] ?? null) : null };
+  });
+  const panelRef = useRef<DispatchPanel>(init.panel);
+  useEffect(() => { writeCoordNav({ tab: 'dispatchers-combo', sub: init.panel ?? undefined }); }, []);
+  useScrollToOldSub(init.sub);
+  // "the Dispatch page" links (Phone system tab, green card) while Dispatch is already open: scroll to who gets calls
+  useEffect(() => {
+    const h = () => document.querySelector('[data-who-gets-calls]')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    window.addEventListener('zlz:open-dispatch-schedule', h);
+    return () => window.removeEventListener('zlz:open-dispatch-schedule', h);
+  }, []);
+  return <DispatchScreen below={<DispatchSchedulePage />} initialPanel={panelRef.current} onPanel={(p) => { panelRef.current = p; patchCoordNav({ sub: p ?? undefined }); }} />;
+}
+/** Nov 5 client: Admin → Dispatch settings — only the bigger settings (logins, phone system, voicemail).
+ *  Nov 6 client: + Driver replies & alerts. Who gets calls, Shifts and Roster are on the Dispatch page. */
+function DispatchSetupPanel() {
+  const office = canOfficeOnly(getUser()?.role); // phone system and voicemail: admins / office only (as before)
+  const [sub, setSub] = useState<SetupSubTab>(() => {
+    const n = readCoordNav();
+    const s = (n.tab === 'dispatch-setup' || n.tab === 'dispatchers-combo') && n.sub ? SETUP_OLD_SUB[n.sub as string] : undefined;
+    return s && (office || s === 'logins' || s === 'replies') ? s : 'logins';
+  });
+  useEffect(() => { writeCoordNav({ tab: 'dispatch-setup', sub }); }, [sub]);
+  useEffect(() => {
+    const h = (e: Event) => { const k = SETUP_OLD_SUB[String((e as CustomEvent).detail?.sub ?? '')]; if (k && (office || k === 'logins' || k === 'replies')) setSub(k); };
+    window.addEventListener('zlz:open-dispatch-setup', h);
+    return () => window.removeEventListener('zlz:open-dispatch-setup', h);
+  }, [office]);
+  const tabs: { key: SetupSubTab; label: string }[] = [
+    { key: 'logins', label: 'Logins & attendance' },
+    { key: 'replies', label: 'Driver replies & alerts' }, // Nov 6 client
+    ...(office ? [{ key: 'phone' as SetupSubTab, label: 'Phone system' }, { key: 'voicemail' as SetupSubTab, label: 'Voicemail' }] : []),
+  ];
+  return (
+    <div className="space-y-3" data-dispatch-setup>
+      <div className="text-[12.5px] text-muted">
+        Who gets dispatch calls, the shifts and the roster are on{' '}
+        <button type="button" onClick={() => window.dispatchEvent(new CustomEvent('zlz:open-dispatch-setup', { detail: { sub: 'schedule' } }))}
+                className="font-bold text-forest underline">the Dispatch page</button>.
+      </div>
+      <DispTabs tabs={tabs} sub={sub} onSub={setSub} />
+      {sub === 'logins' && (
+        <div className="space-y-6">
+          <DispatcherAttendancePanel />
+          <DispSection title="Staff logins & roles">
+            <DispatchersPanel />
+          </DispSection>
+        </div>
+      )}
+      {sub === 'replies' && (
+        <div className="space-y-4" data-setup-replies>{/* Nov 6 client: moved here from the Dispatch page */}
+          <div>
+            <h3 className="font-display font-bold text-[15px] text-ink mb-0.5">Who gets driver replies</h3>
+            <div className="text-[11.5px] text-muted mb-2">These phones get driver text replies and can answer with *NN &lt;message&gt;.</div>
+            <SmsDispatchersPanel />
+          </div>
+          <DispSection title="Who gets the 90-minute alert" hint="Texted when a pickup is 90 minutes away and still has no driver.">
+            <UncoveredAlertsPanel />
+          </DispSection>
+        </div>
+      )}
+      {sub === 'phone' && office && (
+        <div className="space-y-4">
+          <AdminPhonesGuide />{/* was on Dispatch → Now */}
+          <OfficePhonePanel />{/* the phone system + the full forwarding card (⚙️ Change forwarding) */}
+        </div>
+      )}
+      {sub === 'voicemail' && office && <VoicemailPanel />}{/* Nov 3 client: admins only (was on Dispatch → Now) */}
+    </div>
+  );
+}// Sep 4 client feature: manage the 90-min uncovered pickup alert group.
 function UncoveredAlertsPanel() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['uncovered-alert-members'], queryFn: uncoveredAlerts.list });
@@ -4290,6 +4551,10 @@ function DispatcherWeeklyCalendar() {
   const total = q.data?.total ?? 0;
 
   const [assignFor, setAssignFor] = useState<DispWeeklyRow | null>(null);
+  // Nov 6 Yakov: an "every week" shift asks "Just this week / Every week from now on"
+  const unassign = (r: DispWeeklyRow, scope?: 'week' | 'future') => dispatcherShifts.unassign(r.shiftId!, scope)
+    .then(() => qc.invalidateQueries({ queryKey: ['disp-weekly'] }))
+    .catch((e: any) => { void uiNotify(e?.message || 'Could not release. Try again.'); });
 
   const bySection: Record<string, DispWeeklyRow[]> = {};
   for (const r of rows) {
@@ -4324,10 +4589,10 @@ function DispatcherWeeklyCalendar() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {[0, 1, 2, 3, 4].map((d) => (
-            <DispDayCard key={`d-${d}`} label={ROSTER_DAY_LABELS[d]} rows={bySection[`daily-${d}`] ?? []} onAssign={setAssignFor} onUnassign={(r) => dispatcherShifts.unassign(r.shiftId!).then(() => qc.invalidateQueries({ queryKey: ['disp-weekly'] }))} />
+            <DispDayCard key={`d-${d}`} label={ROSTER_DAY_LABELS[d]} rows={bySection[`daily-${d}`] ?? []} onAssign={setAssignFor} onUnassign={unassign} />
           ))}
-          <DispDayCard label="Friday" rows={bySection['friday'] ?? []} onAssign={setAssignFor} onUnassign={(r) => dispatcherShifts.unassign(r.shiftId!).then(() => qc.invalidateQueries({ queryKey: ['disp-weekly'] }))} />
-          <DispDayCard label="Motzei Shabbos" rows={bySection['motzei_shabbos'] ?? []} onAssign={setAssignFor} onUnassign={(r) => dispatcherShifts.unassign(r.shiftId!).then(() => qc.invalidateQueries({ queryKey: ['disp-weekly'] }))} />
+          <DispDayCard label="Friday" rows={bySection['friday'] ?? []} onAssign={setAssignFor} onUnassign={unassign} />
+          <DispDayCard label="Motzei Shabbos" rows={bySection['motzei_shabbos'] ?? []} onAssign={setAssignFor} onUnassign={unassign} />
         </div>
       )}
 
@@ -4343,8 +4608,18 @@ function DispatcherWeeklyCalendar() {
 function DispDayCard({ label, rows, onAssign, onUnassign }: {
   label: string; rows: DispWeeklyRow[];
   onAssign: (r: DispWeeklyRow) => void;
-  onUnassign: (r: DispWeeklyRow) => void;
+  onUnassign: (r: DispWeeklyRow, scope?: 'week' | 'future') => void;
 }) {
+  const release = (r: DispWeeklyRow) => {
+    const who = `${r.firstName ?? ''} ${r.lastName ?? ''}`.trim();
+    const when = `${label} · ${fmt12(r.startTime)} – ${fmt12(r.endTime)}`;
+    if (r.everyWeek) { // Nov 6 Yakov
+      const day = new Date(r.startAt).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'America/New_York' });
+      void askReleaseScope(who, when, day).then((s) => { if (s) onUnassign(r, s); });
+      return;
+    }
+    void uiConfirm(`Release ${who} from this shift?\n\n${when}`, { okLabel: 'Yes, release', cancelLabel: 'Go back' }).then((ok) => { if (ok) onUnassign(r); });
+  };
   return (
     <div className="bg-paper border border-line rounded-[14px] overflow-hidden">
       <div className="px-3 py-2 border-b border-line bg-cream/50">
@@ -4359,6 +4634,7 @@ function DispDayCard({ label, rows, onAssign, onUnassign }: {
               {r.volunteerId ? (
                 <div>
                   <div className="font-bold text-ink truncate">{r.firstName} {r.lastName}</div>
+                  {r.everyWeek && <div className="text-[11px] font-bold text-forest" data-every-week>↻ Every week</div>}
                   {r.phone && <div className="text-[11px] text-muted truncate">{displayPhone(r.phone)}</div>}
                 </div>
               ) : (
@@ -4366,7 +4642,7 @@ function DispDayCard({ label, rows, onAssign, onUnassign }: {
               )}
             </div>
             {r.volunteerId ? (
-              <button onClick={() => { void uiConfirm(`Release ${r.firstName} ${r.lastName} from this shift?\n\n${label} · ${fmt12(r.startTime)} – ${fmt12(r.endTime)}`, { okLabel: 'Yes, release', cancelLabel: 'Go back' }).then((ok) => { if (ok) onUnassign(r); }); }}
+              <button onClick={() => release(r)}
                       className="haptic text-[11.5px] font-bold text-muted hover:text-clay">Release</button>
             ) : (
               <button onClick={() => onAssign(r)}
@@ -4383,20 +4659,33 @@ function AssignDispatcherModal({ row, weekStart, onClose, onSaved }: {
   row: DispWeeklyRow; weekStart: string; onClose: () => void; onSaved: () => void;
 }) {
   const dq = useQuery({ queryKey: ['dispatchers-roster'], queryFn: () => api<{ data: any[] }>('/api/dispatchers') });
-  const [q, setQ] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const roster = (dq.data?.data ?? []) as any[];
-  const filtered = roster
-    .filter((p: any) => {
-      const s = `${p.firstName ?? p.first_name ?? ''} ${p.lastName ?? p.last_name ?? ''} ${p.phonePrimary ?? p.phone_primary ?? ''}`.toLowerCase();
-      return !q || s.includes(q.toLowerCase());
-    })
-    .slice(0, 40);
+  // Nov 5 client: "offer dispatchers on deck first" (Roster's On Deck / Available: no shift now or in 24 h)
+  // + on deck only when he can really dispatch (canDispatch: a dispatcher / office login); no login yet = last.
+  // Nov 6 client: the friendly dispatcher list (dispatcher-picker.tsx) — avatars, "Moshe A.", tags, groups.
+  const people = useMemo<PickPerson[]>(() => roster.map((p: any) => {
+    const first = p.firstName ?? p.first_name ?? '', last = p.lastName ?? p.last_name ?? '';
+    const phone = p.phone ?? p.phonePrimary ?? p.phone_primary ?? '';
+    return { id: Number(p.id ?? p.volunteerId), name: shortName(first, last), search: `${first} ${last} ${String(phone).replace(/\D/g, '')}`,
+      onDeck: p.canDispatch !== false && p.currentShift == null && p.nextShift == null, onShiftNow: p.currentShift != null,
+      noCell: !phone, noLogin: p.canDispatch === false };
+  }), [roster]);
+  // Nov 6 Yakov ("should be recurring, not only once"): every week is the default
+  const [repeat, setRepeat] = useState<'weekly' | 'once'>('weekly');
   const assignM = useMutation({
-    mutationFn: (volunteerId: number) => dispatcherShifts.assign({ slotId: row.slotId, weekStart, volunteerId }),
-    onSuccess: () => onSaved(),
+    mutationFn: (volunteerId: number) => dispatcherShifts.assign({ slotId: row.slotId, weekStart, volunteerId, repeat }),
+    onSuccess: (r) => {
+      onSaved();
+      const n = r?.skipped?.length ?? 0;
+      if (n) void uiNotify(`Done: every week. ${n === 1 ? '1 week already had someone' : `${n} weeks already had someone`} on this shift, so that ${n === 1 ? 'week stays' : 'stay'} with them.`);
+    },
     onError: (e: any) => setErr(e?.message || 'failed'),
   });
+  const tz = { timeZone: 'America/New_York' } as const;
+  const weekday = new Date(row.startAt).toLocaleDateString('en-US', { weekday: 'long', ...tz });
+  const oneDay = new Date(row.startAt).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', ...tz });
+  const radio = (on: boolean) => `haptic flex items-start gap-2 w-full text-left rounded-[10px] border px-3 py-2 text-[13px] ${on ? 'border-forest bg-sage/50 text-ink' : 'border-line bg-paper text-muted'}`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -4409,33 +4698,20 @@ function AssignDispatcherModal({ row, weekStart, onClose, onSaved }: {
           </div>
           <button onClick={onClose} className="haptic text-muted hover:text-ink text-[22px] leading-none px-1">×</button>
         </div>
-        <div className="p-3">
-          <input value={q} onChange={(e) => setQ(e.target.value)}
-                 placeholder="Search dispatchers…"
-                 className="w-full border border-line rounded-[8px] px-2 py-1.5 text-[13px] bg-paper" />
+        <div className="px-4 py-2.5 border-b border-line space-y-1.5" role="radiogroup" aria-label="How often" data-assign-repeat>
+          <button type="button" role="radio" aria-checked={repeat === 'weekly'} onClick={() => setRepeat('weekly')} className={radio(repeat === 'weekly')} data-repeat="weekly">
+            <span className="font-bold">{repeat === 'weekly' ? '◉' : '○'}</span>
+            <span><b className="text-ink">Every week</b> (every {weekday} {fmt12(row.startTime)} – {fmt12(row.endTime)})</span>
+          </button>
+          <button type="button" role="radio" aria-checked={repeat === 'once'} onClick={() => setRepeat('once')} className={radio(repeat === 'once')} data-repeat="once">
+            <span className="font-bold">{repeat === 'once' ? '◉' : '○'}</span>
+            <span><b className="text-ink">Just this once</b> ({oneDay})</span>
+          </button>
         </div>
-        <div className="overflow-y-auto px-3 pb-3 space-y-1">
-          {dq.isLoading && <div className="text-[12.5px] text-muted italic">Loading roster…</div>}
-          {filtered.length === 0 && !dq.isLoading && <div className="text-[12.5px] text-muted italic">No matches.</div>}
-          {filtered.map((p: any) => {
-            const id = Number(p.id ?? p.volunteerId);
-            const first = p.firstName ?? p.first_name ?? '';
-            const last = p.lastName ?? p.last_name ?? '';
-            const phone = p.phonePrimary ?? p.phone_primary ?? '';
-            return (
-              <button key={id} onClick={() => assignM.mutate(id)} disabled={assignM.isPending}
-                      className="w-full text-left px-3 py-2 flex items-center gap-2 rounded-[8px] hover:bg-cream/60 disabled:opacity-40">
-                <div className="flex-1 min-w-0">
-                  <div className="font-bold text-[13px] text-ink truncate"><Name first={first} last={last} /></div>
-                  <div className="text-[11.5px] text-muted truncate">{phone ? displayPhone(phone) : ''}</div>
-                </div>
-                <span className="text-[11px] font-bold text-forest">Assign →</span>
-              </button>
-            );
-          })}
-          {err && <div className="text-[12.5px] text-clay">{err}</div>}
-        </div>
-      </div>
+        {dq.isLoading ? <div className="p-4 text-[12.5px] text-muted italic">Loading roster…</div>
+          : <DispatcherList people={people} onPick={(v) => { if (typeof v === 'number') assignM.mutate(v); }} busy={assignM.isPending} onEscape={onClose} />}
+        {assignM.isPending && <div className="px-4 py-2 border-t border-line text-[12.5px] text-muted">Assigning…</div>}
+        {err && <div className="px-4 py-2 border-t border-line text-[12.5px] text-clay">{err}</div>}      </div>
     </div>
   );
 }

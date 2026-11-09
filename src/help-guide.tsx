@@ -16,12 +16,17 @@
  *   liveAt is saved (GET /api/help/state whatsNewSeenAt, POST /api/help/whats-new-seen;
  *   plus localStorage) → "3 new" on the menu item and a dot on the ? button.
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { api, getUser } from './api';
 import { cx } from './design';
 import { ReportProblemHost, openReportProblem, setReportPage, ProblemReportsModal } from './report-problem';
-import { WhatsNewPanel, latestLiveAt, unseenCount } from './whats-new'; // Oct 14 client
+import { lazyNamed } from './lazy-load';
+const DispatcherGuide = lazyNamed(() => import('./dispatch-guide'), 'DispatcherGuide'); // Nov 5 client: the Dispatcher guide lives in the ? menu
+// Oct 14 client: What's new. Nov 3 client: speed — the (long) list loads a moment after the portal opens, not in the first download.
+let wnMod: typeof import('./whats-new') | null = null;
+const loadWn = () => import('./whats-new').then((m) => (wnMod = m));
+const WhatsNewPanel = lazyNamed(loadWn, 'WhatsNewPanel');
 
 type Bullet = string | { t: string; need?: string; admin?: boolean; write?: boolean };
 type Section = {
@@ -218,7 +223,8 @@ export function HelpMenu({ tabs, writeOk, pageLabel, onOpenTab }: {
   const user = getUser();
   const isAdmin = ADMIN_ROLES.includes(String(user?.role ?? '').toLowerCase()) && tabs.includes('dispatchers-combo');
   const [menu, setMenu] = useState(false);
-  const [view, setView] = useState<'tour' | 'guide' | 'reports' | 'whats-new' | null>(null);
+  const [view, setView] = useState<'tour' | 'guide' | 'reports' | 'whats-new' | 'dispatcher-guide' | null>(null);
+  const dispatching = tabs.includes('dispatchers-combo') || tabs.includes('my-shift'); // Nov 5 client
   const boxRef = useRef<HTMLDivElement | null>(null);
   // Oct 14 client: "NEW" badge + pulse, and the one-time hint (desktop).
   const [isNew, setIsNew] = useState(false);
@@ -228,7 +234,13 @@ export function HelpMenu({ tabs, writeOk, pageLabel, onOpenTab }: {
   const [wnSeen, setWnSeen] = useState<string | null>(() => laterStamp(lsGet(wnKey()), null));
   const [wnReady, setWnReady] = useState(false);
   const [wnSince, setWnSince] = useState<string | null>(null);
-  const unseen = wnReady ? unseenCount(wnSeen) : 0;
+  const [wnLoaded, setWnLoaded] = useState(() => !!wnMod); // Nov 3 client: speed
+  useEffect(() => {
+    if (wnMod) return;
+    const t = window.setTimeout(() => { loadWn().then(() => setWnLoaded(true)).catch(() => { /* badge waits for the next open */ }); }, 1500);
+    return () => window.clearTimeout(t);
+  }, []);
+  const unseen = wnReady && wnLoaded && wnMod ? wnMod.unseenCount(wnSeen) : 0;
   useEffect(() => { setReportPage(pageLabel); }, [pageLabel]);
   // The bell's problem-report alert opens the list (office-alerts.tsx).
   useEffect(() => {
@@ -278,11 +290,14 @@ export function HelpMenu({ tabs, writeOk, pageLabel, onOpenTab }: {
     setMenu(false);
     setWnSince(wnSeen);
     setView('whats-new');
-    const top = latestLiveAt();
-    if (top && (!wnSeen || top > wnSeen)) {
-      setWnSeen(top); lsSet(wnKey(), top);
-      api('/api/help/whats-new-seen', { method: 'POST', body: JSON.stringify({ seenAt: top }) }).catch(() => {});
-    }
+    const markTop = (top: string | null) => {
+      if (top && (!wnSeen || top > wnSeen)) {
+        setWnSeen(top); lsSet(wnKey(), top);
+        api('/api/help/whats-new-seen', { method: 'POST', body: JSON.stringify({ seenAt: top }) }).catch(() => {});
+      }
+    };
+    if (wnMod) markTop(wnMod.latestLiveAt());
+    else loadWn().then((m) => { setWnLoaded(true); markTop(m.latestLiveAt()); }).catch(() => {});
   };
   const markSeen = () => {
     if (lsGet(seenKey())) return;
@@ -332,6 +347,7 @@ export function HelpMenu({ tabs, writeOk, pageLabel, onOpenTab }: {
       {menu && (
         <div className="absolute right-0 top-full mt-2 z-[1600] w-[240px] rounded-[12px] border border-line bg-paper shadow-lift p-1.5">
           <button className={item} onClick={() => { setMenu(false); setView('guide'); }}>📖 Guide: how to use the portal</button>
+          {dispatching && <button className={item} data-help-dispatcher-guide onClick={() => { setMenu(false); setView('dispatcher-guide'); }}>🎧 Dispatcher guide</button>}{/* Nov 5 client: was on Dispatch → Now */}
           {/* Oct 14 client: What's new for everyone, with the unseen count. */}
           <button className={item} data-help-whats-new onClick={openWhatsNew}>
             <span>✨ What&apos;s new</span>
@@ -350,6 +366,13 @@ export function HelpMenu({ tabs, writeOk, pageLabel, onOpenTab }: {
                     onTour={() => setView('tour')}
                     onWhatsNew={openWhatsNew} />
       )}
+      {view === 'dispatcher-guide' && createPortal(
+        <div className="fixed inset-0 z-[2000] bg-ink/40 flex items-start justify-center overflow-y-auto p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setView(null); }}>
+          <div className="relative w-full max-w-[680px] my-6" role="dialog" aria-label="Dispatcher guide">
+            <button type="button" onClick={() => setView(null)} aria-label="Close" className="absolute right-3 top-2.5 z-10 grid h-8 w-8 place-items-center rounded-full bg-cream text-[18px] font-bold text-ink">×</button>
+            <Suspense fallback={<div className="rounded-[18px] bg-paper p-5 text-[13px] text-muted">Loading…</div>}><DispatcherGuide inHelp /></Suspense>
+          </div>
+        </div>, document.body)}
       {view === 'whats-new' && <WhatsNewModal isAdmin={isAdmin} newSince={wnSince} onClose={() => setView(null)} />}
       {view === 'reports' && <ProblemReportsModal onClose={() => setView(null)} onOpenTasks={tabs.includes('bug-reports') || tabs.includes('tasks') ? () => { setView(null); onOpenTab(tabs.includes('bug-reports') ? 'bug-reports' : 'tasks'); } : undefined} />}
       <ReportProblemHost />
@@ -555,7 +578,7 @@ function WhatsNewModal({ isAdmin, newSince, onClose }: { isAdmin: boolean; newSi
           <button onClick={onClose} aria-label="Close" className="haptic h-9 w-9 shrink-0 grid place-items-center rounded-full hover:bg-cream text-[18px]">✕</button>
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto bg-cream/30 px-3 py-3 sm:px-5 sm:py-4">
-          <WhatsNewPanel mode="menu" showComingSoon={isAdmin} isAdmin={isAdmin} newSince={newSince} />
+          <Suspense fallback={<div className="text-[13px] text-muted">Loading…</div>}><WhatsNewPanel mode="menu" showComingSoon={isAdmin} isAdmin={isAdmin} newSince={newSince} /></Suspense>
         </div>
       </div>
     </div>,

@@ -8,10 +8,11 @@ import { uiConfirm } from './ui-dialogs';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { forwardRef, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Loader2, Check, Circle, Mail, LogOut, Menu, X, Home, Calendar, Map as MapIcon, MessageSquare, User, Settings as SettingsIcon, FileText } from 'lucide-react';
+import { Loader2, Check, Circle, Mail, LogOut, Menu, X, Home, Calendar, Map as MapIcon, MessageSquare, User, Settings as SettingsIcon } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { getUser, setAuth } from './api';
 import { STATUS } from './display'; // Oct 23 client: one status map
+import { getViewMode, setViewMode } from './view-switch'; // Nov 6 Yakov: full driver menu in driver view
 
 export function cx(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(' ');
@@ -233,7 +234,10 @@ export function HamburgerMenu() {
     window.location.href = target;
   }
 
-  const isStaff = me && (me.role === 'admin' || me.role === 'coordinator' || me.role === 'staff');
+  // Nov 6 Yakov ("Missing tabs"): an office login looking at the DRIVER app (View: Driver) gets the full
+  // driver menu, plus a way back to the office. Only the office's own screens show "Live Board" alone.
+  const inDriverView = !!me && getViewMode((me as any).id) === 'driver';
+  const isStaff = me && (me.role === 'admin' || me.role === 'coordinator' || me.role === 'staff') && !inDriverView;
   const isSupplier = me?.role === 'supplier';
 
   const VOLUNTEER_LINKS = [
@@ -244,7 +248,7 @@ export function HamburgerMenu() {
     { to: '/you',      label: 'My Activity', icon: User },
     { to: '/profile',  label: 'My Profile',  icon: User },
     { to: '/settings', label: 'Settings',    icon: SettingsIcon },   // Oct 14 client: how we reach you, pause, quiet times
-    { to: '/application', label: 'My application', icon: FileText }, // Oct 14 client: sign-up answers
+    // Nov 3 Yakov: "My application" is no longer in the menu.
   ];
   const SUPPLIER_LINKS = [
     // Oct 8 client: My Pickups is its own page (it used to be the home screen,
@@ -319,6 +323,12 @@ export function HamburgerMenu() {
                     {l.label}
                   </Link>
                 ))}
+                {inDriverView && (
+                  <button onClick={() => { setOpen(false); setViewMode(Number((me as any).id), 'office'); nav('/'); }}
+                          className="w-full flex items-center gap-3 px-3 min-h-[48px] rounded-[10px] text-[16px] font-bold text-ink hover:bg-cream haptic">
+                    <Home size={20} className="text-muted" /> Back to the office
+                  </button>
+                )}
                 {isStaff && (
                   <button onClick={() => { setOpen(false); nav('/'); }}
                           className="w-full flex items-center gap-3 px-3 min-h-[48px] rounded-[10px] text-[16px] font-bold text-ink hover:bg-cream haptic">

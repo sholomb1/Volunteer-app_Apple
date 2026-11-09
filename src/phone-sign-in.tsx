@@ -11,7 +11,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, KeyRound, Smartphone } from 'lucide-react';
-import { api, getUser, setAuth, setSandboxAvailable, type AuthUser } from './api';
+import { api, getRealUser, getUser, setAuth, setSandboxAvailable, type AuthUser } from './api';
 
 const CODE_AT_KEY = 'zlz_code_signin_at';
 const OFFER_DONE_KEY = 'zlz_pw_offer_done';
@@ -219,7 +219,7 @@ export function SetPasswordForm({ onDone, onSkip, skipLabel = 'Not now' }: { onD
     setErr(null); setBusy(true);
     try {
       const r = await api<SignInReply>('/api/auth/set-password', { method: 'POST', body: JSON.stringify({ newPassword: pw }) });
-      setAuth(r.token, { ...(getUser() ?? {}), ...r.user } as AuthUser);
+      setAuth(r.token, { ...(getRealUser() ?? {}), ...r.user } as AuthUser); // Nov 4: never save the dispatcher preview
       markOfferDone();
       setSaved(true);
       setTimeout(onDone, 900);

@@ -112,6 +112,7 @@ export function PickupDetail() {
         status: a.status, suppliers: a.suppliers, is_one_time: false,
         food_description: a.food_description, estimated_quantity: null,
         store_photo_url: a.store_photo_url ?? null, // Oct 14 client
+        caterer: a.caterer ?? null, // Nov 6 client
         supplier_address: a.supplier_address, supplier_phone: a.supplier_contact_phone,
         supplier_contact_name: a.supplier_contact_name, supplier_instructions: null,
         notes: a.notes, must_pickup_by: null, urgency_level: 'normal',
@@ -154,7 +155,8 @@ export function PickupDetail() {
       qc.invalidateQueries();
       setShowQtyPrompt(false);
       uiNotify(r?.photoDropped ? 'Thank you! Delivery saved. (The photo could not be saved.)' : 'Thank you! Delivery saved.', 'ok');
-      nav(`/trip/${id}`, { replace: true });
+      // Nov 3 Yakov: no "How far did you drive?" step — miles are automatic. Back to Home.
+      nav('/', { replace: true });
     },
   });
   // Oct 9 client: send the photo first; if it fails, keep the box open (amount kept)
@@ -180,7 +182,11 @@ export function PickupDetail() {
     complete.mutate({ quantity, photoUrl: link });
   }
   function openDeliveredPrompt() {
+    // Nov 3 Yakov: no "How much did you bring?" (the kiosk asks that). Only a delivery to a family is
+    // finished in the app — one confirm, then saved.
     complete.reset();
+    if (isDelivery) { void uiConfirm(`Delivered?\n\n${pickup.delivery_to_name ?? ''}`, { okLabel: 'Yes, delivered', cancelLabel: 'No' }).then((ok) => { if (ok) complete.mutate({}); }); return; }
+    return;
     if (!showQtyPrompt && !qtyText) setQtyText(pickup.estimated_quantity || '');
     setShowQtyPrompt(true);
   }
@@ -253,16 +259,8 @@ export function PickupDetail() {
   const storeNote = String(pickup.supplier_instructions || '').trim();
   // Oct 12 client: the pickup's other contacts — a call button for each.
   const extraContacts = isDelivery ? [] : readExtraContacts(pickup.extra_contacts);
-  const pickedAt = pickup.picked_up_at ? fmtTimeEastern(pickup.picked_up_at) : '';
-  // Oct 8: plain steps; real times only (no made-up "Just now").
-  const stages = [
-    { key: 'posted',    label: isDelivery ? 'Delivery set up' : 'Store posted it' },
-    { key: 'claimed',   label: isOpen ? 'A driver takes it' : stage === 0 ? 'Say yes to this pickup' : 'You took it' },
-    { key: 'en_route',  label: 'On the way' },
-    { key: 'picked_up', label: 'Picked up', ts: pickedAt || undefined },
-    { key: 'delivered', label: 'Delivered' },
-  ];
-  const timelineNow = isOpen || stage === 0 ? 1 : stage + 1;
+  // Nov 3 Yakov: the steps come from pickupSteps() — the Active pickups tab shows the same ones.
+  const { stages, current: timelineNow } = pickupSteps(pickup, isOpen);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -289,6 +287,7 @@ export function PickupDetail() {
           </div>
         )}
         {/* Oct 14 client: no food text → no bare "Pickup" line. */}
+        {(pickup as any).caterer && <p data-caterer className="text-ink text-[17px] font-bold mt-2">🍽 Caterer: {(pickup as any).caterer}</p>/* Nov 6 client */}
         {(pickup.food_description || pickup.is_one_time) && <p className="text-ink/80 text-[16px] mt-2">{pickup.food_description || 'One-time pickup'}</p>}
         {pickup.estimated_quantity && pickup.estimated_quantity !== pickup.food_description && (
           <p className="text-muted text-[15px] mt-1">About: <b className="text-ink">{pickup.estimated_quantity}</b></p>
@@ -459,7 +458,8 @@ export function PickupDetail() {
         {mode === 'mine' && (pickup.assignment_status === 'assigned' || pickup.assignment_status === 'accepted') && stage < 4 && (
           <div className="mt-5 space-y-2">
             {/* Oct 14 client: not for a pickup on a later day (the card already hides it). */}
-            {stage >= 1 && stage <= 2 && String(pickup.scheduled_date ?? '').slice(0, 10) <= nyToday() && (
+            {/* Nov 3 Yakov: drivers can't press DONE for a store pickup — it's done at the kiosk or by the dispatcher. */}
+            {isDelivery && stage >= 1 && stage <= 2 && String(pickup.scheduled_date ?? '').slice(0, 10) <= nyToday() && (
               <button onClick={openDeliveredPrompt} disabled={complete.isPending}
                       className="haptic w-full min-h-[52px] rounded-[14px] border-[1.5px] border-forest bg-paper text-forest font-bold text-[17px] disabled:opacity-50">
                 Done — dropped off
@@ -485,7 +485,7 @@ export function PickupDetail() {
             claimed (mode='mine') or on staff/admin view, chat is visible. */}
         {(mode === 'mine' || isAdmin) && (
           <>
-            <ChipLabel>Chat</ChipLabel>
+            <ChipLabel>Chat with dispatcher</ChipLabel>
             <ChatPanel pickupId={Number(id)} />
           </>
         )}
@@ -508,9 +508,14 @@ export function PickupDetail() {
               Not open to drivers yet. You can take it from {opensLabel}.
             </div>
           )}
+          {!isOpen && stage === 3 && !isDelivery && (
+            <div className="sticky bottom-[64px] px-4 py-2 bg-sage border-t border-sage-line text-[14px] font-bold text-forest text-center">
+              Great job! Bring it to the center and check in at the kiosk. Or send the dispatcher a message above.
+            </div>
+          )}
           <StickyCTA tone={isOpen ? 'clay' : (stage === 2 ? 'forest' : 'clay')}
                      loading={taking || accept.isPending || start.isPending || pickUp.isPending || complete.isPending}
-                     disabled={(!isOpen && stage >= 4) || !!opensAt}
+                     disabled={(!isOpen && stage >= 4) || (!isOpen && stage === 3 && !isDelivery) || !!opensAt}
                      onClick={() => {
                        if (opensAt) return;
                        if (isOpen) return take(pickup);
@@ -530,7 +535,7 @@ export function PickupDetail() {
               : stage === 0 ? "Accept pickup"
               : stage === 1 ? "I'm on my way"
               : stage === 2 ? "I picked it up"
-              : stage === 3 ? "Delivered"
+              : stage === 3 ? (isDelivery ? "Delivered" : "Check in at the kiosk")
               : 'Done ✓'}
           </StickyCTA>
         </>
@@ -606,6 +611,22 @@ function fmtOpensAt(iso: string): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return '';
   return whenAt(d); // Oct 23 client: one date + time format
+}
+
+/** Oct 8: plain steps; real times only (no made-up "Just now").
+ *  Nov 3 Yakov: shared with Pickups → Active pickups (same steps as this page). */
+export function pickupSteps(pickup: any, isOpen = false) {
+  const stage = inferStage(pickup);
+  const isDelivery = !!pickup?.delivery_to_name;
+  const pickedAt = pickup?.picked_up_at ? fmtTimeEastern(pickup.picked_up_at) : '';
+  const stages = [
+    { key: 'posted',    label: isDelivery ? 'Delivery set up' : 'Store posted it' },
+    { key: 'claimed',   label: isOpen ? 'A driver takes it' : stage === 0 ? 'Say yes to this pickup' : 'You took it' },
+    { key: 'en_route',  label: 'On the way' },
+    { key: 'picked_up', label: 'Picked up', ts: pickedAt || undefined },
+    { key: 'delivered', label: 'Delivered' },
+  ];
+  return { stages, current: isOpen || stage === 0 ? 1 : stage + 1 };
 }
 
 function inferStage(p: any) {

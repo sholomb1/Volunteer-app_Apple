@@ -15,7 +15,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, ChevronRight, X } from 'lucide-react';
+import { ArrowLeft, X } from 'lucide-react';
 import { api, driverSettings, type DriverSettings as Settings } from '../api';
 import { DateInput, FadeUp, cx, setUnsavedGuard, confirmLeaveIfUnsaved } from '../design';
 import { ANYTIME_SLOTS, CALL_QUESTION, CallWhenPicker, OnCallHoursEditor, callAnswerOf, type CallWhen } from '../on-call';
@@ -26,6 +26,7 @@ import { LoadError } from './VolunteerHome';
 import { AlertTicks, PauseSheet, PausedBox, alertsOf, useDriverSettings, usePause } from '../driver-settings';
 import { QuietDaysPicker, liveTexting } from '../quiet-days-picker'; // Oct 14 client: days for each quiet time
 import { normDays } from '../quiet-days';
+import { askAwaySteady } from '../away-steady'; // Nov 6 client: away → give steady pickups to another driver?
 import { PasswordOfferCard } from '../phone-sign-in'; // Oct 28 client: after a text-code sign-in
 import { HelpsWithLine } from '../person-roles'; // Oct 29 client: roles
 
@@ -70,8 +71,12 @@ export function DriverSettings() {
   useEffect(() => () => setUnsavedGuard(false), []);
 
   function saveQuiet() {
+    const awayChanged = !!s && (awayFrom !== (s.vacationFrom ?? '').slice(0, 10) || awayUntil !== (s.vacationUntil ?? '').slice(0, 10));
     save.mutate({ quietWindows: wins ?? [], quietDays: days, vacationFrom: awayFrom || null, vacationUntil: awayUntil || null },
-      { onSuccess: (r) => { loadFrom(r.data); uiNotify('Saved.', 'ok'); } });
+      { onSuccess: (r) => {
+        loadFrom(r.data); uiNotify('Saved.', 'ok');
+        if (awayChanged) void askAwaySteady(qc); // Nov 6 client: steady pickups on the Away days?
+      } });
   }
   // Oct 14 client: phone calls — Anytime / Only at these times / Please don't call, read from
   // and saved to the on-call hours (same list as My application and the office).
@@ -159,19 +164,13 @@ export function DriverSettings() {
               )}
             </Card>
 
-            {/* 2. Pause */}
-            <Card title="Pause">
-              {pause.paused ? (
-                // Oct 14 client: what Pause means + Resume now.
+            {/* 2. Pause — Nov 2 client: no big Pause up top ("the first thing they see, they think: why not?").
+                Only while paused it shows here (with Resume); otherwise a small link at the bottom of Settings. */}
+            {pause.paused && (
+              <Card title="Paused">
                 <PausedBox pause={pause} />
-              ) : (
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-[15px] text-ink/80 leading-snug">Taking a break? Stop pickup messages for a while.</span>
-                  <button onClick={() => setPauseOpen(true)} disabled={pause.busy}
-                          className="haptic shrink-0 min-h-[48px] px-5 rounded-[12px] border-[1.5px] border-forest bg-sage text-forest text-[16px] font-bold disabled:opacity-60">Pause…</button>
-                </div>
-              )}
-            </Card>
+              </Card>
+            )}
 
             {/* 3. Quiet times */}
             <Card title="Quiet times">
@@ -274,10 +273,15 @@ export function DriverSettings() {
 
             <TextCommandsCard />
 
-            <div className="mt-6 rounded-[16px] border border-line bg-paper divide-y divide-line overflow-hidden">
-              <LinkRow label="My application" sub="What you told us when you signed up" onClick={async () => { if (await confirmLeaveIfUnsaved()) nav('/application'); }} />
-              <LinkRow label="My profile" sub="Name, phone, address, car" onClick={async () => { if (await confirmLeaveIfUnsaved()) nav('/profile'); }} />
-            </div>
+            {/* Nov 2 client: Pause is a quiet link at the very bottom, not a big button. */}
+            {!pause.paused && (
+              <button type="button" onClick={() => setPauseOpen(true)} disabled={pause.busy}
+                      className="haptic mt-6 block w-full text-center text-[13px] text-muted underline underline-offset-2 disabled:opacity-60">
+                Need a break? Pause pickup messages
+              </button>
+            )}
+
+            {/* Nov 3 Yakov: no "My application" / "My profile" rows at the bottom. */}
           </FadeUp>
         )}
       </main>
@@ -311,17 +315,6 @@ function Toggle({ on, label, sub, onChange, disabled }: { on: boolean; label: st
       <span className={cx('relative inline-block w-12 h-7 rounded-full transition-colors shrink-0', on ? 'bg-forest' : 'bg-line')}>
         <span className={cx('absolute top-[3px] h-[22px] w-[22px] rounded-full bg-paper shadow-sm transition-all', on ? 'right-[3px]' : 'left-[3px]')} />
       </span>
-    </button>
-  );
-}
-function LinkRow({ label, sub, onClick }: { label: string; sub: string; onClick: () => void }) {
-  return (
-    <button onClick={onClick} className="haptic w-full min-h-[60px] flex items-center gap-3 px-4 py-3 text-left">
-      <span className="flex-1 min-w-0">
-        <span className="block text-[16px] font-bold text-ink">{label}</span>
-        <span className="block text-[14px] text-muted">{sub}</span>
-      </span>
-      <ChevronRight size={18} className="text-muted shrink-0" />
     </button>
   );
 }

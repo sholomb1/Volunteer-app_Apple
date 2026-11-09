@@ -37,7 +37,8 @@ const VIEW_KEY = 'zlz.centerhelp.view';
 const NOUN = 'center help shift';
 const canEditNow = () => canWrite(getUser()?.role);
 const taskLabel = (t: string) => (CENTER_HELP_TASK_LABELS as Record<string, string>)[t] ?? t;
-const TASKS = Object.entries(CENTER_HELP_TASK_LABELS) as Array<[CenterHelpTaskType, string]>;
+// Nov 6 Yakov: his 6 kinds (+ Other); old "Preparing deliveries" days keep their name but it is not offered
+const TASKS = (Object.entries(CENTER_HELP_TASK_LABELS) as Array<[CenterHelpTaskType, string]>).filter(([k]) => k !== 'preparing_deliveries');
 const hhmmOf = (iso: string) => { const d = new Date(iso); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const lbl = 'block text-[11px] font-extrabold uppercase tracking-[.05em] text-muted mb-1';
 const inp = 'w-full border border-line rounded-[8px] px-2 py-2 bg-paper text-[14px]';
@@ -473,12 +474,14 @@ function EditDayDialog({ inst, onClose, onCancelDay }: { inst: CenterHelpInstanc
   const [needed, setNeeded] = useState<number>(inst.volunteers_needed);
   const [notes, setNotes] = useState<string>(inst.notes ?? '');
   const [who, setWho] = useState<Who[]>(orig);
+  const [kind, setKind] = useState<CenterHelpTaskType>(inst.task_type as CenterHelpTaskType); // Nov 6 Yakov
   const [err, setErr] = useState<string | null>(null);
   const save = useMutation({
     mutationFn: async () => {
       await centerHelp.patchInstance(inst.id, {
         startsAt: new Date(`${date}T${start}`).toISOString(), endsAt: new Date(`${date}T${end}`).toISOString(),
         volunteersNeeded: needed, notes: notes.trim() || null,
+        ...(kind !== inst.task_type ? { taskType: kind } : {}),
       });
       const before = new Set(orig.map(whoKey)), after = new Set(who.map(whoKey));
       const add = who.filter((w) => !before.has(whoKey(w)));
@@ -508,7 +511,12 @@ function EditDayDialog({ inst, onClose, onCancelDay }: { inst: CenterHelpInstanc
                 </div>
               </div>
             )}>
-      <div className="text-[13px] font-bold text-ink">{taskLabel(inst.task_type)} · {dayLabel}</div>
+      <div className="text-[13px] font-bold text-ink">{taskLabel(kind)} · {dayLabel}</div>
+      <label><span className={lbl}>What kind of help</span>
+        <select value={kind} onChange={(e) => setKind(e.target.value as CenterHelpTaskType)} className={inp}>
+          {TASKS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          {!TASKS.some(([k]) => k === kind) && <option value={kind}>{taskLabel(kind)}</option>}
+        </select></label>
       {inst.template_id != null && (
         <div className="text-[11.5px] text-muted italic border-l-2 border-line pl-2">
           This shift is part of the weekly schedule. Editing here changes only THIS day.

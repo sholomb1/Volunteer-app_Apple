@@ -56,7 +56,7 @@ function RecentList({ rows, who }: { rows: any[]; who: 'store' | 'drivers' }) {
           <li key={r.id} className="flex items-start justify-between gap-3 px-3 py-2">
             <div className="min-w-0">
               <div className="text-[13px] font-semibold text-ink truncate">{(who === 'store' ? r.store : r.drivers) ? <bdi dir="auto">{who === 'store' ? tidyPlaceName(r.store) || r.store : stripUnit(r.drivers)}</bdi> : <span className="italic font-normal text-muted">No driver</span>}</div>
-              <div className="text-[11.5px] text-muted">{fmtDate(r.date, r.time)}</div>
+              <div className="text-[11.5px] text-muted">{fmtDate(r.date, r.time)}{r.miles != null ? ` · ${Number(r.miles).toFixed(1)} mi` : ''}{/* Nov 3 Yakov: automatic miles */}</div>
             </div>
             <div className="shrink-0 text-right text-[11.5px]">
               <div>{r.outcome_label || r.outcome ? <StatusPill of={{ outcome: r.outcome, outcome_label: r.outcome_label, kiosk_verified: r.kiosk_verified }} /> : <span className="font-bold text-ink">Still open</span>}</div>

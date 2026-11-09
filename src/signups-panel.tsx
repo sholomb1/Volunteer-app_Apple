@@ -4,13 +4,14 @@
  * alerts / welcome text, pre-filled from their answers) or "Not now".
  * API: routes/volunteer-signups.ts.
  */
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, canWrite, getUser, isDispatcherLogin } from './api';
 import { uiConfirm, uiNotify } from './ui-dialogs';
 import { fmtDay, fmtTimeEastern } from './time-format';
 import { callSummary } from './on-call'; // Oct 14 client (was to12h for the call hours)
-import { IntakeInfoCard } from './portal-sections';
+import { lazyNamed } from './lazy-load';
+const IntakeInfoCard = lazyNamed(() => import('./portal-sections'), 'IntakeInfoCard'); // Nov 3 client: speed — keeps the big panels file out of the first download
 
 type Signup = {
   id: number | string; firstName: string; lastName: string | null; phone: string | null; email: string | null;
@@ -173,7 +174,7 @@ function SignupCard({ r, writeOk, onDone }: { r: Signup; writeOk: boolean; onDon
       <button onClick={() => setShowFull((v) => !v)} className="mt-2 text-[13px] font-bold text-forest underline haptic">
         {showFull ? 'Hide full application' : 'Open full application'}
       </button>
-      {showFull && <IntakeInfoCard payload={r.intakePayload} receivedAt={r.intakeReceivedAt} kind="volunteer" />}
+      {showFull && <Suspense fallback={<div className="text-[13px] text-muted">Loading…</div>}><IntakeInfoCard payload={r.intakePayload} receivedAt={r.intakeReceivedAt} kind="volunteer" /></Suspense>}
 
       {writeOk && mode === 'none' && (
         <div className="mt-3 flex flex-wrap gap-2">

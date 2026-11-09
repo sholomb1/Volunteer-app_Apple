@@ -9,6 +9,8 @@
  * and Change → Settings. Open = the driver queue (pickups open 2 hours before
  * their time), so there is no "Later & tomorrow" line any more; the driver's
  * own upcoming pickups are under Coming up.
+ * Nov 3 Yakov: header = full name + unit # (no "Shalom"); the "Pickups by … Change"
+ * status row is gone (Settings has it); "Coming up" is titled "My pickups".
  */
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -20,7 +22,6 @@ import { useLocationReporting, getTrackingEnabled, setTrackingEnabled } from '..
 import { nyToday } from '../time-format';
 import { DriverCard, useTakePickup, fmtWhenLine, storeName } from './driver-card';
 import { uiConfirm } from '../ui-dialogs';
-import { PauseSheet, PausedBox, alertsOf, alertsShort, noAlerts, quietShort, useDriverSettings, usePause } from '../driver-settings'; // Oct 14 client
 
 const DONE = new Set(['completed', 'delivered', 'cancelled', 'missed']);
 // Oct 9 client: same "finished" rule as the Mine tab — the pickup is over, or
@@ -36,7 +37,9 @@ export function VolunteerHome({ user }: { user: AuthUser }) {
 
   const today = nyToday();
   const initials  = (user.firstName?.[0] ?? '') + (user.lastName?.[0] ?? '');
-  const firstName = user.firstName || 'friend';
+  // Nov 3 Yakov: the name on the driver record (the login's name until it loads) + unit #.
+  const fullName = String(mine.data?.profile?.name ?? '').trim() || `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || 'Welcome';
+  const unit = mine.data?.profile?.unitNumber != null && String(mine.data.profile.unitNumber).trim() !== '' ? String(mine.data.profile.unitNumber).trim() : '';
 
   // Your pickups: anything you have that isn't finished, up to today (incl. last night's).
   const myOpen = (mine.data?.data ?? [])
@@ -52,50 +55,22 @@ export function VolunteerHome({ user }: { user: AuthUser }) {
   const openNow = open.data?.data ?? [];
   const loadFailed = (open.isError && !open.data) || (mine.isError && !mine.data);
 
-  // Oct 14 client: status line = the driver's real setting (Settings screen), with Pause.
-  const settings = useDriverSettings();
-  const st = settings.data?.data;
-  const pause = usePause(st);
-  const [pauseOpen, setPauseOpen] = useState(false);
-  const quiet = quietShort(st);
-  const statusLine = !st ? ''
-    : pause.paused ? `⏸ ${pause.pausedLine}`
-    // Oct 28 client: the three ticks (App / WhatsApp / Text).
-    : noAlerts(alertsOf(st)) ? '🔕 No pickup messages'
-    : !st.smsOptIn && alertsShort(alertsOf(st)) === 'Text' ? '📩 Texts are turned off'
-    : `📩 Pickups by: ${alertsShort(alertsOf(st))}${quiet ? ` · Quiet ${quiet}` : ''}`;
+  // Nov 3 Yakov: no "Pickups by … · Change" / pause row on Home (Settings has it).
 
   return (
     <div className="min-h-screen pb-[80px]">
       <AppBar title="Zeh L'Zeh" right={<Avatar initials={initials} />} />
       <main className="px-5">
         <FadeUp>
-          <div className="font-display font-semibold text-[24px] leading-tight">Shalom, {firstName}</div>
-          {/* Oct 14 client: what really happens (Settings), not a misleading switch. */}
-          {/* Oct 14 client: paused → what it means ("No pickup messages until …") + Resume now. */}
-          {st && pause.paused && (
-            <div data-home-status className="mt-2"><PausedBox pause={pause} onChange={() => nav('/settings')} /></div>
-          )}
-          {st && !pause.paused && (
-            <div data-home-status className="mt-2 flex items-center gap-1.5 rounded-[14px] border border-line bg-paper pl-3.5 pr-1.5 py-1">
-              <span className="flex-1 min-w-0 text-[15px] font-bold text-ink/85 leading-snug py-1.5">{statusLine}</span>
-              {st.channel !== 'none' && (
-                <button onClick={() => setPauseOpen(true)} disabled={pause.busy}
-                        className="haptic shrink-0 min-h-[44px] px-3 rounded-[10px] border border-forest/40 bg-sage text-forest text-[15px] font-bold disabled:opacity-60">Pause</button>
-              )}
-              <button onClick={() => nav('/settings')}
-                      className="haptic shrink-0 min-h-[44px] px-2.5 text-[15px] font-bold text-forest underline underline-offset-2">Change</button>
-            </div>
-          )}
+          {/* Nov 3 Yakov: full name + unit number ("Yakov Taub #20"), no "Shalom". */}
+          <div className="font-display font-semibold text-[24px] leading-tight"><bdi dir="auto">{fullName}</bdi>{unit ? ` #${unit}` : ''}</div>
         </FadeUp>
 
-        {/* Oct 9 client: pause sheet — "for how long?" (Oct 14: shared with Settings) */}
-        {pauseOpen && <PauseSheet onPick={pause.pauseFor} onClose={() => setPauseOpen(false)} busy={pause.busy} />}
 
         {/* Your pickups */}
         {myToday.length > 0 && (
           <FadeUp delay={0.04}>
-            <SectionTitle>Your pickups</SectionTitle>
+            <SectionTitle>Today</SectionTitle>
             <div className="space-y-2.5">
               {myToday.map((p) => (
                 <DriverCard key={p.assignment_id ?? p.pickup_instance_id} p={p} mine onOpen={() => nav(`/pickup/mine/${p.pickup_instance_id}`)} />
@@ -107,7 +82,7 @@ export function VolunteerHome({ user }: { user: AuthUser }) {
         {/* Oct 9 client: Coming up — your own pickups tomorrow and the next few days. */}
         {comingUp.length > 0 && (
           <FadeUp delay={0.06}>
-            <SectionTitle>Coming up</SectionTitle>
+            <SectionTitle>My pickups</SectionTitle>{/* Nov 3 Yakov: was "Coming up" (same list) */}
             <div className="rounded-[16px] border border-line bg-paper divide-y divide-line overflow-hidden">
               {comingUp.map((p) => (
                 <button key={p.assignment_id ?? p.pickup_instance_id} onClick={() => nav(`/pickup/mine/${p.pickup_instance_id}`)}

@@ -87,8 +87,8 @@ const DISPATCHER_ALLOWED_TABS = new Set([
   'volunteers',        // Members
   'suppliers',         // Suppliers
   'my-shift',          // My Shift
-  'food-handle',       // Oct 30 client: Food to handle (package + add to the ordering platform)
-  'donations',         // Food Donations (Oct 7 client)
+  // Nov 4 Yakov: "Food to handle" crossed out of the dispatcher menu (was Oct 30 client) — see DISPATCHER_HIDDEN_TABS.
+  'donations',        // Food Donations (Oct 7 client)
   'change-password',   // rotate own password
 ]);
 // Oct 21 client (Yakov): "they should have it" — dispatchers get Messaging (Driver messages,
@@ -97,7 +97,7 @@ const DISPATCHER_ALLOWED_TABS = new Set([
 const DISPATCHER_MESSAGING_TABS = new Set(['driver-replies']);
 // Oct 22 client (dispatcher view): never shown to a dispatcher login, whatever its page access says
 // (the server refuses them too: apps/api/src/dispatcher-rules.ts).
-const DISPATCHER_HIDDEN_TABS = new Set(['suppliers', 'signups', 'who-gets-texts', 'texting-rules', 'chat-stores', 'chat-volunteers', 'sms-combo', 'emails']);
+const DISPATCHER_HIDDEN_TABS = new Set(['suppliers', 'signups', 'who-gets-texts', 'texting-rules', 'chat-stores', 'chat-volunteers', 'sms-combo', 'emails', 'food-handle']); // Nov 4 Yakov: + Food to handle
 export function isDispatcherLogin(role?: string | null): boolean {
   return String(role ?? getUser()?.role ?? '').toLowerCase() === 'dispatcher';
 }
@@ -132,9 +132,63 @@ export function canSeeTab(role: string | null | undefined, tabKey: string): bool
 // itself carries the role at issue time. To be safe when an admin changes
 // someone's role, tell the operator the affected user must re-login.
 export function roleChangeNeedsRelogin(): boolean { return true; }
-export function getUser(): AuthUser | null {
+/** The login as saved (never the dispatcher preview below). Use this when saving the user back with setAuth. */
+export function getRealUser(): AuthUser | null {
   const raw = localStorage.getItem(USER_KEY);
   return raw ? (JSON.parse(raw) as AuthUser) : null;
+}
+// Nov 4 Yakov: "🎧 Dispatcher view" — an office login (admin / staff / coordinator) can look at the portal
+// exactly as a dispatcher login sees it. Screen only: kept for this browser tab (sessionStorage), and the
+// server still uses the real login's rules (same token). getUser() then reports role 'dispatcher'.
+const DISPATCHER_PREVIEW_KEY = 'zlz_dispatcher_preview';
+const PREVIEW_ROLES = ['admin', 'staff', 'coordinator'];
+export function canPreviewDispatcher(u: AuthUser | null = getRealUser()): boolean {
+  return !!u && PREVIEW_ROLES.includes(String(u.role ?? '').toLowerCase());
+}
+export function isDispatcherPreview(u: AuthUser | null = getRealUser()): boolean {
+  try { return canPreviewDispatcher(u) && sessionStorage.getItem(DISPATCHER_PREVIEW_KEY) === String(u!.id); } catch { return false; }
+}
+/** Turn the preview on/off and reload, so every screen re-reads the login. */
+export function setDispatcherPreview(on: boolean) {
+  const u = getRealUser();
+  try {
+    if (on && u && canPreviewDispatcher(u)) sessionStorage.setItem(DISPATCHER_PREVIEW_KEY, String(u.id));
+    else sessionStorage.removeItem(DISPATCHER_PREVIEW_KEY);
+  } catch { /* private mode */ }
+  window.location.reload();
+}
+// Nov 5 client: "View: Office ▾ → Driver" for an office / dispatcher login with NO driver profile = a PREVIEW
+// of the driver app: the driver lists come back empty (no call to the server) and nothing is saved (every
+// write is stopped here, before it leaves the browser). The view choice is the same one view-switch.tsx keeps.
+const VIEW_KEY = 'zlz_view_mode';
+const DRIVER_PREVIEW_ROLES = ['admin', 'staff', 'coordinator', 'dispatcher'];
+export const DRIVER_PREVIEW_TEXT = "This is only a preview of the driver app — nothing was saved.";
+export function isDriverPreview(u: AuthUser | null = getRealUser()): boolean {
+  if (!u || !DRIVER_PREVIEW_ROLES.includes(String(u.role ?? '').toLowerCase()) || Number(u.driverProfileId ?? 0) > 0) return false;
+  try {
+    const o = JSON.parse(localStorage.getItem(VIEW_KEY) || '{}') as { uid?: number; view?: string };
+    return o.view === 'driver' && Number(o.uid) === Number(u.id);
+  } catch { return false; }
+}
+function driverPreviewEmpty(path: string, u: AuthUser): unknown {
+  const p = path.split('?')[0]!;
+  const name = String(u.firstName ?? '');
+  if (p === '/api/me/open-pickups') return { data: [] };
+  if (p === '/api/me/pickups') return { profile: { name, unitNumber: null }, data: [] };
+  if (p === '/api/me/history') return { profile: { name }, stats: { lifetime: 0, thisMonth: 0, hoursLogged: 0, rewardPoints: 0, donorsHelped: 0, lastPickupAt: null }, data: [] };
+  if (p === '/api/me/my-trips') return { data: [], stats: { pickups: 0, miles: 0, minutes: 0, stores: 0 } };
+  if (p === '/api/me/pickups/chat-summary') return { data: { total: 0, byPickup: [] } };
+  if (p === '/api/me/availability') return { data: { isAvailable: true, unavailableUntil: null } };
+  if (/^\/api\/me\/pickups\/\d+\/messages$/.test(p)) return { data: [] };
+  return undefined;
+}
+function previewStop(): never {
+  throw Object.assign(new Error(DRIVER_PREVIEW_TEXT), { status: 0, body: { error: DRIVER_PREVIEW_TEXT } });
+}
+
+export function getUser(): AuthUser | null {
+  const u = getRealUser();
+  return u && isDispatcherPreview(u) ? { ...u, role: 'dispatcher', accessSections: null } : u;
 }
 export function setAuth(token: string | null, user: AuthUser | null) {
   if (token === null) localStorage.removeItem(TOKEN_KEY); else localStorage.setItem(TOKEN_KEY, token);
@@ -232,6 +286,36 @@ async function readErrorBody(r: Response): Promise<any> {
   try { return decodeEnc(await r.json()); } catch { return {}; }
 }
 
+// Nov 8 client: "the dispatch screen loads way too slow" — a speed meter. Office logins only: every reply
+// that took 500 ms or more is noted (path without ids or search words, total ms, our server's own ms from
+// X-Zlz-Ms) and sent in small batches to /api/speed-log, so the slow parts can be found and fixed.
+type SpeedSample = { p: string; ms: number; srv: number | null };
+let speedBuf: SpeedSample[] = [];
+let speedTimer: ReturnType<typeof setTimeout> | null = null;
+function speedNote(path: string, method: string, ms: number, srvHeader: string | null) {
+  try {
+    if (path.startsWith('/api/speed-log') || ms < 500) return;
+    const role = String(getUser()?.role ?? '').toLowerCase();
+    if (!role || role === 'volunteer' || role === 'driver' || role === 'supplier' || role === 'store') return;
+    const p = `${method === 'GET' ? '' : method + ' '}${path.split('?')[0].replace(/\/\d+(?=\/|$)/g, '/:id')}`.slice(0, 120);
+    const srv = srvHeader != null && /^\d+$/.test(srvHeader) ? Number(srvHeader) : null;
+    if (speedBuf.length < 40) speedBuf.push({ p, ms: Math.round(ms), srv });
+    if (!speedTimer) speedTimer = setTimeout(speedFlush, 20_000);
+  } catch { /* never in the way */ }
+}
+function speedFlush() {
+  speedTimer = null;
+  const samples = speedBuf; speedBuf = [];
+  if (!samples.length) return;
+  const token = getToken();
+  if (!token) return;
+  let screen = '';
+  try { screen = (window.location.pathname + window.location.hash).slice(-80); } catch { /* no window */ }
+  fetch(API_BASE.replace(/\/$/, '') + '/api/speed-log', { method: 'POST', keepalive: true,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ screen, samples }) }).catch(() => { /* ignore */ });
+}
+
 export async function api<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = { ...((init.headers as Record<string, string>) || {}) };
   // Always declare JSON content-type for body-bearing verbs. CapacitorHttp
@@ -245,6 +329,16 @@ export async function api<T = unknown>(path: string, init: RequestInit = {}): Pr
   // broke "Delete" on the Edit Steady Pickup modal. Sending a `{}` body +
   // JSON content-type is a no-op on the server side but satisfies the parser.
   const isBodyMethod = method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
+  // Nov 5 client: driver-app preview (no driver profile) — empty driver lists, and no writes at all.
+  const realU = getRealUser();
+  if (realU && isDriverPreview(realU) && !path.startsWith('/api/auth/')) {
+    if (method !== 'GET') previewStop();
+    if (path.startsWith('/api/me/')) {
+      if (path.split('?')[0] === '/api/me/sse-token') previewStop(); // no live-updates token for a preview
+      const empty = driverPreviewEmpty(path, realU);
+      if (empty !== undefined) return empty as T;
+    }
+  }
   const finalInit: RequestInit = { ...init };
   if (isBodyMethod) {
     if (init.body == null) finalInit.body = '{}';
@@ -269,6 +363,7 @@ export async function api<T = unknown>(path: string, init: RequestInit = {}): Pr
   // Reads retry quietly (1.5s, then 3s); writes are never repeated.
   const doFetch = () => fetch(API_BASE.replace(/\/$/, '') + path, { ...finalInit, headers })
     .catch(() => { throw Object.assign(new Error(NETWORK_ERROR_TEXT), { status: 0 }); });
+  const speedT0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
   let r = await doFetch();
   for (const wait of method === 'GET' ? [1500, 3000] : []) {
     if (r.status !== 502 && r.status !== 503 && r.status !== 504) break;
@@ -278,6 +373,7 @@ export async function api<T = unknown>(path: string, init: RequestInit = {}): Pr
   // Portal-wide force-refresh check. Any response can carry the epoch; if the
   // server has bumped ahead of what this tab has seen, wipe caches, unregister
   // the SW, and reload. Runs at most once per page load.
+  speedNote(path, method, (typeof performance !== 'undefined' ? performance.now() : Date.now()) - speedT0, r.headers.get('X-Zlz-Ms'));
   maybeForcePortalReload(r.headers.get('X-Portal-Reload-Since'));
   if (r.status === 401) {
     const isLoginCall = path.includes('/auth/login');
@@ -473,7 +569,7 @@ export const onDuty = {
 export const volunteer = {
   open:    () => api<{ data: OpenPickup[] }>('/api/me/open-pickups'),
   // Oct 14 client: a pickup the driver gave back is not theirs any more (older API still sent it).
-  mine:    () => api<{ profile: { name: string }; data: MyPickup[] }>('/api/me/pickups')
+  mine:    () => api<{ profile: { name: string; unitNumber?: number | string | null }; data: MyPickup[] }>('/api/me/pickups') // Nov 3 Yakov: + unit #
     .then((r) => ({ ...r, data: (r.data ?? []).filter((p) => !['declined', 'cancelled'].includes(String(p.assignment_status ?? ''))) })),
   history: () => api<{ profile: { name: string }; stats: HistoryStats; data: any[] }>('/api/me/history'),
   // Client Aug 18: mobile-app usage tracking. Native app calls this on
@@ -652,6 +748,8 @@ export type DispatcherRosterRow = {
   portalLogin?: any | null;
   currentShift: DispatcherShiftInfo | null;
   nextShift: DispatcherShiftInfo | null;
+  /** Nov 5 client: has an active dispatcher / office login (On Deck needs it). */
+  canDispatch?: boolean;
 };
 export type DispatcherCandidate = {
   id: number;
@@ -1231,12 +1329,15 @@ export const shifts = {
 };
 
 // batch abc801 Aug 9 — Center Help schedule (packing, stocking, deliveries, cleaning, other).
-export type CenterHelpTaskType = 'packing_orders' | 'stocking_shelves' | 'preparing_deliveries' | 'cleaning' | 'other';
+export type CenterHelpTaskType = 'packing_orders' | 'stocking_shelves' | 'preparing_gifts' | 'sorting_food' | 'cleaning' | 'unloading_food' | 'preparing_deliveries' | 'other'; // Nov 6 Yakov
 export const CENTER_HELP_TASK_LABELS: Record<CenterHelpTaskType, string> = {
-  packing_orders:       'Packing Orders',
-  stocking_shelves:     'Stocking Shelves',
-  preparing_deliveries: 'Preparing Deliveries',
-  cleaning:             'Cleaning',
+  packing_orders:       'Packing orders',
+  stocking_shelves:     'Scanning & restocking shelves',
+  preparing_gifts:      'Preparing gifts',
+  sorting_food:         'Sorting incoming food',
+  cleaning:             'Cleaning & organizing',
+  unloading_food:       'Unloading incoming food',
+  preparing_deliveries: 'Preparing deliveries',
   other:                'Other',
 };
 export type CenterHelpTemplate = {
@@ -1267,7 +1368,7 @@ export const centerHelp = {
     if (to)   qs.set('to',   to);
     return api<{ data: CenterHelpInstance[] }>(`/api/center-help/instances${qs.toString() ? `?${qs}` : ''}`);
   },
-  patchInstance:  (id: number, body: Partial<{ volunteersNeeded: number; notes: string | null; startsAt: string; endsAt: string; cancel: boolean }>) =>
+  patchInstance:  (id: number, body: Partial<{ volunteersNeeded: number; notes: string | null; startsAt: string; endsAt: string; cancel: boolean; taskType: CenterHelpTaskType }>) =>
     api<{ data: any }>(`/api/center-help/instances/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   assign:         (id: number, volunteerIds: number[], typedIds: number[] = []) =>
     api<{ data: { added: number } }>(`/api/center-help/instances/${id}/assign`, { method: 'POST', body: JSON.stringify({ volunteerIds, typedIds }) }),
@@ -1525,6 +1626,7 @@ export type DispWeeklyRow = {
   startAt: string; endAt: string;   // ISO tstz
   shiftId: number | null;
   volunteerId: number | null; firstName: string | null; lastName: string | null; phone: string | null;
+  recurringShiftId?: number | null; everyWeek?: boolean; // Nov 6 Yakov: covered by a running weekly series
 };
 export const dispatcherShifts = {
   listSlots: () => api<{ data: DispShiftSlot[] }>('/api/dispatcher-shift-slots'),
@@ -1536,10 +1638,12 @@ export const dispatcherShifts = {
   weekly: (weekStart: string) =>
     api<{ data: DispWeeklyRow[]; weekStart: string; covered: number; total: number }>(
       `/api/dispatcher-shifts/weekly?week=${encodeURIComponent(weekStart)}`),
-  assign: (body: { slotId: number; weekStart: string; volunteerId: number }) =>
-    api<{ shiftId: number }>('/api/dispatcher-shifts/assign', { method: 'POST', body: JSON.stringify(body) }),
-  unassign: (shiftId: number) =>
-    api<{ ok: boolean }>(`/api/dispatcher-shifts/assign/${shiftId}`, { method: 'DELETE' }),
+  // Nov 6 Yakov: repeat 'weekly' = every week (default in the Assign popup); 'once' = just this week
+  assign: (body: { slotId: number; weekStart: string; volunteerId: number; repeat?: 'once' | 'weekly' }) =>
+    api<{ shiftId: number; everyWeek?: boolean; skipped?: string[] }>('/api/dispatcher-shifts/assign', { method: 'POST', body: JSON.stringify(body) }),
+  // scope 'future' = "Every week from now on" (stops the weekly series); default = just this week
+  unassign: (shiftId: number, scope?: 'week' | 'future') =>
+    api<{ ok: boolean }>(`/api/dispatcher-shifts/assign/${shiftId}${scope === 'future' ? '?scope=future' : ''}`, { method: 'DELETE' }),
 };
 
 // Sep 4 client feature: 90-min uncovered pickup alert group.

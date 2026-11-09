@@ -41,6 +41,370 @@ type Release = { liveAt: string | null; title: string; items: Item[] };
 // Newest first. liveAt = when it reached the live site (New York time).
 const RELEASES_SRC: Release[] = [
   {
+    liveAt: '2026-11-08T18:35',
+    title: 'Kiosk: the sign-in tap can no longer pick a store',
+    items: [
+      // Nov 8 client: after sign-in the kiosk opened straight to a store
+      ['Kiosk', 'The kiosk starts fresh after each person.', 'After a drop-off (or Start over, or 1 minute with no touch) the kiosk page reloads, so every person starts clean and the tablet always has the newest version, with no restart. If the internet is down at that moment it just clears the screen instead, so it never lands on an error page.', 'change'],
+      ['Kiosk', 'Tapping "Yes, that is me" no longer also picks a store.', 'When a driver with no pickup signed in, the same tap could land on the store list that opened under the finger, so the kiosk went straight to a store. The store screen now ignores taps for a moment, counted from the tap itself.', 'fix'],
+    ],
+  },
+  {
+    liveAt: '2026-11-08T18:19',
+    title: 'Clean up the store list',
+    items: [
+      // Nov 8 client: store list full of junk, doubles and unused names
+      ['Office', 'Suppliers: new 🧹 Clean up stores button.', 'It sorts the store list into: names that look like junk (just numbers, an address, a test), the same place listed twice, stores never used, and stores not used in 3+ months, plus the full list. Tick and press Hide to take stores off every list (their history stays). Merge into… moves all pickups, drop-offs and steady pickups to the right name and hides the other. A store with a steady pickup is never hidden by mistake. Admins only.', 'new'],
+      ['Kiosk', 'A store name typed at the kiosk now waits for the office.', 'When a driver types a new store name, it is saved with the drop-off but does not show on the store lists until the office approves it under Suppliers. No more junk names on the kiosk list.', 'change'],
+    ],
+  },
+  {
+    liveAt: '2026-11-08T17:39',
+    title: 'Kiosk: no more store picked by mistake',
+    items: [
+      // Nov 8 client: the kiosk kept choosing 381 Viola - Yoily Tabak by itself
+      // Nov 8 client: new label — QR code, small times, smaller kind
+      ['Kiosk', 'New label: a QR code for each box, and small times.', 'Every label now has a small QR code at the bottom that says exactly which box it is and which store it came from (for scanning into the inventory system later). Under the date, in small print: the driver (Binyomin G.), then Accepted (when he took his pickup) and Drop-off time. The caterer still prints on top when the pickup has one. Milchig / Fleishig / Pareve is a little smaller to make room. Same printer and printer fonts as before.', 'change'],
+      // Nov 8 client: tap the store chip to change the store
+      ['Kiosk', 'Picked the wrong store? Tap the store name at the top to change it.', 'On the What did you bring? screen, the store name at the top now says Change. Tapping it opens the store list; the food already counted moves to the store you pick.', 'new'],
+      // Nov 8 client: center help always offered, store screen first
+      ['Kiosk', 'Center help: always the same start, and open to everyone.', 'After signing in, everyone first sees the store screen. Anyone can tap Here to help in the center at the bottom to punch in, even without a shift. Someone with a center help shift today (or already punched in) sees a big Center help button at the top. After punching in: Thanks for coming! Do not forget to punch out at the end of your shift, plus a link to send feedback.', 'change'],
+      // Nov 8 client: buttons a drop too fast
+      ['Kiosk', 'Kiosk buttons are a little calmer.', 'Big kiosk buttons light up when touched and act when the finger lifts, so a finger that only meant to scroll no longer presses them. Slow or heavy presses still work.', 'change'],
+      // Nov 8 client: a note on a line, printed on the label
+      ['Kiosk', 'Add a note to a line, and it prints on the label.', 'After tapping Trays, Boxes, Bags or Cases, the driver can tap 📝 Add note under that line (for example: Keep cold, or For Shabbos). The note prints at the bottom of every label for that line, and the office sees it in the drop-off notes. Caterers already print on the label when the pickup has a caterer.', 'new'],
+      ['Kiosk', 'The kiosk no longer picks a store by itself.', 'When a driver had no pickup to show, his tap on the screen before also landed on the store list, so a store near the top (often 381 Viola - Yoily Tabak) was chosen by mistake. Now the store screen ignores taps for a moment when it opens, so only a real tap picks a store. The complete store list is still there.', 'fix'],
+    ],
+  },
+  {
+    liveAt: '2026-11-08T14:01',
+    title: 'Driver on the way: the right street',
+    items: [
+      // Nov 8 client: the form preview showed 57 Regina Ct
+      ['Office', 'The "driver on the way" preview on the pickup form now shows that pickup\'s own street.', 'Before, the grey preview under "Text the contact when a driver is on the way" always showed a sample street (57 Regina Ct). Now it shows the street typed in the pickup address. Store texts also use the pickup address when there is one (before: the store\'s saved address).', 'fix'],
+    ],
+  },
+  {
+    liveAt: '2026-11-08T01:47',
+    title: 'Kiosk: 2-driver pickups stay open for the second driver',
+    items: [
+      // Nov 8 client: Emails tab said email isn't connected
+      ['Office', 'Emails now really go out.', 'The Emails tab (Messaging) used to save emails without sending them, because it was never connected. Now it sends with the same Gmail login you saved under Food Donations, Email connection (the one dispatch replies already use). Only emails you write go out. The automatic Sunday emails stay off.', 'fix'],
+      // Nov 8 client: the Dispatch screen loads way too slow
+      ['Office', 'Speed meter: the app now notes which screens load slowly, so we can fix them.', 'For office logins only. When something takes half a second or more to load, the app quietly notes which part it was and how long it took. Nothing changes on screen. This helps us find and fix the slow parts of the Dispatch screen.', 'change'],
+      // Nov 6 client: Rivermill 10:00 AM needed 2 drivers; the first kiosk check-in closed it
+      ['Office', 'A pickup that needs 2 drivers stays open until the second driver checks in too.', 'Before, when a pickup needed 2 drivers (for example Rivermill 10:00 AM after the store asked for another driver), the first driver checking in at the kiosk closed the whole pickup and it left the drivers list. Now his part is marked done and the pickup stays open: the Live Board and the drivers list show it needs 1 more driver. When the second driver checks in at the kiosk it links to the same pickup and closes it. If nobody else comes, it closes by itself at the end of its time as done (never missed). In Close out it can only be marked Done. One-driver pickups, Mark done and a driver Done for a delivery work as before.', 'fix'],
+    ],
+  },
+  {
+    liveAt: '2026-11-06T11:01',
+    title: 'Neat dispatcher picker, one Dispatch page',
+    items: [
+      // Nov 6 client: "the unit number, name and phone number of the person who wrote it"
+      ['Office', 'Handover notes show who wrote them, with a Call and Text button.', 'A new handover note now shows the name and unit number of the dispatcher who wrote it, his phone number, and 📞 Call and 💬 Text buttons, so the next dispatcher can ask him questions. Older notes show only the name.', 'new'],
+      // Nov 6 client: "If I don't see the next dispatcher logged on, I should see it somewhere and have to call him"
+      ['Office', 'Next dispatcher not signed in? You see it and can call him.', 'From 10 minutes before your dispatch shift ends until 30 minutes after, if the next dispatcher has not signed in yet, an orange line shows on top of Dispatch: for example Dovid L. starts at 8:00 PM and has not signed in yet, please call him, with 📞 Call and 💬 Text (a ready message). If no one is scheduled after you, it says so, and the office gets a bell alert. When you tap Turn forwarding off or Sign out while the next one has not signed in, it asks first: Call him before you go? At the end of your shift you also get one bell alert with 📞 Call. No alerts on Shabbos and Yom Tov.', 'new'],
+      // Nov 6 client
+      ['Office', 'Roster: Assigned shows everyone who has a shift coming up.', 'Before, it only showed shifts in the next 24 hours. On Deck / Available now means a dispatcher with no shifts scheduled.'],
+      // Nov 6 Yakov: "Should be recurring, not only once"
+      ['Office', '↻ Assign a dispatcher for every week.', 'In Dispatch → Shift calendar, tap Assign on an open shift. On top you pick: Every week (for example every Sunday 9:30 AM – 1:30 PM), which is the default, or Just this once (one date). Every week puts him on that shift for this week and all the coming weeks, and the list shows ↻ Every week under his name. A week someone else already has stays with them. Release on an every week shift asks: Just this week, or Every week from now on. New shift says Every week / Just this once too.', 'new'],
+      // Nov 6 Yakov: "Sat 9:30 PM – Fri 1:16 AM No one" on every day
+      ['Office', 'This week shows each day on its own.', 'In This week, a time with no one scheduled now shows only the part on that day (for example 1:30 PM – 5:30 PM No one). A day with nobody on it says No one scheduled all day. No more one long line with a strange time like Fri 1:16 AM on every day.', 'fix'],
+      ['Office', 'Right now shows the next dispatcher shift too.', 'Under Right now, Dispatcher shifts: now and next lists the shift on now (✓ Signed in or Not signed in yet) and the next one (for example Moshe A. Next shift · starts Sun 9:30 AM). Dispatchers see it on My Dispatch too.', 'change'],
+      // Nov 6 Yakov
+      ['Office', 'Driver view shows the full driver menu.', 'When an office login switches to View: Driver, the menu now has Home, Pickups, Map, Chat, My Activity, My Profile and Settings, plus Back to the office.'],
+      // Nov 6 Yakov: "he should be able to call him if they forget to sign in, or maybe they can see it on the Schedule"
+      ['Office', '🕒 See if the dispatcher on shift signed in.', 'On the Dispatch page, Right now and today in This week show each dispatcher shift that started: ✓ Signed in 9:02 AM (green) or Not signed in yet — started 12 min ago (orange). A shift that starts within 30 minutes says Starts at 2:30 PM. If he did not sign in, tap 📞 Call or 💬 Text (a ready text asks him to please sign in; nothing is sent until you press Send). Dispatchers see only the status, no buttons. On the bar, ✓ = signed in, ⚠ = not yet.', 'new'],
+      ['Office', '🔔 A bell alert when a dispatcher did not sign in.', 'If a dispatcher has not signed in 15 minutes after his shift started, the office bell shows: Moshe A. has not signed in, with a 📞 Call button. Once per shift, only in the bell (no phone alert), only for the office, never on Shabbos or Yom Tov. It goes away by itself when he signs in.', 'new'],
+      // Nov 6 Yakov: "pause his steady pickup — it should be open for others"
+      ['Office', '🚗 Open one steady pickup to other drivers for some days.', 'Open the steady pickup (Steady pickups → Edit). Under Usual driver off — open for others, pick From and To (and a note if you like). If the steady has more than one usual driver, tick who is off (all are ticked at first). Tap Open for other drivers. It works right away. For those days the usual driver is off this pickup only, and it goes out to other drivers like any open pickup. He still gets his texts, and his other steady pickups stay as they are. The list shows the days, who is off and who set it. Change dates or tap ✕ to put him back on the days still open with no other driver. On those days the pickup card and the pickup page say Usual driver off — open for others. The Pause question on the driver card is the same as before.', 'new'],
+      // Nov 6 Yakov
+      ['Office', 'Call someone: type a unit number or a name.', 'In Dispatch, Call someone now finds the driver as you type his unit number (or name) — pick him and press Call. A phone number still works.'],
+      ['Office', 'Handover notes show who wrote them with the unit number.', 'For example: From Moshe A. #20.'],
+      // Nov 6 Yakov
+      ['Office', 'Center help has 6 kinds of work.', 'Packing orders, Scanning & restocking shelves, Preparing gifts, Sorting incoming food, Cleaning & organizing, Unloading incoming food (and Other). You can also change the kind of one day in Edit center help shift.'],
+      // Nov 6 client: "Can we get a more neat thing for this?" (the Who dropdown) + one Dispatch page
+      ['Office', '👤 A neat new way to pick a dispatcher.', 'Instead of the plain list, tap the box and a small window opens (on a phone it comes up from the bottom). It has a search box and a clear list: a round badge with initials, the name (like "Baruch R."), and small tags: on deck (green), on shift now, calls off, no cell (orange). On deck comes first, then the other dispatchers. People with no dispatcher login yet are folded at the bottom. If a dispatcher has calls off or no cell, you cannot pick him for calls: tap him to see why. In Put someone on right now and Plan a change for later, the last line is Type a phone number. Works with the keyboard too (arrows, Enter, Esc). The same picker is used in Assign dispatcher and in New shift / Edit shift.', 'new'],
+      ['Office', '📞 Dispatch is one page now.', 'No more Today / Schedule switch. On top: the green line, the handover note (only when you did not read it yet) and the calls today line. Right under it: Right now, Put someone on right now, the Calendar switch and This week. The long parts at the bottom are folded: Shift calendar, Weekly shift template and Roster: who can dispatch. Tap one to open it; it stays open next time. Dispatchers see the same one page on My Dispatch (view only). Old links still work.', 'change'],
+      ['Office', 'Driver replies and the 90-minute alert moved to Admin → Dispatch settings.', 'Who gets driver replies and Who gets the 90-minute alert are now on their own tab: Admin → Dispatch settings → Driver replies & alerts. Nothing about them changed.', 'change'],
+      ['Office', 'A clear note about the Reliable phone app.', 'Under Put someone on right now it now says: putting someone on here overrides what is set for ext. 103 in the Reliable phone app. When nobody is put on (forwarding off), calls follow the rules set in the Reliable app. The Turn forwarding off question says the same.', 'change'],
+    ],
+  },
+  {
+    liveAt: '2026-11-06T00:31',
+    title: 'Simpler dispatch schedule',
+    items: [
+      // Nov 5 client: "I feel like there's some stale sessions … make the calendar a drop more friendly … offer dispatchers on deck first … take away the to-dos for right now"
+      ['Office', '📅 Dispatch → Schedule is simpler: Right now, Put someone on right now, and one Calendar switch.', 'On top: who gets dispatch calls right now, for example "Moshe A. — put on by hand", with Stop. Under it, Put someone on right now: pick a dispatcher (the ones on deck are first) or type a phone number, choose until when (until the next shift, 1, 2 or 4 hours, or until you stop it), and tap Put on now. Calls go there right away. Then one switch: Calendar Active (calls follow the shifts) or Not active (the calendar is ignored). To plan a change for another day, tap Plan a change for later.', 'change'],
+      ['Office', '📅 A friendlier week calendar.', 'Each day is one row with a bar from 6 AM to 2 AM: green = on shift, blue = put on by hand, light orange = no one scheduled. Today is highlighted, with a red line for now. Shifts that overlap are shown one under the other. Under the bar the same times are written out, easy to read on a phone. Tap any block to see the details, or to remove a hand pick. Names show short, like "Moshe A.". Dispatchers see the same calendar (without phone numbers or buttons).', 'new'],
+      ['Office', '"No one scheduled" no longer covers real shifts, and old shifts are gone from the schedule.', 'The orange "no one scheduled" lines only show the hours nobody covers, even when shifts overlap. Old weekly shifts of people who are no longer dispatchers (for example Sunday 3 PM – 7 PM and 4 PM – 8 PM) do not show on the schedule any more, and calls never go to them.', 'fix'],
+      ['Office', 'When you pick a dispatcher, the ones on deck come first.', 'In Put someone on right now, Plan a change for later, and when you assign a shift (Dispatcher shifts, New shift, Edit shift), the dispatchers who are On Deck / Available on the Roster are listed first, with a small "on deck" tag.', 'change'],
+      ['Office', 'To do is hidden from Dispatch for now.', 'The To do list is not on Dispatch → Today or My Dispatch any more, and the red count is gone from the Dispatch menu item. It is saved and can come back later. Missed calls, texts and driver replies are still in Calls history, Texts and the driver messages.', 'change'],
+      // Nov 5 client: "Today is still too much going on"
+      ['Office', 'Dispatch → Today is short now.', 'Today shows only the green line on top, the handover note (only when there is one you did not read yet), and one line: 📞 calls today · missed. On My Dispatch, your shifts, phone alerts and settings are folded under one line: tap it to open.', 'change'],
+      // Nov 5 client: "On Deck shows people who are not real dispatchers"
+      ['Office', 'On Deck shows only people who can really dispatch.', 'On the Roster, On Deck / Available now lists only dispatchers with a dispatcher or office login. People who ticked "Dispatcher" under Helps with but have no dispatcher login yet are in a small folded list under it: Interested in dispatching — no dispatcher login yet. Their cards keep the same buttons (Create portal login, Remove). Nothing about them was changed. When you pick a dispatcher (Put someone on right now, Plan a change, Assign, New shift), they come last, marked no dispatcher login yet.', 'change'],
+    ],
+  },
+  {
+    liveAt: '2026-11-05T23:13',
+    title: 'Shorter driver on the way text',
+    items: [
+      // Nov 5 client: "as soon as you send a thank you, the count should restart"
+      ['Texts', 'The Friday / erev Yom Tov thank-you now counts every pickup since the last weekly thank-you.', '"Together you covered N pickups" now counts every pickup scheduled since the last weekly thank-you went out, up to the moment this one goes out: Motzei Shabbos and late Thursday night pickups too, done yet or not. It leaves out cancelled pickups, test pickups, drop-off days nobody came to, and pickups the office marked missed (close-out or Mark missed). Pickups closed automatically as needs review or expired still count. Every kiosk drop-off that is not for a pickup (a walk-in) adds 1. The list of drivers who drove this week uses the same days. The nightly thank-you did not change.', 'change'],
+      // Nov 5 client: "a setting in each dispatcher: if the person gets calls, gets a text reminder, how many minutes before … and a message when it's finishing … with on/off buttons for both"
+      ['Office', '⚙️ Each dispatcher has his own settings now: gets calls, a reminder before the shift, and a thank-you after.', "Dispatch → 📅 Schedule → Roster. Each dispatcher's card has a small Settings area with three on/off switches, all on at the start. 📞 Gets dispatch calls: when off, calls never go to him. During his shift the calls go to the next dispatcher on shift, or the backup, and his shifts show \"no calls\". I'm dispatching now and overrides can't send calls to him while it is off. ⏰ Reminder before the shift: a text like \"Hi Yakov, just a reminder — your dispatch shift starts at 3 PM. Thank you!\" Pick 5, 10, 15 or 30 minutes before (5 at the start). 🙏 Thank-you at the end of the shift: when the shift ends he gets \"Thank you for your shift today, Yakov, and for all you did! – Zeh L'Zeh\". Each text goes once per shift, never on Shabbos or Yom Tov, not in his quiet times, and not if he turned texts off. Back-to-back shifts count as one. To change the wording for everyone, tap ✏️ Reminder and thank-you texts above the roster. Dispatchers can turn their own reminder and thank-you on or off on My Dispatch → ⚙️ My settings. Only the office can change Gets dispatch calls.", 'new'],
+      // Nov 5 client
+      ['Texts', 'Shorter "driver on the way" text to stores and donors.', 'It now says: Zeh L\'Zeh: A driver is on the way to 57 Regina Ct. If the address is wrong or anything is different, please call our dispatcher at (845) 363-5323 ext. 103. (Their own address is filled in.) A CANCEL reply still works.'],
+      // Nov 5 client: "I don't want it in the store's profile. I want it in the steady profile. Each steady should have this."
+      ['Stores', '⏰ The text to the store before a pickup is now set on each steady pickup, not on the store.', "Open a steady pickup (Steady pickups → Edit). Under Remind the store before pickup, tick Text the store a reminder before each pickup, pick how long before (30 minutes to 4 hours), and change the message if you like ({time} = the pickup time, {store} = the store name). You see an example of the text and which store phone it goes to (or that the store has no phone saved, or has texts off, so it gets only the app pop-up). Then Save. It is off for every steady until you turn it on. The store gets one text per pickup, never on Shabbos or Yom Tov, and not for a cancelled or finished pickup. One-time pickups don't get this reminder. The box is gone from the store profile; stores that had it on keep getting it: their steady pickups got the same setting.", 'change'],
+    ],
+  },
+  {
+    liveAt: '2026-11-05T22:36',
+    title: 'Who gets dispatch calls: schedule and overrides',
+    items: [
+      // Nov 5 client: "it should show somewhere the upcoming schedules … an option to override the schedule … from this time to this time … with a checkbox"
+      ['Office', '📞 New "Who gets calls" page: see who gets dispatch calls, the next 7 days, and override the schedule.', "Dispatch → 📅 Schedule, at the top (admins can change it). On top, one line says who gets calls to (845) 363-5323 ext. 103 right now, and why: \"by the regular schedule\", \"override until 6 PM\", or \"Nobody — only the dispatch line rings\", with Turn forwarding off. Under it, the checkbox Follow the regular schedule: when on, calls switch to whoever is on shift. Coming up shows the next 7 days: every shift in green, times with no one scheduled in orange, and overrides in blue with ✕ to remove one. ➕ Override the schedule: pick a dispatcher (or type a cell number and name), a From day and time and a To day and time, and Save. During that time the calls go to that person instead of the schedule; when it ends, they go back to the regular schedule (if the schedule is off, forwarding turns off). Overrides can be days ahead. 📲 I'm dispatching now still works the same. The phone settings tab is now called Phone system (Admin → Dispatch settings). Turn forwarding off now stays off until the next shift or override (before, the schedule could turn it back on a minute later).", 'new'],
+      // Nov 5 client: "put by the dispatch tab these things … this just has dispatcher calendars … this screen should also be by Dispatch"
+      ['Office', '📅 Dispatch has two views now: Today and Schedule.', "At the top of Dispatch there is a small switch: Today and 📅 Schedule. Today is the everyday screen, same as before: the green line, the handover note, To do and today's calls. 📅 Schedule has everything about who dispatches when: Who gets dispatch calls (Right now, Follow the regular schedule, ➕ Override the schedule, Coming up for the next 7 days), then the dispatcher shifts calendar and the weekly shift template, then the roster of who can dispatch (with who gets driver replies and the 90-minute alert). Admin → Dispatch setup is now called Dispatch settings and keeps only the bigger settings: Logins & attendance, Phone system and Voicemail. Dispatchers get 📅 Schedule on My Dispatch too: who gets calls now and the next 7 days, with 📲 I'm dispatching now. They can't change the schedule. Old links still open the right place.", 'change'],
+      // Nov 5 client
+      ['Office', '"Turn forwarding off" is on the Dispatch screen.', 'In the green strip on top. Admins can always turn it off; a dispatcher can turn it off when the calls are going to his own cell (for example at the end of his shift). Then calls to ext. 103 ring only the dispatch line.'],
+    ],
+  },
+  {
+    liveAt: '2026-11-05T01:18',
+    title: 'Dispatch line only, driver stays off',
+    items: [
+      // Nov 6 client: steady driver sets Away dates → ask if his steady pickups should go to another driver
+      ['Drivers', '✈️ Away dates: a steady driver is asked if his steady pickups should go to another driver.', "When a steady driver sets Away dates (in Settings, or Pause for today, a week or until a date), the app asks: \"You have steady pickups on those days (Hive Deli Tue, Nov 10, ...). Would you like your pickups to go out to another driver for those days?\" Yes: he is taken off those days only, the same way as \"not available today\", and the pickups are open for the group with the usual pickup texts. No: he stays on them. Steady days made later for those dates don't put him back on. When he clears or shortens his Away dates, it asks: \"Put you back on your steady pickups for those days?\" (only days that are still open with no other driver). The office gets the same questions when it pauses a driver on his card (Settings tab). Drivers who use texts only (no app) get the question only through the office for now.", 'new'],
+      // Nov 6 client: "add an option from which caterer the food is coming from, and print it on the labels"
+      ['Kiosk', '🍽 New "Caterer" box on pickups, and it prints on the food labels.', "On the office New pickup and Edit pickup forms there is a new box, Caterer (optional), mainly for one-time and event pickups. Start typing and it suggests caterer names you used before. The outside pickup request form has it too: \"Caterer (if the food is from a caterer)\". The caterer shows on the Live Board card (🍽 Caterer: Gourmet Glatt), on the pickup page and on the driver's pickup. At the center kiosk, the driver sees it when he picks his pickup, and every label from that pickup prints the caterer on top with the store or address under it. Long names go on 2 lines. Printed labels in Kiosk Activity shows it too. The kiosk tablet prints caterer labels after Sholo puts the new app on it.", 'new'],
+      // Nov 5 client: "We need to simplify this … just the basic, very, very basic clear dispatching"
+      ['Office', 'Dispatch is now one simple screen, with no tabs.', 'Office and dispatchers see the same screen (for dispatchers it is My Dispatch). On top, a thin green line shows who gets dispatch calls now, (845) 363-5323 ext. 103, with 📲 I\'m dispatching now, 📞 Call someone and 📝 Write handover note. The handover note only shows when there is a new note you haven\'t read. To do shows what is waiting, or just \"All clear ✓\". Today\'s calls is one line, like \"12 calls today · 1 missed\"; tap it to see them. Top right: Calls history (the tiles and all calls) and Texts. The Dispatcher guide is now in the ? help menu. The setup parts moved to Admin → Dispatch setup: Roster, Shifts, Logins & attendance, Forwarding & phone (with \"How dispatch phones work\") and Voicemail (admins only). The dispatcher reports and busiest-times chart are in Reports → Dispatchers. Old links still open the right place.', 'change'],
+      // Nov 5 client: "three options: switch to driver, to their admin, and to dispatcher level"
+      ['Office', 'One "View" switch at the top: Office, Dispatcher or Driver.', 'It replaces the "🚗 Driver view" and "🎧 Dispatcher view" buttons. Admins and the office get three choices: Office (everything), Dispatcher (what a dispatcher sees) and Driver (the driver app). Dispatchers get two: Dispatcher and Driver. Driver works for everyone now: if you also drive, it is your own driver app; if you don\'t have a driver profile, it shows how the driver app looks, with empty lists, and nothing you tap is saved. A yellow bar on top says "You\'re seeing the driver app" with a button to go back.', 'new'],
+      // Nov 5 client
+      ['Office', 'Calls list: one row per call you make, and one recording at a time.', 'When you press Call, the phone system first rings your own phone and then dials the person. That first ring used to show as an extra 0-second call to yourself; now only the real call shows. Starting a recording or voicemail stops any other one that is playing. The call note pickup box now says About which pickup.'],
+      // Nov 5 client: the office's Dispatcher Guide in the app
+      ['Office', '📖 The office\'s Dispatcher guide is in the app: ? help menu → 🎧 Dispatcher guide.', "It replaces the short quick guide. It opens folded to its section titles (Answering Calls, Following Up with Drivers, Handling Cancellations, End-of-Shift Handover and more); tap a title to read it. It uses the real button names and the dispatch line, (845) 363-5323 ext. 103. Section 4 says it plainly: only some stores get an automatic text when a driver is on the way (the office turns this on per store); for the others, text or call them yourself with 💬 Text store. Admins still also have \"How dispatch phones work\".", 'new'],
+      // Nov 5 client: Dispatcher guide 5 — check-in after 2 hours
+      ['Office', 'To do: check in on a driver 2 hours after he took a pickup and it is still not dropped off.', "To do shows \"Moshe K. took Hive 2 h ago — not dropped off yet\" with 💬 Text: the ready \"Driver check-in\" message opens for him (\"Hi Moshe, just checking in on the Hive pickup — is everything OK?\"), and you press Send. The 2 hours count from when he took it, or from the pickup time if that is later. If he doesn't answer in 30 minutes, it changes to \"No answer for 30 min — call him\" with 📞 Call. ✓ Handled clears it. Only today's pickups, never on Shabbos or Yom Tov, and nothing is ever sent by itself. Admins can change the message under 📝 Templates → Edit.", 'new'],
+      // Nov 5 client: end-of-shift handover
+      ['Office', 'New "📝 Handover note" for the end of a shift.', "On Dispatch and My Dispatch. Before you finish, tap 📝 Write handover note and write what the next dispatcher needs to know: open pickups, calls to return, follow-ups, anything urgent. A new note shows at the top in orange until someone taps ✓ Read (it saves who read it and when). \"Earlier notes\" shows the last 10.", 'new'],
+      // Nov 5 client: Dispatcher guide 3
+      ['Office', 'Call notes: new "🚫 Doesn\'t want calls" button.', "After a call, if the driver says he doesn't want calls, tap it. It is saved in his call log like the other notes, and admins get a bell alert \"Moshe K. said he doesn't want calls — update his settings\" with a link to his card. His settings are not changed by themselves.", 'new'],
+      // Nov 5 client: Dispatcher guide 7
+      ['Office', 'Admins are told when a store cancels 3 times in 30 days.', "One bell alert for admins and coordinators: \"Hive Deli cancelled 3 times in the last 30 days — follow up\", with the dates and a link to the store's card. It counts the store's CANCEL texts, cancels from the store's own app, and office cancels with a store reason (like \"Store closed\"). At most once per store every 30 days.", 'new'],
+      // Nov 4 client: "whenever you say about dispatching, write extension 103"
+      ['Office', 'The dispatch line now shows its number: (845) 363-5323 ext. 103.', 'Everywhere the office portal talks about the dispatch line, it now says which one: the guides, Phone settings and the green "Dispatch calls go to" card show "(845) 363-5323 ext. 103", and buttons, pop-ups and messages show "(ext. 103)". The extension comes from Phone settings, so if the dispatch extension is changed there, the text changes too.', 'change'],
+      // Nov 4 Yakov: center help punch in / punch out
+      ['Kiosk', 'Center helpers can punch in and punch out on the kiosk.', 'Someone on the center help list (or with a center help shift today) types their 4 digits or scans their name tag and sees a Center help card: Punch in / Punch out, "Coming with a group? How many people (including you)?", their shifts for the next 2 weeks and their visits of the last 2 months. Someone who also has pickups today first picks "I\'m dropping off food" or "I\'m here to help in the center". Forgot to punch out? It closes at the end of their shift (or 11 PM) and shows "no punch-out". The kiosk tablet gets this once its app is updated; the kiosk web page has it now.', 'new'],
+      ['Office', 'Center Help: who is in the center now, today, and hours of the last 2 months.', 'Admin → People → Center Help → "Punch in / out (kiosk)": who is punched in now (with group size), earlier today, and hours per person for the last 2 months (tap a name to see each visit). "Fix time" changes the time in / out or the number of people; "Punch out now" for someone who left; "Remove" for a mistaken punch.', 'new'],
+      // Nov 4 Yakov: "Can you add a Dispatcher View?"
+      ['Office', 'New "🎧 Dispatcher view" button: see the office screen just like a dispatcher does.', 'At the top, next to "🚗 Driver view" (admins and office only). It shows the same short menu, the My Dispatch page, and hides what dispatchers don\'t see (recordings, voicemail, Food to handle, admin settings). A yellow bar says "You\'re seeing the dispatcher view"; tap "Back to office view" to return. It only changes what you see on this screen; your own access stays the same.', 'new'],
+      // Nov 4 Yakov: crossed out in the dispatcher menu
+      ['Office', 'Dispatchers no longer have "Food to handle" in their menu.', 'Admins and the office still have it.', 'change'],
+      // Nov 4 Yakov: "Dispatchers should be able to send the link for a person who wants to volunteer."
+      ['Office', 'Drivers page: "📨 Send sign-up link" for someone who wants to volunteer.', 'Office and dispatchers. Type the person\'s phone number (and name if you know it), tap "💬 Text it", and a ready, friendly text with the volunteer sign-up form opens. Check it and press Send; nothing goes out by itself. "🔗 Copy link" copies the link so you can paste it anywhere.', 'new'],
+      // Nov 4 client
+      ['Office', 'Live Board cards: "💬 Text store" on the left; "Send SMS" is now "📣 Text drivers".', 'Tap Text store and a ready message opens (driver buttons now say "📞 Call driver (Chaim)" and "💬 Text driver (Chaim)", so it is clear who he is): check it and press Send. The old 💬 Text button on the right is gone. "📣 Text drivers" (was Send SMS) texts the drivers in the pickup group about this pickup, or about every open pickup.'],
+      // Nov 4 client: "All I want is extension 103"
+      ['Office', 'Call pop-ups, missed calls and voicemails are only for the dispatch line (103).', 'The phone system reports calls for every extension. Before, missed calls to other extensions popped up too. Now only the dispatch line (the one picked in Phone settings) makes pop-ups and alerts. Texts to the office number still all come in.'],
+      // Nov 3 client: Hive Deli
+      ['Office', '"Not available today" takes the driver off completely.', 'If a driver was on a pickup twice (main driver and backup), only one was taken off, so the pickup later closed as done by him. Now he\'s taken off in both.'],
+    ],
+  },
+  {
+    liveAt: '2026-11-03T14:23',
+    title: 'Steady driver stays off when taken off',
+    items: [
+      // Nov 3 client: Yoffee Coffee — "we cancel and the system puts it back on"
+      ['Office', 'A steady driver you take off for one day now stays off.', 'Before, taking a steady driver off a pickup ("not available today" or Remove) was undone by the app\'s steady-pickup check, which runs every 15 minutes, so the driver came right back. Now he stays off for that day only; his other days don\'t change, and you can still add him back by hand.'],
+    ],
+  },
+  {
+    liveAt: '2026-11-03T13:23',
+    title: 'Dispatch, texting, Asana, driver app and speed',
+    items: [
+      // Nov 3 client: Dispatch as its own menu item, lower down
+      ['Office', 'Dispatch has its own place in the menu.', 'It used to be under Admin → People → Dispatchers. Now "Dispatch" is in the side menu (above Change password) with a red count of things waiting. Inside: To do, Now, Calls, Texts and Reports first; Roster, Shifts, Logins and Phone settings at the end.'],
+      // Nov 3 client: tidier driver card
+      ['Office', 'The driver card is tidier: 5 tabs instead of 7, and a small More ▾ button.', 'Open a driver. On top you still see 📞 Call, 💬 Text and ✉️ Email. "Ring me at…" and "🪪 Make name tag" are now under More ▾. The tabs are: Overview; Settings (was "Alerts & schedule"); History (pickups and changes together — tap Pickups or Changes); About them (the application and the sign-up info, one under the other); Notes (Asana notes for admins, and the calls you made to the driver with "📞 I called"). Long lists show the newest 5 — tap Show more to see the rest. Nothing was removed.', 'change'],
+      // Nov 3 client: email templates + My signature
+      ['Office', '📝 Email templates: pick a ready email, like "Thank you for your donation", and it fills in the subject and message.', 'In ✉️ New email (and in the reply box of a donation email), tap 📝 Templates and pick one: Thank you for your donation, Welcome new volunteer, Can you help this week?, Pickup time change, or Following up. The subject and message fill in, with the person\'s first name (and the store) put in for you. You can change anything before you press Send. Admins can add, change or remove templates: tap Edit next to 📝 Templates.', 'new'],
+      ['Office', '✍️ My signature: your name at the end of emails and texts is now in the message box, so you see it and can change it.', 'Your signature now shows at the bottom of the message when you write an email, and at the end of your first text of the day to someone. Change it or delete it before you send. To set your own, tap "Edit my signature" (under the email message or under the text box). There is one for emails (a few lines, for example your name, Zeh L\'Zeh and the office phone) and one for texts (one short line). Each person has their own. Nothing is added after you press Send anymore.', 'new'],
+      // Nov 3 client: Asana for the volunteer coordinator
+      ['Office', 'Asana: each driver card shows Asana notes and follow-ups in the Notes tab (admins).', 'Open a driver → the Notes tab. You see the notes about this person (newest first, with who wrote them and when) and the follow-ups (to-dos), with due dates and who does them. Write a note and press Save note — it goes in Asana with your name. + Add follow-up adds a to-do (pick a due date and who does it if you like). Tick it when it is done. Other Asana tasks that mention the person are listed at the bottom. The app finds the person\'s tasks in all your Asana projects (by name, or by phone in the notes) and shows a small label with the project (Active, Past…). The 3 newest show first; tap Show more for the rest. Someone not in Asana yet gets a task like "Moshe Klein #20" with the first note or follow-up. First connect Asana in Admin → Settings → Asana.', 'new'],
+      ['Office', 'Settings → Asana: connect Asana, and choose what the app adds there by itself (all off until you turn one on).', 'Paste your Asana key (Asana → My apps → Create new token), then tick which Asana projects to look in (all of them at first), pick where new tasks go (you can pick one for active drivers and one for past drivers), and who gets them. You can turn on, one by one: a new volunteer sign-up waiting for approval; a driver says "can\'t", gives back a pickup or did not come; a driver says "can\'t" 3 times in a row; a new driver\'s first pickup (call and thank him); a driver with no pickup in 30 days; and a weekly summary every Sunday morning (each driver\'s pickups and miles). Each thing is sent once. "Send a test task" makes one test task. The card shows the last 20 tasks sent and any error. The same page lists all open Asana follow-ups by person.', 'new'],
+      // Nov 3 Yakov's answers
+      ['Drivers', 'Drivers no longer press "Done" for a store pickup.', 'A store pickup is finished when the driver checks in at the kiosk, or when the dispatcher marks it. After "I picked it up" the app says: bring it to the center and check in at the kiosk. A delivery to a family can still be finished in the app.'],
+      ['Drivers', 'No more "How much did you bring?" in the app.', 'The kiosk already asks it, so drivers don\'t answer twice.'],
+      ['Drivers', 'The pickup chat is called "Chat with dispatcher".', 'Same chat as before, with a clearer name. "I can\'t make it" stays.'],
+      ['Drivers', 'Sign-in code message fixed.', 'It said "If this number is ours". Now: "If we have this number on file, your code is on its way."'],
+      // Nov 3 client: Food Donations = Email + Texts; back in the menu
+      ['Office', 'Food Donations is back in the menu, with two tabs: ✉️ Email and 💬 Texts — (845) 363-5323.', 'Food Donations shows again in the side menu for office logins. The Email tab is the donation emails, as before (they also still show in ✅ To do). The Texts tab is the texts to the office number — the same conversations as Dispatchers → Texts: open one, reply, or 🚚 Make a pickup from it. For now every office text shows there.', 'change'],
+      // Nov 3 client: send a new email from the app
+      ['Office', '✉️ New email: write an email from the dispatch email, right in the app.', 'In Food Donations → Email, tap ✉️ New email. In To, type an email address, or start typing a driver, store or donor name and pick them. Add a subject and your message; your signature is at the bottom of the message, and you can change it. It goes out from the dispatch email that is already connected — nothing new to set up. Driver and store cards that have an email now have a ✉️ Email button that opens the same thing, filled in. Everything sent from the app (new emails and replies) is under the new Sent filter, with who sent it.', 'new'],
+      // Nov 3 client: text a whole pickup
+      ['Office', '💬 Text on a pickup: Driver, Store or Both — a ready message from the pickup, you check it and press Send.', 'On the pickup page and on each Live Board card, tap 💬 Text and choose Driver, Store or Both. A text opens already written from the pickup, for example to the store "Hi Tony, Moshe K. is on the way to pick up at 4:00 PM. – Yakov, Zeh L\'Zeh", or to the driver "Hi Moshe, reminder: Hive Discount Store, 51 Carlton Rd, 4:00 PM. Contact: Tony (845) 555-0210." The words fit where the pickup is at: still finding a driver, driver set, on the way, or picked up. Both = the store\'s text first, then the driver\'s: two separate texts, each one you check and send yourself. Nothing is sent by itself. Admins can change these messages under 📝 Templates → Edit.', 'new'],
+      // Nov 3 client: text templates
+      ['Office', '📝 Text templates: "Driver running late", "No driver yet", "Pickup cancelled", "Driver on the way", "Thank you" — filled in for you.', 'In the text box tap 📝 Templates and pick one. It fills in the person\'s name, the store, the time and the driver from their pickup today (blank if we don\'t know), and your first name at the end. Change anything you like, then Send — nothing goes out by itself. Admins can change the templates (name + words) or add new ones with Edit, in the same place as the quick replies. The quick replies still work as before.', 'new'],
+      // Nov 3 client: busiest hours chart
+      ['Office', '📈 Dispatchers → Reports (admins): the busiest times for calls, by time of day and day of the week.', 'A simple chart of the calls that came in (green = answered, red = missed) for the last 7, 31 or 90 days, by hour and by day. One sentence under the title sums it up, like "Busiest: Sunday 10 AM–12 PM. Most missed: Friday 1–2 PM." Good for planning who dispatches when. Tap "See the numbers" for the counts.', 'new'],
+      // Nov 3 client: voicemail in the app (admins only)
+      ['Office', '📼 Voicemail on Dispatchers → Now (admins only): who called, when, how long, ▶ Listen, 📞 Call back, ✓ Handled.', 'The dispatch line\'s voicemail box now shows right in the app, for admins only (dispatchers don\'t see it). Each message shows the caller\'s name when we know them, the time and how long it is. Tap ▶ Listen to hear it, 📞 Call back to call them, and ✓ Handled when it\'s taken care of (it saves who did it). New voicemail also shows in your To do list. If the phone system doesn\'t let us play a message here, it says so, and you can still hear it in the Reliable app.', 'new'],
+      // Nov 3 client: who's calling + their pickup
+      ['Office', '🚚 Who is calling + their pickup today, in one line: on the call pop-up, the call lists and To do.', 'Next to a caller you now see their pickup today. A store or donor: "Today 2:00 PM: driver Moshe #20 · driver on the way" (or "needs a driver", "picked up"). A driver: his pickups today, like "Today: Hive Discount Store 2:00 PM · picked up; Maple Bakery 5:00 PM · on the way". Tap the line to open the pickup.', 'new'],
+      // Nov 3 client: call-back reminder
+      ['Office', '📵 Missed call not called back after 10 minutes: a reminder in the 🔔 bell with 📞 Call back.', 'When a call to the dispatch line is missed and nobody calls that number back (and nobody marks it ✓ Handled in To do) within 10 minutes, the bell shows "Missed call from <name> 10 min ago — not called back yet" with a sound and 📞 Call back. The person on duty gets it on their phone the same way as other office alerts. One reminder per missed call. It goes away by itself once someone calls them back. Not on Shabbos or Yom Tov.', 'new'],
+      // Nov 3 client: smart driver finder
+      ['Office', '🔎 Find a driver on an open pickup: the best drivers to ask, with the reason in plain words.', 'On a pickup that still needs a driver, tap 🔎 Find a driver (next to Assign Driver). You get a list, best first, like "2.1 mi away · on call now · says yes 7 of 10 · free today". It counts how close they are (their shared location in the last 3 hours, else their home), whether they are on call now, how often they say yes and how fast, and how many pickups they already have today. Only drivers we may text now are listed (their quiet times, away, paused and other settings are kept). 📞 Call rings through the office phone. 💬 Text opens a ready message with the store and time — change it if you like; nothing is sent until you press Send.', 'new'],
+      // Nov 3 client: two titles "Your pickups" and "My pickups" looked alike
+      ['Drivers', 'Home: today\'s pickups are titled "Today".', 'The top of the driver Home screen said "Your pickups" right above "My pickups". The top one is now "Today" (what you have going now), and "My pickups" lists the coming days.'],
+      // Nov 3 client: advanced dispatching — one dispatcher inbox
+      ['Office', '✅ To do: one list of everything waiting for the dispatcher, on Now and on My Dispatch.', 'Missed calls nobody called back, texts to the office number nobody answered, driver text and WhatsApp replies waiting, food donation emails still New, and open alerts (a pickup that needs a driver, a driver gave one back…). Oldest first. The waiting time turns orange after 10 minutes and red after 30. Each row has 📞 Call, 💬 Text, Open and ✓ Handled. Handled takes it off the list for everyone (it saves who and when). Things also leave by themselves once you call back, text back or a driver takes the pickup.', 'new'],
+      // Nov 3 client: dispatcher reports
+      ['Office', 'Dispatchers → Reports (admins): what each dispatcher did today, in 7 or 31 days.', 'One line per dispatcher: hours on shift, calls answered (and talk time), calls missed and how many were called back and how fast, calls made from the app, texts sent, to-dos handled, pickups they assigned, and pickups that got a driver on their shift — plus a one-line summary. Calls count for whoever was on the dispatch shift then. How long a call rang isn\'t in the phone system\'s history, so it isn\'t shown.', 'new'],
+      // Nov 3 client: one-tap call notes
+      ['Office', '📝 How did the call go? One tap: Will take it · No answer · Can\'t · Left message · Other…', 'After you press 📞 Call in the app, a small box asks how it went. You can add a short note and pick which of today\'s pickups it was about. A driver\'s note goes in his call log. The answer then shows on that call in Dispatchers → Now and Calls. Older calls have a 📝 Note button.', 'new'],
+      // Nov 3 client: advanced dispatching — text tools
+      ['Office', 'New text to the office number: a 🔔 alert and a pop-up with the person\'s name and 💬 Reply.', 'When someone texts (845) 363-5323, the bell gets "New text from …" with a sound, and a pop-up shows the text. 💬 Reply opens the conversation right there. The alert goes away by itself once someone in the office texts them back.', 'new'],
+      ['Office', 'Each text we send shows who sent it ("Yakov S.") under the bubble.', 'Texts from the office number now record which login sent them. The name shows in small letters under our green bubbles. Automatic texts say "Automatic". Older texts (before today) have no name.', 'new'],
+      ['Office', 'Quick replies above the text box: "Thank you!", "A driver is on the way.", "We\'ll call you back soon."', 'Tap one and it goes in the box, ready to change or send. Admins can change the list: tap Edit next to the buttons (one per line, up to 12).', 'new'],
+      ['Office', '🚚 Make a pickup from a text.', 'In a text conversation, 🚚 Make a pickup opens the new-pickup form filled in from the text: name, phone, the address if the text has one, and what they wrote. Check it and press Save — nothing is made until you do.', 'new'],
+      // Nov 3 Yakov: driver app clean-up
+      ['Drivers', 'Home shows the driver\'s full name and unit number.', 'The top of Home now says the driver\'s full name and unit number, like "Yakov Taub #20" (no "Shalom"). No unit number = just the name.'],
+      // Nov 3 Yakov:
+      ['Drivers', 'Home: the "Pickups by … Change" line is gone.', 'The line under the name that showed how pickup messages come (App / Text / WhatsApp, quiet hours) with Change is gone from Home. All of it is still in Settings.'],
+      // Nov 3 Yakov:
+      ['Drivers', 'Home: "Coming up" is now called "My pickups".', 'Same list as before (the driver\'s own pickups in the next few days), new title.'],
+      // Nov 3 Yakov:
+      ['Drivers', 'Activity: no Hours tile.', 'My Activity shows three tiles: Pickups, Miles and Stores. The time per trip is gone from the list too.'],
+      // Nov 3 Yakov:
+      ['Drivers', 'Drivers are no longer asked "How far did you drive?".', 'After Delivered the app says "Thank you! Delivery saved." and goes back to Home. No miles / minutes page.'],
+      // Nov 3 Yakov:
+      ['Drivers', 'Miles are counted by themselves.', 'Every done pickup gets miles, however it was finished: Delivered in the app, "DONE" by text, by the office, auto-close or the kiosk (also for drivers who only use texts). Miles = Google Maps driving route from the pickup place to the drop-off center (3 Regina Road, Airmont). If the driver shared his location for that whole trip, the real GPS miles are used instead. If Google can\'t answer, it saves an estimate (straight line × 1.25). More than one stop = stop to stop, then to 3 Regina; a delivery = 3 Regina to the family. Miles show for each pickup in My Activity and on the office driver profile (Recent pickups). Older pickups show the estimate. Miles a driver typed before are kept.'],
+      // Nov 3 Yakov:
+      ['Drivers', 'My profile: no Settings or My application rows at the top.', 'My profile starts with Share your location, then the photo and contact details. Settings is still in the ☰ menu.'],
+      // Nov 3 Yakov:
+      ['Drivers', 'Menu: "My application" is gone.', 'The ☰ menu no longer has My application.'],
+      // Nov 3 Yakov:
+      ['Drivers', 'Settings: no My application / My profile links at the bottom.', 'The two link rows at the bottom of Settings are gone.'],
+      // Nov 3 Yakov:
+      ['Drivers', 'My application: no "Update my answers" button.', 'Drivers can\'t change their sign-up answers in the app any more. The office can still edit them (driver profile → Application → Edit answers).'],
+      // Nov 3 Yakov:
+      ['Drivers', 'Pickups: "Mine" is now "Active pickups", with all the details.', 'Each of the driver\'s own active pickups shows the contact name and phone (tap to call), other contacts, the note from the store, and the Steps (Store posted it / You took it / On the way / Picked up / Delivered). Tap the pickup for the full page as before.'],
+      // Nov 3 client: "I want to see more history"
+      ['Office', 'Calls: Yesterday, 90 days and 6 months, plus search.', 'Dispatchers → Calls has Today, Yesterday, 7 days, 31 days, 90 days and 6 months, a search by name or number, and a count. On Now, "Yesterday" shows yesterday\'s calls and tiles. Older calls keep loading in the background until 6 months back.', 'new'],
+      // Nov 3 client: "when I click to send a message … a delay till it opens"
+      ['Office', '💬 Text opens right away as a pop-up, and your message shows the moment you press Send.', 'Before, 💬 Text first switched to Dispatchers → Texts and then loaded. Now it opens a pop-up over the screen you\'re on, ready to type. Your text shows at once marked "sending…" and turns "sent" (Reliable takes about a second). If it fails, it says so: tap it to try again. Enter sends; Shift+Enter makes a new line. The texts list also loads faster.'],
+      ['Office', 'Texts show the office number: (845) 363-5323.', 'The Texts title and the reply box say which number the text goes out from.'],
+      // HOLD (Nov 3): group members regardless of On the fly — waiting for Yakov; item removed until it ships
+      // Nov 3 client: speed
+      ['Office', 'The office portal opens faster and checks the server less often.', 'The Live Board loads less than half the code it used to; each other page loads its part the first time you open it (a short "Loading…"), and starts loading as soon as you point at its menu button. The board no longer downloads old cancelled pickups, and the Texts & WhatsApp list answers quicker. When the portal is in a browser tab you\'re not looking at, it stops checking for new things and catches up the moment you come back (alerts with sound on still check every 25 s). The unread-chat and bug-report counts, the texts-paused banner, the office Texts list and open Texts / WhatsApp conversations now refresh every 30–60 seconds.', 'change'],
+    ],
+  },
+  {
+    liveAt: '2026-11-02T23:51',
+    title: 'Store texts from the office number',
+    items: [
+      // Nov 2 client: "the message they get when a driver is on the way … from the office number and not from TextMagic"
+      ['Stores', 'The "driver on the way" and "picked up" texts to stores and donors now come from the office number.', 'They go out from (845) 363-5323 through the phone system, so stores see the number they know. A CANCEL reply to the office number cancels the pickup and tells the driver, exactly like before; any other reply shows in Dispatchers → Texts. If the office number can\'t send, the text goes out the old way. Who gets these texts did not change (only stores that have it turned on).', 'change'],
+      // Nov 2 client: "cancel it automatically, but we should not notify the driver. The dispatcher will have to call the driver."
+      ['Stores', 'When a store replies CANCEL, the driver is no longer texted — the dispatcher calls him.', 'The pickup is still cancelled automatically and the store gets "Thanks — the pickup is cancelled." The office gets the alert "Call Moshe K: Hive cancelled" with his phone, to tell him.', 'change'],
+    ],
+  },
+  {
+    liveAt: '2026-11-02T23:25',
+    title: 'Texts from the office number',
+    items: [
+      // Nov 2 client: "send someone a message here or there … integrate it"
+      ['Office', 'Text anyone from the office number: Dispatchers → Texts, and 💬 Text buttons.', 'Dispatchers → Texts (dispatchers: on My Dispatch) lists the office number\'s text conversations, newest first, with unread counts; open one to read it and reply. "New text to a number" starts one. 💬 Text sits next to 📞 Call on driver cards and on every call in the calls list. Texts go out from the office number through the phone system (driver pickup texts stay on the usual texting service). The list refreshes every 20 seconds.', 'new'],
+      ['Office', 'Phone settings: a "Dispatch line key" just for forwarding.', 'The main connection can now be an admin login (like 104), so the app gets every call and text live, while forwarding uses the dispatch extension\'s own key (103).', 'new'],
+      // Nov 2 client: "All I want is recordings from extension 103 and history from extension 103"
+      ['Office', 'Calls and recordings: only the dispatch extension (103).', 'The calls list, talk time and ▶ Listen now cover only calls on the dispatch extension — never other extensions\' calls or recordings. The copies of other extensions\' calls the app had kept are removed (Reliable keeps its own).', 'change'],
+      ['Office', 'Call recordings are for admins only.', 'Dispatchers do not see ▶ Listen anywhere (the server refuses it too). Admins still can.', 'change'],
+    ],
+  },
+  {
+    liveAt: '2026-11-02T23:01',
+    title: 'Calls list, tidier',
+    items: [
+      // Nov 2 client screenshot of Today's calls
+      ['Office', 'Today\'s calls: right counts, one row per call, names instead of cell numbers; tap a tile to see those calls.', 'Answered and Missed count incoming calls only. Door-phone calls show as 🚪 Front Door; other extension-to-extension calls are hidden. A call that rang two phones shows once. "Answered by" shows a name (or "a cell") — never a personal cell number. Talk time over an hour reads like 2h 13m. Tap a tile (Missed, Not called back…) to list just those calls. ▶ Listen now plays the recording (it said "no recording" before by mistake).', 'fix'],
+    ],
+  },
+  {
+    liveAt: '2026-11-02T22:48',
+    title: 'Dispatch guides',
+    items: [
+      // Nov 2 client: "make instructions for dispatchers … and for my team, who are the admins"
+      ['Office', 'A short "how it works" guide on the dispatch screens.', 'Dispatchers (My Dispatch): start a shift, take office calls, call a driver, Ring me at, missed calls, *20 texts, end of shift. Admins (Dispatchers → Now): one dispatch line, who gets the calls, the schedule, adding a dispatcher, change forwarding only in the app, phone settings, what is logged. Tap Hide to fold it.', 'new'],
+      // Nov 2 client: "how long the conversation was … any more information"
+      ['Office', 'Calls now come from the phone system\'s call history: talk time, who answered, called back or not.', 'Every 30 seconds the app reads Reliable\'s call history (every extension). Each call shows in / out, answered / missed / no answer, ⏱ talk time, who answered, who pressed 📞 Call, who was on shift, and for missed calls whether someone called them back. ▶ Listen plays the recording when there is one. Today\'s calls adds "Not called back" and total "Talk time".', 'new'],
+    ],
+  },
+  {
+    liveAt: '2026-11-02T21:31',
+    title: 'Dispatchers screen, cleaner',
+    items: [
+      // Nov 2 client: "make the dispatcher screen better … the turn forwarding off button looks too low down"
+      ['Office', 'Dispatchers → Now: a big "Dispatch calls go to" card, Call someone, and today\'s calls as tiles.', 'The top card shows who gets dispatch calls right now (green when forwarding is on), with "I\'m dispatching now" and "Turn forwarding off" right under it. The admin options (forward to a number, the schedule switch, the backup) fold under "Change forwarding". New "📞 Call someone": type a number and it calls from the office number. Today\'s calls show as big number tiles. "Ring me at…" lists only real people\'s phones. Dispatchers see the name, not the phone number.', 'change'],
+    ],
+  },
+  {
+    liveAt: '2026-11-02T20:24',
+    title: 'Dispatchers: one place for everything',
+    items: [
+      // Nov 2 client: "one new tab … Dispatchers … all the settings and reports and activity in one place"
+      ['Office', 'Admin → Dispatchers now opens on "Now", with "Calls" and "Phone settings".', 'Now: where dispatch calls go (forwarding, I\'m dispatching now) and today\'s calls (in, answered, missed, voicemail, called out). Calls: every call of the last day / week / month, who was on shift, Listen to voicemails, Call back missed calls. Phone settings: the Reliable connection (admins). Roster, Shifts and Logins are still there. Reports come next.', 'new'],
+      // Nov 2 client: "make a new dispatcher view … easier access … not give access to certain settings … confirmation"
+      ['Office', 'Dispatchers get "My Dispatch": where calls go, I\'m dispatching now, and their calls — no settings.', 'A dispatcher login opens My Dispatch: who dispatch calls go to now, a big "📲 I\'m dispatching now", today\'s calls (answered / missed / voicemail) with Call back and Listen, and all calls of the week. Phone settings, forwarding numbers and the schedule switch stay admin-only. Turning forwarding off, forwarding to a number, the schedule switch and Subscribe again now ask "Are you sure?" first.', 'new'],
+      // Nov 2 client: "it should really say the name of the person who forwarded it"
+      ['Texts', 'The office alert for a *NN message says who sent it.', 'Was: "Dispatcher forwarded a message to Unit #20". Now: "Yakov S. forwarded a message to #20 (Moshe): …" — the name of the dispatcher whose phone sent it.', 'fix'],
+    ],
+  },
+  {
+    liveAt: '2026-11-02T19:56',
+    title: 'Office phone check',
+    items: [
+      // Nov 2 client: "why didn't it pop up in the app when the person was calling?"
+      ['Office', 'The app now records every call notice from the phone system, even ones it refuses.', 'So we can see whether Reliable reports calls to the app at all, and why a call did not pop up.', 'fix'],
+    ],
+  },
+  {
+    liveAt: '2026-11-02T19:17',
+    title: 'Cleaner side menu; pickup names',
+    items: [
+      // Nov 2 client: "one of them is named Pickup … I don't need this things flying around in the bottom"
+      ['Office', 'The side menu no longer lists pickups / drivers / stores at the bottom.', 'The list under the menu (Active pickups, Drivers, Donors) is gone — the pages themselves show everything.', 'change'],
+      ['Office', 'A one-time pickup is never just called "Pickup".', 'With no store or hall name, the office screens use the contact\'s name, else the street address (a "name" like "000" is skipped). The dispatch line forwarding now also finds the office number in Reliable correctly.', 'fix'],
+    ],
+  },
+  {
+    liveAt: '2026-11-02T18:49',
+    title: 'Smarter call pop-up',
+    items: [
+      // Nov 2 client: "a smarter pop-up … if we have this number on file, it should suggest it"
+      ['Office', 'The call pop-up suggests who an unknown caller may be.', 'When a number is not a driver, store or donor on file, the pop-up looks everywhere else: a contact on a store\'s pickup or steady pickup ("Maybe Hive Deli" + an Open button), a store we\'re talking to, a donation email, their WhatsApp name, their last text to us. A driver calling with no pickup today also shows how many pickups still need a driver.', 'new'],
+      // Nov 2 client: "I don't see the button to call someone" / "it should be based on my login"
+      ['Office', 'Driver card: a 📞 Call button, and "Ring me at…" for each login.', 'Open a driver: 📞 Call rings your office phone first; pick it up and it calls the driver, who sees the office number. "Ring me at…" picks which extension rings for YOUR calls (saved for your login); not picked = the shared dispatch phone. Reliable rings an extension first, not a cell number.', 'new'],
+      // Nov 2 client: "one extension for the whole dispatching … a few dispatchers"
+      ['Office', 'Dispatch calls forward to whoever is dispatching.', 'Settings → ☎️ Office phone → "📲 Dispatch calls forward to": the dispatch line (ext 103) forwards to a cell — automatically by the Dispatching Shifts schedule, or "📲 I\'m dispatching now" (until the next shift), or an admin types a number. A backup number for when nobody is on shift. The first time, an admin confirms the phone options to keep (copied from Reliable), so nothing else on the phone changes.', 'new'],
+    ],
+  },
+  {
+    liveAt: '2026-11-02T16:33',
+    title: 'Store reminder before pickup',
+    items: [
+      // Nov 2 client: "remind them 2 hours before, they'll put everything in boxes"
+      ['Stores', 'Stores can get a reminder text before each pickup — your own message, your own timing.', 'Store profile → "⏰ Reminder before pickup": turn it on, pick how long before (30 minutes to 4 hours) and write the message ({time} = the pickup time). Example: "Zeh L\'Zeh: Reminder — our driver is coming for your food today at 4:00 PM. Please have it packed and ready. Thank you!" One text per pickup, at any hour (night pickups too); not on Shabbos / Yom Tov, not while a "food today?" question is waiting, and not if the store turned texts off. Off for every store until you turn it on.', 'new'],
+      // Nov 2 client: "a big Pause button in the beginning … we want it to be a hidden setting"
+      ['Drivers', 'Pause is no longer a big button on the driver Home screen.', 'Drivers who want a break find it at the bottom of Settings: a small "Need a break? Pause pickup messages" link. While paused, Home and Settings still show "Paused" with Resume.', 'change'],
+    ],
+  },
+  {
     liveAt: '2026-11-01T02:36',
     title: 'Pickup from email: address; Today list cleaner',
     items: [
